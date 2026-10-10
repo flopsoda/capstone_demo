@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/flopsoda/Library/Caches/ms-playwright/**)",
+      "Bash(npm ls *)",
+      "Read(//Applications/**)",
+      "Bash(mkdir -p shots)",
+      "Bash(node drive.mjs)",
+      "Bash(npm run *)",
+      "Bash(lsof -ti:5173 -sTCP:LISTEN)",
+      "Bash(xargs kill)",
+      "Bash(python3 -)"
+    ]
+  }
+}
