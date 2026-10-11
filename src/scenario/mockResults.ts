@@ -18,26 +18,7 @@ export const MEETING_CONTEXT: MessageBlock[] = [
   { kind: "list", items: [...MEETING.actionItems] },
 ];
 
-/** run_company_risk_news_analysis */
-export const NEWS_RISK_ANALYSIS: MessageBlock[] = [
-  { kind: "badge", text: "리스크 높음", tone: "high" },
-  {
-    kind: "text",
-    text: `${COMPANY.name} 최대 고객사 ${COMPANY.largestCustomer}이\n차세대 NPU 공급업체 다변화를 검토 중입니다.\n\n현재 ${COMPANY.largestCustomer}은\n${COMPANY.name} 매출의 ${COMPANY.largestCustomerShare}를 차지합니다.`,
-  },
-  { kind: "badge", text: "리스크 중간", tone: "medium" },
-  {
-    kind: "text",
-    text: `${COMPANY.litigant}와 NPU 메모리 구조 관련\n특허침해 소송이 진행 중입니다.`,
-  },
-  { kind: "badge", text: "리스크 높음", tone: "high" },
-  {
-    kind: "text",
-    text: `${COMPANY.name} 창업자 CTO가\n인수 이후 연구조직의 독립성에 대한\n우려를 공개적으로 표현했습니다.\n\n핵심 설계인력 이탈 리스크가 존재합니다.`,
-  },
-];
-
-/** run_company_risk_news_analysis — direct user request ("악재만 다시 보여줘") */
+/** run_company_risk_news_analysis — fallback only; the live News Agent answers the News tab. */
 export const NEWS_RISK_BRIEF: MessageBlock[] = [
   { kind: "label", text: `${COMPANY.name} 리스크 요약` },
   {

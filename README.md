@@ -11,14 +11,14 @@ mock을 한 단계씩 실제 Agent 실행으로 교체하는 중입니다. 현�
 Step 1  MOCK   회장 요청 접수
 Step 2  MOCK   A2A 요청 (Group Super → K Super)
 Step 3  REAL   K Super → Meeting Agent → run_meeting_context_retrieval   (Python · LangGraph · Ollama Cloud, 실행 이벤트 스트리밍)
-Step 4  MOCK   News Agent
+Step 4  REAL   K Super → News Agent → run_company_risk_news_analysis     (같은 K Super 실행 안에서 Meeting 결과 수신 후 순차 위임)
 Step 5  MOCK   Advisory Agent
 Step 6  MOCK   K Super 종합
 Step 7  MOCK   A2A 응답
 Step 8  MOCK   그룹 최종 판단
 ```
 
-Sidebar **미팅** 탭의 직접 채팅도 같은 Meeting Agent가 실제로 응답합니다.
+Sidebar **미팅** · **뉴스** 탭의 직접 채팅도 같은 Meeting / News Agent가 실제로 응답합니다.
 
 ## 실행
 
@@ -42,8 +42,9 @@ cd backend
 .venv/bin/python -m pytest        # tests/test_agents.py는 OLLAMA_API_KEY가 없으면 skip
 ```
 
-Step 3의 그래프/세션/메시지는 backend가 실행 중 보내는 lifecycle 이벤트(NDJSON 스트림)를 받는 즉시 바뀝니다.
-backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, Meeting Agent가 Workflow Tool을 호출하지 않음 등) 그 시점에
+Step 3·4의 그래프/세션/메시지는 backend가 실행 중 보내는 lifecycle 이벤트(NDJSON 스트림)를 받는 즉시 바뀝니다.
+Step 번호는 backend `delegation_start`의 대상 Agent(meeting → 3, news → 4)에 맞춰 바뀝니다.
+backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Workflow Tool을 호출하지 않음, K Super가 일부 전문 Agent에게 위임하지 않고 종료 등) 그 시점에
 시나리오가 **오류 · 중단** 상태로 멈추고, backend가 지목한 Agent 노드가 error로 표시됩니다 (mock으로 대체하지 않음).
 초기화 또는 새 요청으로 재실행합니다.
 
@@ -58,8 +59,8 @@ backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, Meeting Agent가 W
      A2A 요청 시 2번째 창(Group Super ↔ K Electronics Super), Delegation 시 3번째 창
      (K Electronics Super ↔ 전문 Agent)이 생기고, 세션이 끝나면 창이 부모 창의 요청 말풍선으로
      날아 들어가며 사라집니다. 남은 요청 카드에는 결과가 붙고 "대화 보기"로 다시 펼칠 수 있습니다.
-4. 완료 후 Sidebar의 **News** 탭에서 `NeuroEdge 관련 악재만 다시 보여줘.`를 보내면
-   같은 News Agent가 사용자 직접 요청에도 응답하며, 그래프의 News 노드가 다시 active 됩니다.
+4. 완료 후 Sidebar의 **뉴스** 탭에서 `뉴로엣지 관련 악재만 다시 보여줘.`를 보내면
+   같은 News Agent(backend)가 사용자 직접 요청에도 실제로 응답하며, 그래프의 News 노드가 다시 active 됩니다.
 5. **Reset Scenario**로 초기화하고 재실행할 수 있습니다.
 
 ## 아키텍처 개념 (UI 표현)
@@ -85,12 +86,12 @@ src/
     scenario.ts        ScenarioEvent(live 포함) · ChatItem · MessageBlock · RunnerState
   scenario/
     mockData.ts        기업 / 뉴스 / 회의 고정 데이터, Workflow Tool 이름, run_mna_review 단계
-    mockResults.ts     각 Workflow Tool의 구조화된 mock 결과 (시나리오·직접 채팅 공용)
-    scenarioEvents.ts  8 Step M&A 시나리오 이벤트 배열 (Step 3은 `live` 이벤트, 나머지는 mock)
+    mockResults.ts     mock Workflow Tool 결과 (Advisory 시나리오·직접 채팅, Meeting/News는 fallback만)
+    scenarioEvents.ts  8 Step M&A 시나리오 이벤트 배열 (Step 3·4는 `live` 이벤트 하나, 나머지는 mock)
     mnaScenario.ts     시나리오 메타 + 트리거 조건 + 예시 문장
     mockResponses.ts   Advisory / News 직접 채팅 응답
   live/
-    api.ts             backend NDJSON 스트림 클라이언트 (POST /api/k-super/run, /api/agents/meeting/run)
+    api.ts             backend NDJSON 스트림 클라이언트 (POST /api/k-super/run, /api/agents/{meeting,news}/run)
     agentEvents.ts     backend lifecycle 이벤트 → ScenarioEvent 변환 (Workflow 결과 블록 포함)
   hooks/
     useScenarioRunner.ts  이벤트 재생 → 노드/엣지/채팅 상태. `live` 이벤트 실행 중 도착하는 이벤트를 즉시 적용.
@@ -105,23 +106,28 @@ src/
 
 backend/
   app/
-    main.py                          FastAPI: /api/health, /api/k-super/run, /api/agents/meeting/run (NDJSON 스트림)
+    main.py                          FastAPI: /api/health, /api/k-super/run, /api/agents/{meeting,news}/run (NDJSON 스트림)
     events.py                        emit() / stream_run(): Agent lifecycle 이벤트 발행과 스트리밍, AgentError
     llm.py                           ChatOllama (Ollama Cloud, OLLAMA_* 환경변수)
     schemas.py                       요청 스키마
     agents/
       common.py                      MessagesState 기반 공통: system prompt 조립(identity + Skills), tool 실행(tool_start/end 발행), 응답 추출
-      k_super.py                     K전자 슈퍼에이전트 그래프. Registry에서 받은 Skill/Tool(delegate_to_meeting_agent)로 위임
+      k_super.py                     K전자 슈퍼에이전트 그래프. Registry에서 받은 위임 Tool로 전문 Agent에 순차 위임, 모두 위임하면 종료
       meeting.py                     미팅 에이전트 그래프. Registry에서 받은 Skill/Tool(run_meeting_context_retrieval) 사용
+      news.py                        뉴스 에이전트 그래프. Registry에서 받은 Skill/Tool(run_company_risk_news_analysis) 사용
     capabilities/                    Agent Capability (Skill = 업무 지침, Tool = 호출 가능한 기능)
       base.py                        Skill / Capability 타입
       registry.py                    CAPABILITIES: 모든 Capability와 allowed_agents (권한의 source of truth), skills_for / tools_for
-      skills/                        specialist_delegation, meeting_context_analysis
-      tools/                         delegate_to_meeting_agent, run_meeting_context_retrieval (@tool 정의)
+      skills/                        specialist_delegation, meeting_context_analysis, external_risk_analysis
+      tools/                         delegate_to_meeting_agent, delegate_to_news_agent,
+                                     run_meeting_context_retrieval, run_company_risk_news_analysis (@tool 정의)
     workflows/
       meeting_context_retrieval.py   run_meeting_context_retrieval 내부 구현: fixture 조회 (키워드 점수 기반, LangChain 의존 없음)
+      company_risk_news_analysis.py  run_company_risk_news_analysis 내부 구현: 기업 alias + 리스크 category 키워드로 fixture 조회
     data/meetings.json               회의 fixture (NeuroEdge 전략회의 + 무관한 회의 2건)
-  tests/                             test_workflow.py · test_capabilities.py · test_events.py (LLM 불필요), test_agents.py (Ollama Cloud 필요)
+    data/news.json                   뉴스 fixture (NeuroEdge 리스크 기사 3건 + 무관한 기업 기사 2건)
+  tests/                             test_workflow.py · test_news_workflow.py · test_capabilities.py · test_k_super.py · test_events.py (LLM 불필요),
+                                     test_agents.py (Ollama Cloud 필요)
 ```
 
 ### Agent 구조 (backend)
@@ -137,9 +143,19 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
                          model ──▶ 최종 응답 (한국어)
                               │
                        ToolMessage(최종 응답만) ──▶ K전자 슈퍼에이전트
+  model ──tool call──▶ delegate_to_news_agent(task)      ← 미팅 결과를 보고 다시 판단
+                              │ invoke
+                              ▼
+                       뉴스 에이전트 (LangGraph, MessagesState)
+                         model ──tool call──▶ run_company_risk_news_analysis(query, company, topics)
+                               ◀── tool result ──┘        (news.json 조회)
+                         model ──▶ 최종 응답 (한국어)
+                              │
+                       ToolMessage(최종 응답만) ──▶ K전자 슈퍼에이전트
+  허용된 위임 Tool을 모두 사용 → 현재 REAL 구간 종료 (종합은 Step 6 mock)
 ```
 
-- 두 Agent는 각각 독립된 message history를 가집니다. 미팅 에이전트 내부의 tool call / result는
+- 각 Agent는 독립된 message history를 가집니다. 전문 에이전트 내부의 tool call / result는
   K Super의 history에 들어가지 않고, 최종 응답만 ToolMessage로 돌아갑니다.
 - Agent 코드는 실제 lifecycle 시점에 `emit()`을 호출합니다. API는 Agent를 worker thread에서 돌리며
   그 이벤트를 NDJSON 한 줄씩 스트리밍하고, frontend는 받는 즉시 UI 상태로 바꿉니다.
@@ -147,21 +163,21 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 | backend 이벤트 (실행 시점)          | UI 상태 변화                                                   |
 | ----------------------------------- | -------------------------------------------------------------- |
 | `agent_start` (k_super)             | K전자 노드 status "요청 분석 중..."                             |
-| `delegation_start` (k_super→meeting)| 위임 세션 열림(실제 위임 문장) · 미팅 노드 active · 위임 edge active |
-| `agent_start` (meeting)             | 미팅 노드 status "요청 분석 중..."                              |
-| `tool_start`                        | 미팅 노드/세션 헤더에 실제 호출된 Workflow 이름, status "실행 중" |
+| `delegation_start` (k_super→전문)   | Step 3/4 표시 · 위임 세션 열림(실제 위임 문장) · 전문 노드 active · 위임 edge active |
+| `agent_start` (전문 Agent)          | 전문 노드 status "요청 분석 중..."                              |
+| `tool_start`                        | 전문 노드/세션 헤더에 실제 호출된 Workflow 이름, status "실행 중" |
 | `tool_end`                          | 세션에 Workflow 인자·결과 메시지                                |
-| `agent_end` (meeting)               | 세션에 최종 응답 메시지 · 미팅 노드 completed · edge completed  |
-| `delegation_end`                    | 위임 세션 닫힘 · K전자 status "결과 수신"                        |
+| `agent_end` (전문 Agent)            | 세션에 최종 응답 메시지 · 전문 노드 completed · edge completed  |
+| `delegation_end`                    | 위임 세션 닫힘 · K전자 status "결과 수신" (다음 위임이 있으면 반복) |
 | `error` (agent 지목)                | 해당 노드 error · 오류 메시지 · 시나리오 중단                    |
 
-- Meeting Agent가 Workflow Tool을 호출하지 않고 답하면 backend가 `error`(agent=meeting)로 처리하므로,
+- 전문 Agent가 Workflow Tool을 호출하지 않고 답하면 backend가 `error`(agent=meeting | news)로 처리하므로,
   UI에 Workflow 이름이 표시되는 것은 실제 `tool_start`가 발생한 경우뿐입니다.
 - 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 `capabilities/registry.py`에서
   `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
-- Step 4 이후: `capabilities/tools/`에 `delegate_to_news_agent` 등을 정의해 `registry.py`에 등록하고(K Super 코드 변경 없음),
-  `tools → END` 엣지를 `tools → model`로 바꾸면 K Super가 여러 Agent에 위임하고 종합(Step 6)까지 수행합니다.
-  frontend는 `scenarioEvents.ts`의 해당 Step을 `live` 이벤트로 바꾸고 trace → 이벤트 변환을 `src/live/`에 추가합니다.
+- Step 5 이후: `capabilities/tools/`에 `delegate_to_advisory_agent` 등을 정의해 `registry.py`에 등록하면(K Super 코드 변경 없음)
+  K Super가 Advisory까지 순차 위임한 뒤 종료합니다. 종합(Step 6)은 `k_super.py`의 `_after_tools` 종료 조건을 마지막 `model` 턴으로 바꿔 구현합니다.
+  frontend는 `scenarioEvents.ts`의 해당 Step mock을 제거하고 `LIVE_DELEGATION_STEPS`에 Step 번호를, `src/live/agentEvents.ts`에 결과 렌더링을 추가합니다.
 
 ### 시나리오 로직과 그래프 렌더링 분리
 
@@ -192,5 +208,5 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 
 ## 범위 밖
 
-News / Advisory / Group Super의 실구현, A2A 프로토콜, 뉴스/공시 API, RAG, Vector DB,
+Advisory / Group Super의 실구현, A2A 프로토콜, 실제 뉴스/공시 API, RAG, Vector DB,
 실제 Meeting DB, valuation 계산, token streaming, 인증, 배포는 포함하지 않습니다.

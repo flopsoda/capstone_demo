@@ -8,13 +8,19 @@ import { SessionWindows } from "./components/SessionWindows";
 import { Sidebar } from "./components/Sidebar";
 import { useScenarioRunner } from "./hooks/useScenarioRunner";
 import { createAgentEventMapper } from "./live/agentEvents";
-import { MEETING_AGENT_RUN_PATH, streamAgentRun } from "./live/api";
+import { MEETING_AGENT_RUN_PATH, NEWS_AGENT_RUN_PATH, streamAgentRun } from "./live/api";
 import { MNA_SAMPLE_PROMPT, mnaScenario } from "./scenario/mnaScenario";
 import { getMockResponse } from "./scenario/mockResponses";
 import { AGENTS, type ChatTabId } from "./types/agent";
 import type { ChatItem } from "./types/scenario";
 
 type SideTab = Exclude<ChatTabId, "group_super">;
+
+/** Specialist tabs answered by the real backend agent (same core K Super delegates to). */
+const LIVE_AGENT_PATHS: Partial<Record<SideTab, string>> = {
+  meeting: MEETING_AGENT_RUN_PATH,
+  news: NEWS_AGENT_RUN_PATH,
+};
 
 const MOCK_REPLY_DELAY = 700;
 /** Direct specialist-agent call: node stays active while the Workflow Tool "runs". */
@@ -73,14 +79,15 @@ export default function App() {
       pushSide({ id: sideId(), kind: "user", content: text });
       setReplyPending(side);
 
-      if (side === "meeting") {
-        // REAL: the same Meeting Agent graph that K Super delegates to in Step 3.
+      const livePath = LIVE_AGENT_PATHS[side];
+      if (livePath) {
+        // REAL: the same specialist agent graph that K Super delegates to (Meeting: Step 3, News: Step 4).
         // Backend events drive the node (status / Workflow Tool) and this chat live.
         const mapEvent = createAgentEventMapper();
         runner
           .runDirectLive(side, "", () =>
             streamAgentRun(
-              MEETING_AGENT_RUN_PATH,
+              livePath,
               text,
               (event) => {
                 for (const e of mapEvent(event)) {

@@ -11,10 +11,13 @@
  *   agent_end (specialist)   → final answer message, node completed
  *   delegation_end           → session closes, delegator status text
  *   error                    → thrown by the client as LiveRunError → scenario_error
+ *
+ * One K Super run contains several delegations in sequence (Meeting, then
+ * News); the same mapping repeats for each one.
  */
 
 import { AGENTS, type AgentId } from "../types/agent";
-import type { MessageBlock, ScenarioEvent } from "../types/scenario";
+import type { BadgeTone, MessageBlock, ScenarioEvent } from "../types/scenario";
 import { isAgentId, type AgentEvent } from "./api";
 
 /* ------------------------------------------------------------------ */
@@ -50,18 +53,58 @@ function meetingContextBlocks(result: unknown): MessageBlock[] {
   ]);
 }
 
-/** Renders a tool's arguments + result. Add a case per Workflow Tool (Step 4: news). */
+/** Shape returned by run_company_risk_news_analysis (backend/app/workflows). */
+interface CompanyRiskNewsResult {
+  matched: number;
+  risks: {
+    category: string;
+    label: string;
+    level: string;
+    headline: string;
+    summary: string;
+    key_facts: string[];
+    source: { id: string; date: string; name: string };
+  }[];
+}
+
+function isCompanyRiskNewsResult(v: unknown): v is CompanyRiskNewsResult {
+  return typeof v === "object" && v !== null && Array.isArray((v as { risks?: unknown }).risks);
+}
+
+const RISK_LEVEL_BADGE: Record<string, { text: string; tone: BadgeTone }> = {
+  HIGH: { text: "높음", tone: "high" },
+  MEDIUM: { text: "중간", tone: "medium" },
+  LOW: { text: "낮음", tone: "ok" },
+};
+
+function companyRiskNewsBlocks(result: unknown): MessageBlock[] {
+  if (!isCompanyRiskNewsResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  if (result.risks.length === 0) return [{ kind: "text", text: "관련 리스크 기사를 찾지 못했습니다." }];
+  return result.risks.flatMap((r): MessageBlock[] => {
+    const level = RISK_LEVEL_BADGE[r.level] ?? { text: r.level, tone: "info" as const };
+    return [
+      { kind: "badge", text: `${r.label} · 리스크 ${level.text}`, tone: level.tone },
+      { kind: "label", text: `${r.source.date} · ${r.source.name}` },
+      { kind: "text", text: r.headline },
+      { kind: "list", items: r.key_facts },
+    ];
+  });
+}
+
+/** Renders a tool's arguments + result. One case per Workflow Tool; unknown tools fall back to JSON. */
 export function toolResultBlocks(tool: string, args: Record<string, unknown>, result: unknown): MessageBlock[] {
-  const query = typeof args.query === "string" ? args.query : undefined;
-  const head: MessageBlock[] = query
-    ? [
-        { kind: "label", text: "조회 질의" },
-        { kind: "text", text: query },
-      ]
-    : [];
+  const head: MessageBlock[] = [];
+  if (typeof args.company === "string") {
+    head.push({ kind: "label", text: "조사 대상" }, { kind: "text", text: args.company });
+  }
+  if (typeof args.query === "string") {
+    head.push({ kind: "label", text: "조회 질의" }, { kind: "text", text: args.query });
+  }
   switch (tool) {
     case "run_meeting_context_retrieval":
       return [...head, ...meetingContextBlocks(result)];
+    case "run_company_risk_news_analysis":
+      return [...head, ...companyRiskNewsBlocks(result)];
     default:
       return [...head, { kind: "text", text: JSON.stringify(result, null, 2) }];
   }
@@ -70,10 +113,13 @@ export function toolResultBlocks(tool: string, args: Record<string, unknown>, re
 /** Title of a specialist agent's final answer in the chat. */
 const RESULT_TITLE: Partial<Record<AgentId, string>> = {
   meeting: "회의 맥락",
+  news: "뉴스 리스크 분석",
 };
 
 /** Time the final answer stays readable before its delegation session collapses (UI only). */
 const READ_MS = 4000;
+/** Time for a closed session window to fly into its card before the next session opens (UI only). */
+const COLLAPSE_SETTLE_MS = 2600;
 
 /* ------------------------------------------------------------------ */
 /* Backend events → scenario events                                    */
@@ -137,7 +183,7 @@ export function createAgentEventMapper() {
       case "delegation_end": {
         if (!isAgentId(ev.from) || !isAgentId(ev.to)) return [];
         return [
-          { type: "session_close" },
+          { type: "session_close", delay: COLLAPSE_SETTLE_MS },
           { type: "agent_status", agent: ev.from, status: `${AGENTS[ev.to].shortName} 결과 수신` },
         ];
       }

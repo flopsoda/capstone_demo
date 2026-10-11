@@ -1,8 +1,9 @@
 import { createAgentEventMapper } from "../live/agentEvents";
-import { K_SUPER_RUN_PATH, streamAgentRun } from "../live/api";
+import { K_SUPER_RUN_PATH, isAgentId, streamAgentRun } from "../live/api";
+import type { AgentId } from "../types/agent";
 import type { ScenarioEvent } from "../types/scenario";
 import { COMPANY, DUE_DILIGENCE_CONDITIONS, MNA_REVIEW_STAGES, WORKFLOWS } from "./mockData";
-import { ADVISORY_RESULT, NEWS_RISK_ANALYSIS } from "./mockResults";
+import { ADVISORY_RESULT } from "./mockResults";
 
 /* Timing presets (ms). Tuned for a live team-meeting walkthrough. */
 const T = {
@@ -26,13 +27,24 @@ const A2A_REQUEST_ITEMS = [
 export const A2A_REQUEST_TEXT = `${A2A_REQUEST_INTRO}\n\n다음을 포함해주세요:\n${A2A_REQUEST_ITEMS.map((s) => `- ${s}`).join("\n")}`;
 
 /**
+ * Scenario Step shown for each specialist the real K Super delegates to.
+ * "Step" is a UI concept only: the backend has no steps, so the step counter
+ * advances when the backend reports the corresponding delegation_start.
+ */
+const LIVE_DELEGATION_STEPS: Partial<Record<AgentId, ScenarioEvent>> = {
+  meeting: { type: "step", step: 3, title: "미팅 에이전트 위임" },
+  news: { type: "step", step: 4, title: "뉴스 에이전트 위임" },
+};
+
+/**
  * Pre-defined 8-step NeuroEdge M&A scenario.
  * The runner replays these in order; the graph and chat derive from them.
  *
- * Step 3 is a `live` event: the real K Electronics Super (LangGraph) delegates
- * to the real Meeting Agent, which runs run_meeting_context_retrieval. The
- * backend streams its lifecycle and the UI follows it event by event. Every
- * other step is mock playback.
+ * Steps 3–4 are one `live` event: the real K Electronics Super (LangGraph)
+ * delegates to the real Meeting Agent (run_meeting_context_retrieval), reads
+ * its answer, then delegates to the real News Agent
+ * (run_company_risk_news_analysis). The backend streams its lifecycle and the
+ * UI follows it event by event. Every other step is mock playback.
  *
  * Communication model:
  *   그룹 회장 → 그룹 슈퍼에이전트            user request
@@ -95,14 +107,17 @@ export const MNA_SCENARIO_EVENTS: ScenarioEvent[] = [
   },
 
   /* ------------------------------------------------------------ */
-  /* 3단계 — 위임: K전자 슈퍼에이전트 → 미팅 에이전트                */
+  /* 3–4단계 — 위임: K전자 슈퍼에이전트 → 미팅 에이전트 → 뉴스 에이전트 */
   /* ------------------------------------------------------------ */
   { type: "step", step: 3, title: "미팅 에이전트 위임", delay: 0 },
   {
     // REAL: K전자 슈퍼에이전트(LangGraph)가 A2A 요청을 받아 delegate_to_meeting_agent
     // tool을 호출하고, 미팅 에이전트(LangGraph)가 run_meeting_context_retrieval을
-    // 실행한다. backend가 실행 중 보내는 lifecycle 이벤트가 도착하는 즉시
-    // 세션/노드/메시지 상태로 반영된다 (src/live/agentEvents.ts).
+    // 실행한다. 그 결과를 받은 K전자 슈퍼에이전트가 다시 판단해
+    // delegate_to_news_agent를 호출하고, 뉴스 에이전트(LangGraph)가
+    // run_company_risk_news_analysis를 실행한다. backend가 실행 중 보내는
+    // lifecycle 이벤트가 도착하는 즉시 세션/노드/메시지 상태로 반영된다
+    // (src/live/agentEvents.ts). Step 번호는 실제 delegation_start에 맞춰 바뀐다.
     type: "live",
     agent: "k_super",
     run: async ({ emit }) => {
@@ -110,43 +125,18 @@ export const MNA_SCENARIO_EVENTS: ScenarioEvent[] = [
       await streamAgentRun(
         K_SUPER_RUN_PATH,
         A2A_REQUEST_TEXT,
-        (event) => mapEvent(event).forEach(emit),
+        (event) => {
+          if (event.type === "delegation_start" && isAgentId(event.to)) {
+            const step = LIVE_DELEGATION_STEPS[event.to];
+            if (step) emit(step);
+          }
+          mapEvent(event).forEach(emit);
+        },
         "k_super",
       );
     },
     delay: T.hop,
   },
-
-  /* ------------------------------------------------------------ */
-  /* 4단계 — 위임: K전자 슈퍼에이전트 → 뉴스 에이전트                */
-  /* ------------------------------------------------------------ */
-  { type: "step", step: 4, title: "뉴스 에이전트 위임", delay: 0 },
-  {
-    type: "session_open",
-    communication: "delegation",
-    from: "k_super",
-    to: "news",
-    content: `"${COMPANY.name} 인수 판단에 영향을 줄 수 있는\n최근 외부 리스크를 조사해줘.\n\n주요 고객, 법적 분쟁,\n핵심인력 관련 이슈를 우선 확인해."`,
-    delay: T.hop,
-  },
-  {
-    type: "agent_start",
-    agent: "news",
-    from: "k_super",
-    communication: "delegation",
-    workflow: WORKFLOWS.news,
-    status: "뉴스 분석 중...",
-    delay: T.analyze,
-  },
-  {
-    type: "message",
-    sender: "news",
-    title: "뉴스 리스크 분석",
-    content: NEWS_RISK_ANALYSIS,
-    delay: T.read,
-  },
-  { type: "agent_complete", agent: "news", from: "k_super", delay: 0 },
-  { type: "session_close", delay: T.collapse },
 
   /* ------------------------------------------------------------ */
   /* 5단계 — 위임: K전자 슈퍼에이전트 → 경영자문 에이전트            */
