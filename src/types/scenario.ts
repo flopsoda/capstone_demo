@@ -73,6 +73,8 @@ export interface Session {
   title?: string;
   /** The natural-language request that opened the session. */
   request: MessageContent;
+  /** Workflow Tool actually run by `to` inside this session (set when it starts). */
+  workflow?: string;
   /** Transcript inside the session (messages from `to`, nested sessions). */
   items: ChatItem[];
   /** Result handed back to the requester when the session closed. */
@@ -89,21 +91,33 @@ interface BaseEvent {
   delay?: number;
 }
 
-/** Handed to a `live` event while it runs, for intermediate graph/chat updates. */
+/** Handed to a `live` event while it runs: every real backend event is pushed through `emit`. */
 export interface LiveContext {
   emit: (event: ScenarioEvent) => void;
 }
 
+/** Failure attributed to a specific agent by the backend (see src/live/api.ts). */
+export class LiveRunError extends Error {
+  agent: AgentId;
+  constructor(agent: AgentId, message: string) {
+    super(message);
+    this.name = "LiveRunError";
+    this.agent = agent;
+  }
+}
+
 export type ScenarioEvent =
   /**
-   * A real agent execution instead of mock playback. The runner awaits `run`
-   * and then plays the returned events in place. If `run` throws, the runner
-   * marks `agent` and the scenario as failed and stops.
+   * A real agent execution instead of mock playback. `run` pushes events via
+   * `ctx.emit` as the backend reports them; the runner applies each one as it
+   * arrives and continues with the next scenario event once `run` resolves.
+   * If `run` throws, the runner marks the failing agent (`LiveRunError.agent`,
+   * else `agent`) and the scenario as failed and stops.
    */
   | (BaseEvent & {
       type: "live";
       agent: AgentId;
-      run: (ctx: LiveContext) => Promise<ScenarioEvent[]>;
+      run: (ctx: LiveContext) => Promise<void>;
     })
   | (BaseEvent & { type: "step"; step: number; title: string })
   | (BaseEvent & {
@@ -124,6 +138,8 @@ export type ScenarioEvent =
       agent: AgentId;
       status?: string;
       emphasized?: boolean;
+      /** Workflow Tool the agent has (really) started running. */
+      workflow?: string;
     })
   | (BaseEvent & {
       type: "edge";

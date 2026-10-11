@@ -3,6 +3,8 @@
     request → model → (tool call?) → run_meeting_context_retrieval → model → answer
 
 The model decides, via tool calling, whether to run the Workflow Tool.
+Lifecycle events (agent_start, tool_start/end, agent_end) are emitted as the
+graph actually runs; see app/events.py.
 """
 
 from __future__ import annotations
@@ -14,9 +16,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from ..events import AgentError, emit
 from ..llm import get_chat_model
 from ..workflows.meeting_context_retrieval import run_meeting_context_retrieval
-from .common import RECURSION_LIMIT, AgentRun, collect_tool_calls, execute_tool_calls, final_response
+from .common import RECURSION_LIMIT, execute_tool_calls, final_response, tool_call_names
 
 AGENT_ID = "meeting"
 
@@ -48,7 +51,7 @@ def _call_model(state: MessagesState) -> dict:
 def _run_tools(state: MessagesState) -> dict:
     last = state["messages"][-1]
     assert isinstance(last, AIMessage)
-    return {"messages": execute_tool_calls(last, TOOLS_BY_NAME)}
+    return {"messages": execute_tool_calls(AGENT_ID, last, TOOLS_BY_NAME)}
 
 
 def _route(state: MessagesState) -> Literal["tools", "__end__"]:
@@ -67,16 +70,27 @@ def build_meeting_agent() -> CompiledStateGraph:
     return graph.compile()
 
 
-def run_meeting_agent(task: str) -> AgentRun:
-    """Handles one natural-language task and returns the trace + final answer."""
-    state = build_meeting_agent().invoke(
-        {"messages": [HumanMessage(task)]},
-        config={"recursion_limit": RECURSION_LIMIT},
-    )
+def run_meeting_agent(task: str) -> str:
+    """Handles one natural-language task and returns the final answer.
+
+    Raises AgentError("meeting", ...) if the model answered without running
+    its Workflow Tool — an answer not backed by the meeting data is a failure.
+    """
+    emit({"type": "agent_start", "agent": AGENT_ID, "request": task})
+    try:
+        state = build_meeting_agent().invoke(
+            {"messages": [HumanMessage(task)]},
+            config={"recursion_limit": RECURSION_LIMIT},
+        )
+    except AgentError:
+        raise
+    except Exception as e:
+        raise AgentError(AGENT_ID, f"{type(e).__name__}: {e}") from e
     messages = state["messages"]
-    return {
-        "agent": AGENT_ID,
-        "request": task,
-        "tool_calls": collect_tool_calls(messages),
-        "response": final_response(messages),
-    }
+    if not tool_call_names(messages):
+        raise AgentError(AGENT_ID, "미팅 에이전트가 Workflow Tool(run_meeting_context_retrieval)을 호출하지 않고 응답했습니다.")
+    response = final_response(messages)
+    if not response:
+        raise AgentError(AGENT_ID, "미팅 에이전트가 최종 응답을 생성하지 않았습니다.")
+    emit({"type": "agent_end", "agent": AGENT_ID, "response": response})
+    return response

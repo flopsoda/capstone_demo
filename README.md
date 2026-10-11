@@ -10,7 +10,7 @@ mock을 한 단계씩 실제 Agent 실행으로 교체하는 중입니다. 현�
 ```text
 Step 1  MOCK   회장 요청 접수
 Step 2  MOCK   A2A 요청 (Group Super → K Super)
-Step 3  REAL   K Super → Meeting Agent → run_meeting_context_retrieval   (Python · LangGraph · Ollama Cloud)
+Step 3  REAL   K Super → Meeting Agent → run_meeting_context_retrieval   (Python · LangGraph · Ollama Cloud, 실행 이벤트 스트리밍)
 Step 4  MOCK   News Agent
 Step 5  MOCK   Advisory Agent
 Step 6  MOCK   K Super 종합
@@ -42,8 +42,10 @@ cd backend
 .venv/bin/python -m pytest        # tests/test_agents.py는 OLLAMA_API_KEY가 없으면 skip
 ```
 
-backend가 꺼져 있거나 LLM 호출이 실패하면 Step 3에서 시나리오가 **오류 · 중단** 상태로 멈추고
-K전자 슈퍼에이전트 노드가 error로 표시됩니다 (mock으로 대체하지 않음). 초기화 또는 새 요청으로 재실행합니다.
+Step 3의 그래프/세션/메시지는 backend가 실행 중 보내는 lifecycle 이벤트(NDJSON 스트림)를 받는 즉시 바뀝니다.
+backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, Meeting Agent가 Workflow Tool을 호출하지 않음 등) 그 시점에
+시나리오가 **오류 · 중단** 상태로 멈추고, backend가 지목한 Agent 노드가 error로 표시됩니다 (mock으로 대체하지 않음).
+초기화 또는 새 요청으로 재실행합니다.
 
 ## 시연 순서
 
@@ -88,11 +90,11 @@ src/
     mnaScenario.ts     시나리오 메타 + 트리거 조건 + 예시 문장
     mockResponses.ts   Advisory / News 직접 채팅 응답
   live/
-    api.ts             Python backend 클라이언트 (POST /api/k-super/run, /api/agents/meeting/run)
-    meetingAgent.ts    Meeting Agent 실행 trace → 세션/메시지 이벤트 · 채팅 블록 변환
+    api.ts             backend NDJSON 스트림 클라이언트 (POST /api/k-super/run, /api/agents/meeting/run)
+    agentEvents.ts     backend lifecycle 이벤트 → ScenarioEvent 변환 (Workflow 결과 블록 포함)
   hooks/
-    useScenarioRunner.ts  이벤트 재생 → 노드/엣지/채팅 상태. `live` 이벤트를 await 후 결과 이벤트를 큐에 삽입.
-                          runDirect()(mock) / runDirectLive()(실제)로 전문 Agent 단독 실행
+    useScenarioRunner.ts  이벤트 재생 → 노드/엣지/채팅 상태. `live` 이벤트 실행 중 도착하는 이벤트를 즉시 적용.
+                          runDirect()(mock) / runDirectLive()(실제)로 전문 Agent 단독 실행, apply()로 단일 이벤트 적용
     useCollapsePhase.ts   open → collapsing → closed 전환 (창/카드 접힘 애니메이션용)
   components/
     Header, Sidebar, ChatPanel, ChatMessage, ActivityCard, ComparisonCard(미사용),
@@ -103,17 +105,18 @@ src/
 
 backend/
   app/
-    main.py                          FastAPI: /api/health, /api/k-super/run, /api/agents/meeting/run
+    main.py                          FastAPI: /api/health, /api/k-super/run, /api/agents/meeting/run (NDJSON 스트림)
+    events.py                        emit() / stream_run(): Agent lifecycle 이벤트 발행과 스트리밍, AgentError
     llm.py                           ChatOllama (Ollama Cloud, OLLAMA_* 환경변수)
-    schemas.py                       응답 스키마 (AgentRun = agent · request · tool_calls · response)
+    schemas.py                       요청 스키마
     agents/
-      common.py                      MessagesState 기반 공통: tool 실행, trace 추출
+      common.py                      MessagesState 기반 공통: tool 실행(tool_start/end 발행), 응답 추출
       k_super.py                     K전자 슈퍼에이전트 그래프. delegate_to_meeting_agent tool로 위임
       meeting.py                     미팅 에이전트 그래프. run_meeting_context_retrieval tool 사용
     workflows/
       meeting_context_retrieval.py   Workflow Tool: fixture 조회 (키워드 점수 기반)
     data/meetings.json               회의 fixture (NeuroEdge 전략회의 + 무관한 회의 2건)
-  tests/                             test_workflow.py (LLM 불필요), test_agents.py (Ollama Cloud 필요)
+  tests/                             test_workflow.py · test_events.py (LLM 불필요), test_agents.py (Ollama Cloud 필요)
 ```
 
 ### Agent 구조 (backend)
@@ -133,8 +136,22 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 
 - 두 Agent는 각각 독립된 message history를 가집니다. 미팅 에이전트 내부의 tool call / result는
   K Super의 history에 들어가지 않고, 최종 응답만 ToolMessage로 돌아갑니다.
-- 전체 trace(위임 문장, tool 호출 인자/결과, 최종 응답)는 API 응답으로 frontend에 전달되어
-  기존 세션 창 / 그래프에 표시됩니다.
+- Agent 코드는 실제 lifecycle 시점에 `emit()`을 호출합니다. API는 Agent를 worker thread에서 돌리며
+  그 이벤트를 NDJSON 한 줄씩 스트리밍하고, frontend는 받는 즉시 UI 상태로 바꿉니다.
+
+| backend 이벤트 (실행 시점)          | UI 상태 변화                                                   |
+| ----------------------------------- | -------------------------------------------------------------- |
+| `agent_start` (k_super)             | K전자 노드 status "요청 분석 중..."                             |
+| `delegation_start` (k_super→meeting)| 위임 세션 열림(실제 위임 문장) · 미팅 노드 active · 위임 edge active |
+| `agent_start` (meeting)             | 미팅 노드 status "요청 분석 중..."                              |
+| `tool_start`                        | 미팅 노드/세션 헤더에 실제 호출된 Workflow 이름, status "실행 중" |
+| `tool_end`                          | 세션에 Workflow 인자·결과 메시지                                |
+| `agent_end` (meeting)               | 세션에 최종 응답 메시지 · 미팅 노드 completed · edge completed  |
+| `delegation_end`                    | 위임 세션 닫힘 · K전자 status "결과 수신"                        |
+| `error` (agent 지목)                | 해당 노드 error · 오류 메시지 · 시나리오 중단                    |
+
+- Meeting Agent가 Workflow Tool을 호출하지 않고 답하면 backend가 `error`(agent=meeting)로 처리하므로,
+  UI에 Workflow 이름이 표시되는 것은 실제 `tool_start`가 발생한 경우뿐입니다.
 - Step 4 이후: `k_super.py`의 `TOOLS`에 `delegate_to_news_agent` 등을 추가하고,
   `tools → END` 엣지를 `tools → model`로 바꾸면 K Super가 여러 Agent에 위임하고 종합(Step 6)까지 수행합니다.
   frontend는 `scenarioEvents.ts`의 해당 Step을 `live` 이벤트로 바꾸고 trace → 이벤트 변환을 `src/live/`에 추가합니다.
@@ -144,20 +161,21 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 - `scenarioEvents.ts`에는 UI 코드가 없고, `AgentGraph.tsx`에는 시나리오 내용이 없습니다.
 - `useScenarioRunner`가 이벤트를 reducer로 `nodes` / `edges` / `messages` 상태로 변환하고,
   그래프와 채팅은 그 상태만 읽습니다.
-- `live` 이벤트는 runner가 await한 뒤, 반환된 이벤트 배열을 큐의 현재 위치에 삽입합니다.
-  실패하면 `scenario_error`로 시나리오를 중단합니다.
+- `live` 이벤트는 실행 중 `emit`으로 들어오는 ScenarioEvent를 도착 순서대로 바로 적용합니다.
+  이벤트의 `delay`는 상태 변경을 늦추지 않고 다음 이벤트만 잠시 보류합니다(결과 읽을 시간 후 세션 닫힘).
+  실패하면 backend가 지목한 Agent로 `scenario_error`를 적용하고 중단합니다.
 
 ### 이벤트 타입
 
 | type                | 역할                                                       |
 | ------------------- | ---------------------------------------------------------- |
 | `step`              | 진행 Step 번호 / 제목 갱신                                 |
-| `live`              | 실제 Agent 실행. `run()` 결과 이벤트를 제자리에 삽입, 실패 시 중단 |
+| `live`              | 실제 Agent 실행. 실행 중 emit되는 이벤트를 즉시 적용, 실패 시 중단 |
 | `agent_start`       | 노드 active (+ `workflow` 표시) + from이 있으면 edge active |
 | `agent_complete`    | 노드 completed + edge completed                            |
 | `agent_error`       | 노드 error                                                 |
 | `scenario_error`    | 노드 error + 오류 메시지 + 시나리오 상태 `error` (중단)     |
-| `agent_status`      | 노드 status 텍스트 / 강조만 변경 (Workflow 내부 단계 표시) |
+| `agent_status`      | 노드 status 텍스트 / 강조 변경, `workflow`로 실행 중인 Tool 표시 |
 | `edge`              | edge 상태 직접 제어 (A2A 응답 등 역방향)                   |
 | `message`           | Assistant 메시지 추가                                      |
 | `activity`          | 단발성 Activity 카드 추가                                  |

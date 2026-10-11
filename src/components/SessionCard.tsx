@@ -170,7 +170,7 @@ export function SessionCard({ session, sessions, onOpenSessions }: SessionCardPr
             <div className={`session-replay session-replay--${session.communication}`}>
               <div className="session-replay__owner">
                 {to.name}
-                {to.workflow && <code className="session__workflow">{to.workflow}</code>}
+                {session.workflow && <code className="session__workflow">{session.workflow}</code>}
               </div>
               <div className="session-replay__items">
                 <SessionTranscript session={session} sessions={sessions} />

@@ -15,26 +15,21 @@ synthesis of specialist results (Step 6) will close the tools → model loop.
 
 from __future__ import annotations
 
-import contextvars
 from functools import lru_cache
 from typing import Literal
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from ..events import AgentError, emit
 from ..llm import get_chat_model
-from .common import RECURSION_LIMIT, AgentRun, execute_tool_calls
+from .common import RECURSION_LIMIT, final_response, tool_call_names
+from .meeting import AGENT_ID as MEETING_AGENT_ID
 from .meeting import run_meeting_agent
 
 AGENT_ID = "k_super"
-
-# Full specialist traces for the current run (set per run_k_super call; the
-# tool runs in the same thread, so a ContextVar keeps runs isolated).
-_delegations: contextvars.ContextVar[list[AgentRun] | None] = contextvars.ContextVar(
-    "k_super_delegations", default=None
-)
 
 
 @tool
@@ -45,11 +40,10 @@ def delegate_to_meeting_agent(task: str) -> str:
     Args:
         task: 미팅 에이전트가 수행할 업무를 자연어로 서술한 문장 (한국어).
     """
-    run = run_meeting_agent(task)
-    bucket = _delegations.get()
-    if bucket is not None:
-        bucket.append(run)
-    return run["response"]
+    emit({"type": "delegation_start", "from": AGENT_ID, "to": MEETING_AGENT_ID, "task": task})
+    response = run_meeting_agent(task)
+    emit({"type": "delegation_end", "from": AGENT_ID, "to": MEETING_AGENT_ID, "response": response})
+    return response
 
 
 # Step 4+: add delegate_to_news_agent / delegate_to_advisory_agent here.
@@ -72,9 +66,19 @@ def _call_model(state: MessagesState) -> dict:
 
 
 def _run_tools(state: MessagesState) -> dict:
+    """Runs the delegation tool(s) the model chose. Delegation events are emitted
+    by the tools themselves (delegation_start/end), not as generic tool events,
+    because to the UI a delegation is an agent-to-agent handoff."""
     last = state["messages"][-1]
     assert isinstance(last, AIMessage)
-    return {"messages": execute_tool_calls(last, TOOLS_BY_NAME)}
+    out = []
+    for call in last.tool_calls:
+        tool_ = TOOLS_BY_NAME.get(call["name"])
+        if tool_ is None:
+            raise AgentError(AGENT_ID, f"알 수 없는 위임 Tool: {call['name']}")
+        result = tool_.invoke(call["args"])
+        out.append(ToolMessage(content=str(result), tool_call_id=call["id"], name=call["name"]))
+    return {"messages": out}
 
 
 def _route(state: MessagesState) -> Literal["tools", "__end__"]:
@@ -94,21 +98,22 @@ def build_k_super() -> CompiledStateGraph:
     return graph.compile()
 
 
-class NoDelegationError(RuntimeError):
-    """The model answered without delegating to any specialist agent."""
-
-
-def run_k_super(request: str) -> list[AgentRun]:
-    """Runs K Super on an A2A request and returns the specialist traces."""
-    token = _delegations.set([])
+def run_k_super(request: str) -> str:
+    """Runs K Super on an A2A request. Lifecycle is reported through emit();
+    returns K Super's own closing text (empty in Step 3, which ends after delegation)."""
+    emit({"type": "agent_start", "agent": AGENT_ID, "request": request})
     try:
-        build_k_super().invoke(
+        state = build_k_super().invoke(
             {"messages": [HumanMessage(request)]},
             config={"recursion_limit": RECURSION_LIMIT},
         )
-        delegations = _delegations.get() or []
-    finally:
-        _delegations.reset(token)
-    if not delegations:
-        raise NoDelegationError("K전자 슈퍼에이전트가 전문 에이전트에게 업무를 위임하지 않았습니다.")
-    return delegations
+    except AgentError:
+        raise  # a specialist already attributed the failure
+    except Exception as e:
+        raise AgentError(AGENT_ID, f"{type(e).__name__}: {e}") from e
+    messages = state["messages"]
+    if not tool_call_names(messages):
+        raise AgentError(AGENT_ID, "K전자 슈퍼에이전트가 전문 에이전트에게 업무를 위임하지 않았습니다.")
+    response = final_response(messages)
+    emit({"type": "agent_end", "agent": AGENT_ID, "response": response})
+    return response

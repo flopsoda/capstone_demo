@@ -1,5 +1,5 @@
-import { runKSuper } from "../live/api";
-import { meetingDelegationEvents } from "../live/meetingAgent";
+import { createAgentEventMapper } from "../live/agentEvents";
+import { K_SUPER_RUN_PATH, streamAgentRun } from "../live/api";
 import type { ScenarioEvent } from "../types/scenario";
 import { COMPANY, DUE_DILIGENCE_CONDITIONS, MNA_REVIEW_STAGES, WORKFLOWS } from "./mockData";
 import { ADVISORY_RESULT, NEWS_RISK_ANALYSIS } from "./mockResults";
@@ -30,7 +30,8 @@ export const A2A_REQUEST_TEXT = `${A2A_REQUEST_INTRO}\n\n다음을 포함해주�
  * The runner replays these in order; the graph and chat derive from them.
  *
  * Step 3 is a `live` event: the real K Electronics Super (LangGraph) delegates
- * to the real Meeting Agent, which runs run_meeting_context_retrieval. Every
+ * to the real Meeting Agent, which runs run_meeting_context_retrieval. The
+ * backend streams its lifecycle and the UI follows it event by event. Every
  * other step is mock playback.
  *
  * Communication model:
@@ -100,17 +101,20 @@ export const MNA_SCENARIO_EVENTS: ScenarioEvent[] = [
   {
     // REAL: K전자 슈퍼에이전트(LangGraph)가 A2A 요청을 받아 delegate_to_meeting_agent
     // tool을 호출하고, 미팅 에이전트(LangGraph)가 run_meeting_context_retrieval을
-    // 실행한다. 결과 trace는 기존 세션/메시지 이벤트로 변환되어 재생된다.
+    // 실행한다. backend가 실행 중 보내는 lifecycle 이벤트가 도착하는 즉시
+    // 세션/노드/메시지 상태로 반영된다 (src/live/agentEvents.ts).
     type: "live",
     agent: "k_super",
     run: async ({ emit }) => {
-      emit({ type: "agent_status", agent: "k_super", status: "미팅 에이전트 위임 중..." });
-      const { delegations } = await runKSuper(A2A_REQUEST_TEXT);
-      return delegations
-        .filter((d) => d.agent === "meeting")
-        .flatMap((d) => meetingDelegationEvents(d, T));
+      const mapEvent = createAgentEventMapper();
+      await streamAgentRun(
+        K_SUPER_RUN_PATH,
+        A2A_REQUEST_TEXT,
+        (event) => mapEvent(event).forEach(emit),
+        "k_super",
+      );
     },
-    delay: 0,
+    delay: T.hop,
   },
 
   /* ------------------------------------------------------------ */

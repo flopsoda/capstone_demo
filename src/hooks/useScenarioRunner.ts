@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { AGENTS, TOPOLOGY, findTopologyEdge, type AgentId } from "../types/agent";
-import type {
-  ChatItem,
-  EdgeRuntime,
-  NodeRuntime,
-  RunnerState,
-  Scenario,
-  ScenarioEvent,
-  Session,
+import {
+  LiveRunError,
+  type ChatItem,
+  type EdgeRuntime,
+  type NodeRuntime,
+  type RunnerState,
+  type Scenario,
+  type ScenarioEvent,
+  type Session,
 } from "../types/scenario";
 
 const DEFAULT_DELAY = 500;
@@ -69,6 +70,20 @@ function setEdge(
 }
 
 /**
+ * Records the Workflow Tool an agent started on the innermost open session
+ * it is answering, so the session header/replay show what actually ran.
+ */
+function withSessionWorkflow(state: RunnerState, agent: AgentId, workflow?: string): RunnerState {
+  if (!workflow) return state;
+  const top = state.sessionStack[state.sessionStack.length - 1];
+  if (!top || state.sessions[top].to !== agent) return state;
+  return {
+    ...state,
+    sessions: { ...state.sessions, [top]: { ...state.sessions[top], workflow } },
+  };
+}
+
+/**
  * Appends a chat item to the innermost open session, or to the top-level
  * transcript when no session is open.
  */
@@ -91,13 +106,11 @@ function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
       return { ...state, currentStep: ev.step, stepTitle: ev.title };
 
     case "agent_start": {
+      // A fresh start shows only the Workflow Tool this start declares; a live
+      // agent gets its workflow later, when the backend reports tool_start.
       const nodes = {
         ...state.nodes,
-        [ev.agent]: {
-          state: "active",
-          status: ev.status,
-          workflow: ev.workflow ?? state.nodes[ev.agent].workflow,
-        } satisfies NodeRuntime,
+        [ev.agent]: { state: "active", status: ev.status, workflow: ev.workflow } satisfies NodeRuntime,
       };
       let edges = state.edges;
       if (ev.from) {
@@ -107,7 +120,7 @@ function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
           nodes[ev.from] = { state: "active", status: "요청 중" };
         }
       }
-      return { ...state, nodes, edges };
+      return withSessionWorkflow({ ...state, nodes, edges }, ev.agent, ev.workflow);
     }
 
     case "agent_complete": {
@@ -151,17 +164,22 @@ function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
     }
 
     case "agent_status":
-      return {
-        ...state,
-        nodes: {
-          ...state.nodes,
-          [ev.agent]: {
-            ...state.nodes[ev.agent],
-            status: ev.status,
-            emphasized: ev.emphasized ?? false,
+      return withSessionWorkflow(
+        {
+          ...state,
+          nodes: {
+            ...state.nodes,
+            [ev.agent]: {
+              ...state.nodes[ev.agent],
+              status: ev.status,
+              emphasized: ev.emphasized ?? false,
+              workflow: ev.workflow ?? state.nodes[ev.agent].workflow,
+            },
           },
         },
-      };
+        ev.agent,
+        ev.workflow,
+      );
 
     case "edge":
       return { ...state, edges: setEdge(state.edges, ev.from, ev.to, ev.state) };
@@ -283,6 +301,8 @@ export interface ScenarioRunner extends RunnerState {
   reset: () => void;
   /** Adds a plain chat item without touching graph state (non-scenario replies). */
   appendMessage: (item: ChatItem) => void;
+  /** Applies one event to graph/chat state (live backend events outside the scenario). */
+  apply: (event: ScenarioEvent) => void;
   /**
    * Runs a specialist agent on its own, outside the orchestrated scenario
    * (a user talking to the agent directly). The node goes active with the
@@ -301,11 +321,14 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
 /**
  * Replays a scenario's event list on a timer. The hook is intentionally
  * agnostic of the UI: it only produces node/edge runtime state and chat items.
- * A `live` event pauses playback, runs a real agent, and splices the events
- * it produced into the queue so the rest of the scenario continues as mock.
+ * A `live` event pauses mock playback and applies the events a real agent run
+ * emits as they arrive; once the run resolves the rest of the scenario
+ * continues as mock.
  */
 export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialRunnerState);
@@ -350,24 +373,42 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
           return;
         }
 
-        let produced: ScenarioEvent[];
+        // Live events are applied in arrival order. An event's `delay` only
+        // holds back the *next* one (e.g. keep a result readable before its
+        // session collapses); state itself changes when the backend says so.
+        const pending: ScenarioEvent[] = [];
+        let draining = false;
+        let drained: Promise<void> = Promise.resolve();
+        const drain = async () => {
+          draining = true;
+          try {
+            while (pending.length > 0 && isCurrent()) {
+              const next = pending.shift()!;
+              dispatch({ type: "apply", event: next });
+              if (next.delay) await sleep(next.delay);
+            }
+          } finally {
+            draining = false;
+          }
+        };
+        const emit = (event: ScenarioEvent) => {
+          pending.push(event);
+          if (!draining) drained = drain();
+        };
+
         try {
-          produced = await ev.run({
-            emit: (event) => {
-              if (isCurrent()) dispatch({ type: "apply", event });
-            },
-          });
+          await ev.run({ emit });
         } catch (err) {
-          // A reset/restart during the call wins; otherwise stop the scenario here.
+          // A reset/restart during the call wins; otherwise stop the scenario
+          // at the agent the backend blamed (or the live step's own agent).
           if (!isCurrent()) return;
-          dispatch({
-            type: "apply",
-            event: { type: "scenario_error", agent: ev.agent, message: errorMessage(err) },
-          });
+          const agent = err instanceof LiveRunError ? err.agent : ev.agent;
+          emit({ type: "scenario_error", agent, message: errorMessage(err) });
+          await drained;
           return;
         }
+        await drained;
         if (!isCurrent()) return;
-        queue.splice(index, 0, ...produced);
         schedule(ev.delay ?? 0);
       };
 
@@ -378,6 +419,10 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
 
   const appendMessage = useCallback((item: ChatItem) => {
     dispatch({ type: "append_message", item });
+  }, []);
+
+  const apply = useCallback((event: ScenarioEvent) => {
+    dispatch({ type: "apply", event });
   }, []);
 
   // Direct runs use their own timers so they never interfere with scenario playback.
@@ -427,6 +472,7 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
     start,
     reset,
     appendMessage,
+    apply,
     runDirect,
     runDirectLive,
   };

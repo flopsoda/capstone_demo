@@ -7,8 +7,8 @@ import { ScenarioStatus } from "./components/ScenarioStatus";
 import { SessionWindows } from "./components/SessionWindows";
 import { Sidebar } from "./components/Sidebar";
 import { useScenarioRunner } from "./hooks/useScenarioRunner";
-import { runMeetingAgent } from "./live/api";
-import { MEETING_RESULT_TITLE, toolCallBlocks } from "./live/meetingAgent";
+import { createAgentEventMapper } from "./live/agentEvents";
+import { MEETING_AGENT_RUN_PATH, streamAgentRun } from "./live/api";
 import { MNA_SAMPLE_PROMPT, mnaScenario } from "./scenario/mnaScenario";
 import { getMockResponse } from "./scenario/mockResponses";
 import { AGENTS, type ChatTabId } from "./types/agent";
@@ -75,28 +75,26 @@ export default function App() {
 
       if (side === "meeting") {
         // REAL: the same Meeting Agent graph that K Super delegates to in Step 3.
+        // Backend events drive the node (status / Workflow Tool) and this chat live.
+        const mapEvent = createAgentEventMapper();
         runner
-          .runDirectLive(side, AGENTS[side].workflow ?? "", async () => {
-            const run = await runMeetingAgent(text);
-            pushSide(
-              ...run.tool_calls.map(
-                (call): ChatItem => ({
-                  id: sideId(),
-                  kind: "assistant",
-                  sender: side,
-                  title: call.name,
-                  content: toolCallBlocks(call),
-                }),
-              ),
-              {
-                id: sideId(),
-                kind: "assistant",
-                sender: side,
-                title: MEETING_RESULT_TITLE,
-                content: run.response,
+          .runDirectLive(side, "", () =>
+            streamAgentRun(
+              MEETING_AGENT_RUN_PATH,
+              text,
+              (event) => {
+                for (const e of mapEvent(event)) {
+                  if (e.type === "message") {
+                    pushSide({ id: sideId(), kind: "assistant", sender: e.sender, title: e.title, content: e.content });
+                  } else if (e.type === "agent_status") {
+                    runner.apply(e);
+                  }
+                  // agent_start / agent_complete are owned by runDirectLive here.
+                }
               },
-            );
-          })
+              side,
+            ),
+          )
           .catch((err: unknown) => {
             pushSide({
               id: sideId(),

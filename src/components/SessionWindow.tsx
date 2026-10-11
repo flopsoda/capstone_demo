@@ -88,10 +88,10 @@ export function SessionWindow({ session, sessions }: SessionWindowProps) {
           <div className="chat__title">{to.name}</div>
           <div className="chat__subtitle">
             {from.shortName} → {to.shortName}
-            {to.workflow && (
+            {session.workflow && (
               <>
                 {" · "}
-                <code className="session__workflow">{to.workflow}</code>
+                <code className="session__workflow">{session.workflow}</code>
               </>
             )}
           </div>
