@@ -1,0 +1,66 @@
+# AGENTS.md
+
+이 repository에서 작업하는 **모든 coding agent**가 따라야 할 공통 개발 지침이다.
+architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 문서를 읽는다.
+
+1. [`docs/architecture.md`](docs/architecture.md) — 무엇을 만들고 있는지, 현재 구현 범위, 목표 구조, 열린 결정 사항
+2. [`README.md`](README.md) — 실행 방법, 파일 구조, 이벤트 타입 표
+
+## 한 줄 요약
+
+대기업 경영진용 **Multi-Agent Decision Support System prototype**이다.
+`Group Super ⇅(A2A) K Electronics Super →(delegation) Meeting / News / Advisory Agent → Workflow Tool` 구조를,
+고정된 8-step NeuroEdge M&A demo에서 **한 Step씩 mock → real로 교체**하며 만들고 있다.
+현재 Step 3만 real이다 (K Super → Meeting Agent → `run_meeting_context_retrieval`).
+
+## 작업 전
+
+- 작업 범위를 먼저 확인한다. "사용자가 요청한 Step / 기능"이 범위다.
+- 기존 코드를 먼저 읽는다. 특히 `backend/app/agents/`, `backend/app/events.py`, `src/live/`, `src/scenario/scenarioEvents.ts`, `src/hooks/useScenarioRunner.ts`.
+- `docs/architecture.md`의 "Current implementation"과 "Target architecture"를 구분해서 이해한다. 목표 구조를 이미 구현된 것처럼 가정하지 않는다.
+
+## 범위 관리
+
+- **요청받은 Step만 구현한다.** 미래 Step(News, Advisory, 종합, A2A 등)을 임의로 선행 구현하지 않는다.
+- 한 Step을 real로 바꿀 때 나머지 mock Step과 기존 UI / scenario shell은 그대로 둔다. mock을 한꺼번에 지우지 않는다.
+- 요청받지 않은 기능, 리팩터링, dependency 추가, 새 framework 도입을 같이 하지 않는다.
+- architecture 변경이 필요하다고 판단되면 **조용히 바꾸지 말고 명확히 알린다.** `docs/architecture.md` 12장(열린 결정 사항)에 해당하는 문제라면 결정을 요청한다.
+
+## 지켜야 할 경계
+
+- **Agent / Workflow Tool / Delegation / A2A를 섞지 않는다.**
+  - Super Agent는 LLM tool calling으로 전문 Agent에게 자연어로 위임한다. 중앙 Router / Planner 노드를 추가하지 않는다.
+  - Specialist Agent는 독립 LangGraph Agent다. 함수 호출로 대체하지 않는다. Super Agent 경로와 사용자 직접 대화 경로가 같은 core를 쓴다.
+  - Workflow Tool은 Agent가 아니다. 내부의 결정적 절차를 Agent-visible Tool 여러 개로 쪼개지 않는다.
+  - K Super → Specialist는 **delegation**(`delegation_start/end`), Group Super ⇅ K Super는 **A2A**다. Specialist 호출을 A2A라고 부르지 않는다.
+- **Agent state는 message history 중심이다.** `MessagesState`를 쓰고, `meeting_result` 같은 Agent별 결과 field를 추가하지 않는다. 공유 구조가 꼭 필요하면 범용 구조를 제안하고 결정을 받는다.
+- **Agent 경계를 유지한다.** 하위 Agent의 내부 메시지 / tool call을 상위 Agent history에 병합하지 않는다. 최종 결과만 전달한다.
+- **Workflow Tool이 데이터 경계다.** Agent가 fixture / DB를 직접 읽지 않는다.
+
+## Backend ↔ Frontend
+
+- **Backend 실행이 source of truth다.** Agent 코드는 실제 lifecycle 시점에 `emit()`한다.
+- Frontend는 받은 이벤트만 상태로 바꾼다. Tool 이름, 위임 문장, 결과, 응답을 frontend에서 추측하거나 꾸며내지 않는다.
+- 실패 시 mock으로 대체하지 않는다. backend가 지목한 Agent를 error로 표시하고 scenario를 멈춘다.
+- 새 Agent / Tool을 추가할 때 **기존 이벤트 종류와 변환 경로**(`events.py` → `src/live/api.ts` → `src/live/agentEvents.ts` → reducer)를 재사용한다. 새 이벤트 타입이나 별도 채널을 만들기 전에 기존 것으로 표현할 수 없는지 확인한다.
+- backend `AGENT_ID`와 frontend `AgentId` 문자열은 같아야 한다.
+
+## Capability 추가 시
+
+- 새 Tool을 추가할 때는 "어느 Agent가 쓸 수 있는가"가 한 곳에서 보이도록 한다.
+- 현재는 Agent 파일별 `TOOLS` 리스트지만, 방향은 공통 Capability Pool / Registry에서 Agent별 subset을 제공하는 것이다. 그 방향과 어긋나는 구조(Agent마다 다른 등록 방식, 흩어진 정의)를 새로 만들지 않는다.
+- Registry 리팩터링 자체는 요청이 있을 때만 한다.
+
+## 보안
+
+- API key, secret을 코드나 Git에 넣지 않는다. `backend/.env`는 gitignore 대상이며 `.env.example`만 커밋한다.
+- fixture 데이터는 가상이다. 실제 기업 데이터를 넣지 않는다.
+
+## 구현 후
+
+- 관련 테스트를 실행한다.
+  - backend: `cd backend && .venv/bin/python -m pytest` (`tests/test_agents.py`는 `OLLAMA_API_KEY`가 있어야 실행된다)
+  - frontend: `npm run build` (tsc 포함), `npm run lint`
+- 실제 실행 경로를 바꿨다면 backend + frontend를 띄워 scenario를 한 번 돌려 본다.
+- 구현 상태가 바뀌면(Step이 real로 전환, 구조 결정 등) `docs/architecture.md`의 구현 상태 표와 `README.md`의 Step 표를 같은 커밋에서 갱신한다.
+- 결과를 사실대로 보고한다. 실패한 테스트, 건너뛴 검증, 범위에서 뺀 부분을 명시한다.
