@@ -16,7 +16,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 ## 작업 전
 
 - 작업 범위를 먼저 확인한다. "사용자가 요청한 Step / 기능"이 범위다.
-- 기존 코드를 먼저 읽는다. 특히 `backend/app/agents/`, `backend/app/events.py`, `src/live/`, `src/scenario/scenarioEvents.ts`, `src/hooks/useScenarioRunner.ts`.
+- 기존 코드를 먼저 읽는다. 특히 `backend/app/agents/`, `backend/app/capabilities/`, `backend/app/events.py`, `src/live/`, `src/scenario/scenarioEvents.ts`, `src/hooks/useScenarioRunner.ts`.
 - `docs/architecture.md`의 "Current implementation"과 "Target architecture"를 구분해서 이해한다. 목표 구조를 이미 구현된 것처럼 가정하지 않는다.
 
 ## 범위 관리
@@ -47,9 +47,12 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 
 ## Capability 추가 시
 
-- 새 Tool을 추가할 때는 "어느 Agent가 쓸 수 있는가"가 한 곳에서 보이도록 한다.
-- 현재는 Agent 파일별 `TOOLS` 리스트지만, 방향은 공통 Capability Pool / Registry에서 Agent별 subset을 제공하는 것이다. 그 방향과 어긋나는 구조(Agent마다 다른 등록 방식, 흩어진 정의)를 새로 만들지 않는다.
-- Registry 리팩터링 자체는 요청이 있을 때만 한다.
+- Agent-visible Capability(Skill = 업무 지침, Tool = `@tool`)는 `backend/app/capabilities/skills/`, `tools/`에 정의하고 `capabilities/registry.py`의 `CAPABILITIES`에 `allowed_agents`와 함께 등록한다. **권한은 그곳에만** 적는다.
+- Agent 파일은 `skills_for(AGENT_ID)` / `tools_for(AGENT_ID)`로 자기 subset만 받는다. Agent 파일에서 Skill / Tool 모듈을 직접 import하거나 `TOOLS`를 하드코딩하지 않는다.
+- Tool의 이름 · description · argument schema는 `@tool` 정의가 source of truth다. Registry나 다른 곳에 중복 정의하지 않는다.
+- Tool 내부의 workflow 단계와 helper는 `backend/app/workflows/`에 두고 Registry에 등록하지 않는다. Agent가 직접 쓰는 것만 Capability다.
+- Skill은 실제 업무 지침이 있을 때만 만든다. Registry를 채우기 위한 빈 Skill이나 wrapper는 만들지 않는다. Agent의 정체성 · 출력 형식 규칙은 Agent 파일의 `IDENTITY`에 둔다.
+- 위임 Tool(`delegate_to_*`)은 대상 Agent의 `run_*`를 호출 시점에 import한다 (순환 import 방지). 위임 이벤트(`delegation_start/end`)는 Tool 안에서 emit한다.
 
 ## 보안
 

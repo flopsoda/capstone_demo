@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from ..capabilities import Skill
 from ..events import emit
 
 # Upper bound on LangGraph super-steps per agent invocation (model ↔ tools loop).
 RECURSION_LIMIT = 10
+
+
+def compose_system_prompt(identity: str, skills: Sequence[Skill]) -> str:
+    """System context = the agent's own identity/role text + its allowed Skills (playbooks)."""
+    parts = [identity.strip()]
+    for skill in skills:
+        parts.append(f"업무 지침 — {skill.name}:\n{skill.instructions.strip()}")
+    return "\n\n".join(parts)
 
 
 def execute_tool_calls(agent: str, message: AIMessage, tools: dict[str, BaseTool]) -> list[ToolMessage]:

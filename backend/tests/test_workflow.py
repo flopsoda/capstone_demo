@@ -1,8 +1,4 @@
-from app.workflows.meeting_context_retrieval import (
-    WORKFLOW_NAME,
-    retrieve_meeting_context,
-    run_meeting_context_retrieval,
-)
+from app.workflows.meeting_context_retrieval import retrieve_meeting_context
 
 
 def test_finds_neuroedge_strategy_meeting_only():
@@ -46,8 +42,3 @@ def test_no_match_returns_empty():
     out = retrieve_meeting_context("점심 메뉴", [])
     assert out["matched"] == 0 and out["meetings"] == []
 
-
-def test_tool_metadata():
-    assert run_meeting_context_retrieval.name == WORKFLOW_NAME
-    result = run_meeting_context_retrieval.invoke({"query": "뉴로엣지 인수", "topics": ["M&A"]})
-    assert result["matched"] == 1

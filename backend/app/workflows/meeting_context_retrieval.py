@@ -1,8 +1,10 @@
-"""run_meeting_context_retrieval — Workflow Tool used by the Meeting Agent.
+"""Meeting context retrieval — implementation workflow behind the
+run_meeting_context_retrieval Tool (app/capabilities/tools/).
 
 Reads the meeting fixture file, scores each meeting against the request and
 returns the decisions and open Action Items of the matching meetings.
-The Meeting Agent never touches the fixture directly; this is the boundary.
+The Meeting Agent never touches the fixture directly; the tool is the boundary.
+This module is not agent-visible and has no LangChain dependency.
 """
 
 from __future__ import annotations
@@ -13,11 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from langchain_core.tools import tool
-
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "meetings.json"
-
-WORKFLOW_NAME = "run_meeting_context_retrieval"
 
 _MIN_TOKEN_LEN = 2
 # A meeting needs at least one topic hit (3) or title + statement hits to count.
@@ -82,7 +80,7 @@ def retrieve_meeting_context(
     *,
     limit: int = 3,
 ) -> dict[str, Any]:
-    """Pure function behind the tool so it can be unit-tested without an LLM."""
+    """Pure function so the workflow can be unit-tested without an LLM."""
     topics = topics or []
     ranked = sorted(
         ((score_meeting(m, query, topics), m) for m in load_meetings()),
@@ -114,14 +112,3 @@ def retrieve_meeting_context(
         ],
     }
 
-
-@tool(WORKFLOW_NAME)
-def run_meeting_context_retrieval(query: str, topics: list[str] | None = None) -> dict[str, Any]:
-    """회의 기록 저장소에서 요청과 관련된 과거 회의를 찾아, 각 회의의 결정사항(발언자별 기준)과
-    아직 완료되지 않은 Action Item을 반환한다.
-
-    Args:
-        query: 찾고자 하는 내용을 담은 자연어 질의 (예: "뉴로엣지 인수 관련 전략회의 결정사항").
-        topics: 관련 주제 키워드 목록 (예: ["NeuroEdge", "M&A", "AI NPU"]).
-    """
-    return retrieve_meeting_context(query, topics)

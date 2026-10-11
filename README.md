@@ -110,13 +110,18 @@ backend/
     llm.py                           ChatOllama (Ollama Cloud, OLLAMA_* 환경변수)
     schemas.py                       요청 스키마
     agents/
-      common.py                      MessagesState 기반 공통: tool 실행(tool_start/end 발행), 응답 추출
-      k_super.py                     K전자 슈퍼에이전트 그래프. delegate_to_meeting_agent tool로 위임
-      meeting.py                     미팅 에이전트 그래프. run_meeting_context_retrieval tool 사용
+      common.py                      MessagesState 기반 공통: system prompt 조립(identity + Skills), tool 실행(tool_start/end 발행), 응답 추출
+      k_super.py                     K전자 슈퍼에이전트 그래프. Registry에서 받은 Skill/Tool(delegate_to_meeting_agent)로 위임
+      meeting.py                     미팅 에이전트 그래프. Registry에서 받은 Skill/Tool(run_meeting_context_retrieval) 사용
+    capabilities/                    Agent Capability (Skill = 업무 지침, Tool = 호출 가능한 기능)
+      base.py                        Skill / Capability 타입
+      registry.py                    CAPABILITIES: 모든 Capability와 allowed_agents (권한의 source of truth), skills_for / tools_for
+      skills/                        specialist_delegation, meeting_context_analysis
+      tools/                         delegate_to_meeting_agent, run_meeting_context_retrieval (@tool 정의)
     workflows/
-      meeting_context_retrieval.py   Workflow Tool: fixture 조회 (키워드 점수 기반)
+      meeting_context_retrieval.py   run_meeting_context_retrieval 내부 구현: fixture 조회 (키워드 점수 기반, LangChain 의존 없음)
     data/meetings.json               회의 fixture (NeuroEdge 전략회의 + 무관한 회의 2건)
-  tests/                             test_workflow.py · test_events.py (LLM 불필요), test_agents.py (Ollama Cloud 필요)
+  tests/                             test_workflow.py · test_capabilities.py · test_events.py (LLM 불필요), test_agents.py (Ollama Cloud 필요)
 ```
 
 ### Agent 구조 (backend)
@@ -152,7 +157,9 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 
 - Meeting Agent가 Workflow Tool을 호출하지 않고 답하면 backend가 `error`(agent=meeting)로 처리하므로,
   UI에 Workflow 이름이 표시되는 것은 실제 `tool_start`가 발생한 경우뿐입니다.
-- Step 4 이후: `k_super.py`의 `TOOLS`에 `delegate_to_news_agent` 등을 추가하고,
+- 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 `capabilities/registry.py`에서
+  `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
+- Step 4 이후: `capabilities/tools/`에 `delegate_to_news_agent` 등을 정의해 `registry.py`에 등록하고(K Super 코드 변경 없음),
   `tools → END` 엣지를 `tools → model`로 바꾸면 K Super가 여러 Agent에 위임하고 종합(Step 6)까지 수행합니다.
   frontend는 `scenarioEvents.ts`의 해당 Step을 `live` 이벤트로 바꾸고 trace → 이벤트 변환을 `src/live/`에 추가합니다.
 
