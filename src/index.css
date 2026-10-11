@@ -1043,9 +1043,9 @@ button {
   min-width: 0;
   overflow: hidden;
   transition:
-    flex-grow 1.4s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 1s ease,
-    transform 1.4s cubic-bezier(0.4, 0, 0.2, 1);
+    flex-grow 2s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 1.4s ease,
+    transform 2s cubic-bezier(0.4, 0, 0.2, 1);
   animation: window-in 1s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .panel--session-a2a {
@@ -1353,11 +1353,11 @@ button {
   box-shadow: 0 8px 24px rgba(79, 70, 229, 0.25);
   opacity: 0.95;
   transition:
-    left 1.4s cubic-bezier(0.4, 0, 0.2, 1),
-    top 1.4s cubic-bezier(0.4, 0, 0.2, 1),
-    width 1.4s cubic-bezier(0.4, 0, 0.2, 1),
-    height 1.4s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 1.4s ease;
+    left 2s cubic-bezier(0.4, 0, 0.2, 1),
+    top 2s cubic-bezier(0.4, 0, 0.2, 1),
+    width 2s cubic-bezier(0.4, 0, 0.2, 1),
+    height 2s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 2s ease;
 }
 .session-ghost--delegation {
   border-color: var(--task);

@@ -73,7 +73,7 @@ const RESULT_TITLE: Partial<Record<AgentId, string>> = {
 };
 
 /** Time the final answer stays readable before its delegation session collapses (UI only). */
-const READ_MS = 2400;
+const READ_MS = 4000;
 
 /* ------------------------------------------------------------------ */
 /* Backend events → scenario events                                    */

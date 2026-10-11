@@ -6,12 +6,12 @@ import { ADVISORY_RESULT, NEWS_RISK_ANALYSIS } from "./mockResults";
 
 /* Timing presets (ms). Tuned for a live team-meeting walkthrough. */
 const T = {
-  hop: 1000, // simple transition
-  short: 1400, // brief pause between transitions
-  read: 2400, // time to read a returned result before its session collapses
-  collapse: 1900, // session collapse animation (COLLAPSE_MS) + settle
-  analyze: 2400, // an agent "working"
-  stage: 800, // one internal workflow stage
+  hop: 1600, // simple transition
+  short: 2200, // brief pause between transitions
+  read: 4000, // time to read a returned result before its session collapses
+  collapse: 2600, // session collapse animation (COLLAPSE_MS) + settle
+  analyze: 3600, // an agent "working"
+  stage: 1300, // one internal workflow stage
 };
 
 /* A2A request from Group Super to K Electronics Super (Step 2). The same text

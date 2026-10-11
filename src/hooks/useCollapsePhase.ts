@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 /** Duration of the "window flies into its request bubble" animation. */
-export const COLLAPSE_MS = 1400;
+export const COLLAPSE_MS = 2000;
 
 export type CollapsePhase = "open" | "collapsing" | "closed";
 

@@ -11,7 +11,7 @@ import {
   type Session,
 } from "../types/scenario";
 
-const DEFAULT_DELAY = 500;
+const DEFAULT_DELAY = 800;
 
 /* ------------------------------------------------------------------ */
 /* Initial state                                                       */
