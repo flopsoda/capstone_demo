@@ -62,5 +62,9 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
   - backend: `cd backend && .venv/bin/python -m pytest` (`tests/test_agents.py`는 `OLLAMA_API_KEY`가 있어야 실행된다)
   - frontend: `npm run build` (tsc 포함), `npm run lint`
 - 실제 실행 경로를 바꿨다면 backend + frontend를 띄워 scenario를 한 번 돌려 본다.
-- 구현 상태가 바뀌면(Step이 real로 전환, 구조 결정 등) `docs/architecture.md`의 구현 상태 표와 `README.md`의 Step 표를 같은 커밋에서 갱신한다.
+- 문서는 **적힌 사실이 틀려졌을 때** 코드와 같은 커밋에서 갱신한다. "의미있는 변화"가 아니라 "문서가 거짓이 되었는가"가 기준이다.
+  - `docs/architecture.md`: Step이 real로 바뀜 (8장·10장 표) / Agent·Workflow Tool·endpoint·이벤트 타입 추가 (3장·6장) / 12장의 열린 결정이 내려짐 (항목 제거, 본문 반영) / 새 구조적 문제·미결정 사항 발견 (12장 추가).
+  - `README.md`: Step 표, 실행 방법, 파일 구조가 바뀜.
+  - `AGENTS.md`: 규칙이 깨졌거나 현실과 맞지 않음 / 테스트·실행 명령이 바뀜. 그 외에는 손대지 않는다.
+  - `CLAUDE.md`: 작업 방식 자체가 바뀔 때만. 코드 변화로는 갱신하지 않는다.
 - 결과를 사실대로 보고한다. 실패한 테스트, 건너뛴 검증, 범위에서 뺀 부분을 명시한다.
