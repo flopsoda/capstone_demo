@@ -125,9 +125,10 @@ User        → Specialist Agent   (직접 대화)
 - Registry가 허용한 Capability:
   - Meeting: Skill `meeting_context_analysis`(조회·정리 지침, 응답 형식), Tool `run_meeting_context_retrieval`.
   - News: Skill `external_risk_analysis`(외부 리스크 조사·정리 지침, 응답 형식), Tool `run_company_risk_news_analysis`.
-- Workflow Tool을 호출하지 않고 답하면 `AgentError("meeting" | "news", ...)`. 데이터에 근거하지 않은 답은 실패로 본다.
-- 두 경로 모두 같은 `run_meeting_agent(task)` / `run_news_agent(task)`를 호출한다.
-  delegation 경로는 K Super의 위임 Tool 안에서, 직접 대화 경로는 `POST /api/agents/meeting/run` / `POST /api/agents/news/run`에서.
+- 두 경로 모두 같은 `run_meeting_agent(task, require_tool=...)` / `run_news_agent(task, require_tool=...)`를 호출한다.
+  delegation 경로는 K Super의 위임 Tool 안에서(`require_tool=True`, 기본값), 직접 대화 경로는 `POST /api/agents/meeting/run` / `POST /api/agents/news/run`에서(`require_tool=False`).
+- `require_tool=True`일 때 Workflow Tool을 호출하지 않고 답하면 `AgentError("meeting" | "news", ...)`. 데이터에 근거하지 않은 보고서가 K Super에 올라가면 안 되기 때문이다.
+- 직접 대화에서는 이 검사를 하지 않는다. 사용자 잡담에는 그냥 답하고, 업무 질문이면 모델이 Skill 지침에 따라 Tool을 호출한다. Tool 호출 여부는 Agent core 안의 LangGraph 루프가 결정하며 두 경로에서 동일하다.
 - Advisory Agent는 backend에 없다. frontend에서 mock으로만 재생된다.
 
 ### 3.3 Workflow Tool

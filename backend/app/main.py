@@ -48,10 +48,10 @@ def k_super_run(body: RunRequest) -> StreamingResponse:
 @app.post("/api/agents/meeting/run")
 def meeting_run(body: RunRequest) -> StreamingResponse:
     """Direct user → Meeting Agent (sidebar chat), same agent core as Step 3. Streams events."""
-    return _ndjson(lambda: run_meeting_agent(body.request))
+    return _ndjson(lambda: run_meeting_agent(body.request, require_tool=False))
 
 
 @app.post("/api/agents/news/run")
 def news_run(body: RunRequest) -> StreamingResponse:
     """Direct user → News Agent (sidebar chat), same agent core as Step 4. Streams events."""
-    return _ndjson(lambda: run_news_agent(body.request))
+    return _ndjson(lambda: run_news_agent(body.request, require_tool=False))

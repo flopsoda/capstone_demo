@@ -133,3 +133,36 @@ def test_news_api_streams_ndjson_events():
     types = [e["type"] for e in events]
     assert types[-1] == "done"
     assert next(e for e in events if e["type"] == "tool_start")["tool"] == NEWS_WORKFLOW
+
+
+def test_direct_chat_small_talk_does_not_require_tool():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    with client.stream("POST", "/api/agents/news/run", json={"request": "안녕? 너는 누구야?"}) as res:
+        assert res.status_code == 200, res.text
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    types = [e["type"] for e in events]
+    # Direct chat: no Workflow Tool call is not a failure — the run ends normally.
+    assert "error" not in types, events
+    assert types[-1] == "done"
+    assert any(e["type"] == "agent_end" and e["response"] for e in events)
+
+
+def test_delegation_path_still_requires_tool(monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    from app.agents import news
+    from app.events import AgentError, collect_events
+
+    class _NoToolGraph:
+        def invoke(self, state, config=None):
+            return {"messages": [*state["messages"], AIMessage("안녕하세요, 뉴스 에이전트입니다.")]}
+
+    monkeypatch.setattr(news, "build_news_agent", lambda: _NoToolGraph())
+    with pytest.raises(AgentError, match="호출하지 않고"):
+        collect_events(lambda: news.run_news_agent("안녕"))
+    response, _ = collect_events(lambda: news.run_news_agent("안녕", require_tool=False))
+    assert response == "안녕하세요, 뉴스 에이전트입니다."

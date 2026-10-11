@@ -171,8 +171,9 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 | `delegation_end`                    | 위임 세션 닫힘 · K전자 status "결과 수신" (다음 위임이 있으면 반복) |
 | `error` (agent 지목)                | 해당 노드 error · 오류 메시지 · 시나리오 중단                    |
 
-- 전문 Agent가 Workflow Tool을 호출하지 않고 답하면 backend가 `error`(agent=meeting | news)로 처리하므로,
+- K Super 위임 경로에서 전문 Agent가 Workflow Tool을 호출하지 않고 답하면 backend가 `error`(agent=meeting | news)로 처리하므로,
   UI에 Workflow 이름이 표시되는 것은 실제 `tool_start`가 발생한 경우뿐입니다.
+  Sidebar 직접 대화(`/api/agents/*/run`)는 이 검사를 하지 않아 잡담에도 그냥 답합니다(`require_tool=False`).
 - 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 `capabilities/registry.py`에서
   `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
 - Step 5 이후: `capabilities/tools/`에 `delegate_to_advisory_agent` 등을 정의해 `registry.py`에 등록하면(K Super 코드 변경 없음)

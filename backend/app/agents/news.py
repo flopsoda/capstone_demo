@@ -68,11 +68,13 @@ def build_news_agent() -> CompiledStateGraph:
     return graph.compile()
 
 
-def run_news_agent(task: str) -> str:
+def run_news_agent(task: str, *, require_tool: bool = True) -> str:
     """Handles one natural-language task and returns the final answer.
 
-    Raises AgentError("news", ...) if the model answered without running
-    a Workflow Tool — an answer not backed by the news data is a failure.
+    require_tool=True (delegation path): raises AgentError("news", ...) if the
+    model answered without running a Workflow Tool — a report not backed by the
+    news data must not reach K Super. The direct-chat endpoint passes False so
+    small talk gets a plain answer; the model still calls the Tool for real tasks.
     """
     emit({"type": "agent_start", "agent": AGENT_ID, "request": task})
     try:
@@ -85,7 +87,7 @@ def run_news_agent(task: str) -> str:
     except Exception as e:
         raise AgentError(AGENT_ID, f"{type(e).__name__}: {e}") from e
     messages = state["messages"]
-    if not tool_call_names(messages):
+    if require_tool and not tool_call_names(messages):
         names = ", ".join(TOOLS_BY_NAME)
         raise AgentError(AGENT_ID, f"뉴스 에이전트가 Workflow Tool({names})을 호출하지 않고 응답했습니다.")
     response = final_response(messages)
