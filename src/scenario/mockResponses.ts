@@ -1,35 +1,13 @@
-import type { ChatTabId } from "../types/agent";
 import type { MessageContent } from "../types/scenario";
 import { MNA_SAMPLE_PROMPT } from "./mnaScenario";
-import { ADVISORY_RESULT, MEETING_CONTEXT, NEWS_RISK_BRIEF } from "./mockResults";
 
 /**
- * Deterministic mock replies for the standalone Advisory chat.
- * The same specialist agent core answers a direct user request exactly as it
- * answers a delegated one — only the requester differs.
- * (The Meeting and News tabs are answered by the real agents; see App.tsx.)
+ * Fixed reply of the (mock) Group Super tab to input that does not trigger
+ * the scenario. The specialist tabs are answered by the real agents (App.tsx).
  */
-export function getMockResponse(tab: ChatTabId, _input: string): MessageContent {
-  switch (tab) {
-    case "news":
-      // Fallback only; the live News Agent handles this tab.
-      return NEWS_RISK_BRIEF;
-
-    case "meeting":
-      // Fallback only; the live Meeting Agent handles this tab.
-      return MEETING_CONTEXT;
-
-    case "advisory":
-      return ADVISORY_RESULT;
-
-    case "group_super":
-    default:
-      return [
-        {
-          kind: "text",
-          text: "현재 데모에서는 뉴로엣지 인수안 검토 시나리오만 지원합니다.",
-        },
-        { kind: "text", text: `예: ${MNA_SAMPLE_PROMPT}` },
-      ];
-  }
+export function getGroupSuperFallback(): MessageContent {
+  return [
+    { kind: "text", text: "현재 데모에서는 뉴로엣지 인수안 검토 시나리오만 지원합니다." },
+    { kind: "text", text: `예: ${MNA_SAMPLE_PROMPT}` },
+  ];
 }

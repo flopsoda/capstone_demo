@@ -2,7 +2,7 @@
 
     A2A request → model → delegate_to_*(task) → model → delegate_to_*(task) → … → END
                                │                              │
-                               └─ runs the Meeting Agent      └─ runs the News Agent
+                               └─ runs the Meeting Agent      └─ runs the News / Advisory Agent
 
 Each specialist agent is exposed to the model as one delegation Tool
 (app/capabilities/tools/). The tool's argument is the natural-language task;
@@ -15,7 +15,7 @@ Which Skills and Tools this agent gets is decided by the Capability Registry
 order of delegations and writes each task; after every delegation result it
 decides again (tools → model loop).
 
-Step 4 scope: the run ends as soon as every registered specialist has
+Step 5 scope: the run ends as soon as every registered specialist has
 reported (see _after_tools). Synthesis of the results (Step 6) is not done
 yet; when it is, that boundary becomes a final model turn instead of END.
 """

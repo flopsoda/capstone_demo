@@ -1,0 +1,42 @@
+{
+  "companies": [
+    {
+      "id": "neuroedge",
+      "name": "뉴로엣지",
+      "aliases": ["뉴로엣지", "NeuroEdge"],
+      "business": "AI NPU 설계",
+      "description": "가상의 AI 반도체(NPU) 설계 스타트업",
+      "financials": {
+        "fiscal_year": 2025,
+        "revenue_label": "4,200억 원",
+        "revenue_cagr_3y": 0.31,
+        "operating_margin": -0.082
+      },
+      "valuation": {
+        "asking_trillion_krw": 2.8,
+        "fair_value_low_trillion_krw": 2.0,
+        "fair_value_high_trillion_krw": 2.3
+      },
+      "customers": {
+        "largest": { "name": "알파모바일", "revenue_share": 0.46 }
+      },
+      "technology": {
+        "domain": "엣지 추론용 AI NPU 설계 IP",
+        "acquirer_internal_development_months": [36, 48],
+        "post_acquisition_integration_months": [12, 18],
+        "time_to_market_gain_months": [24, 30],
+        "core_team": "창업자 CTO 중심의 핵심 설계팀",
+        "ip_dispute": {
+          "counterparty": "코어NPU",
+          "subject": "NPU 메모리 구조 특허",
+          "status": "소송 초기 단계, 결과 미확정"
+        }
+      },
+      "strategic": {
+        "acquirer": "K전자",
+        "fit": "K전자 AI 반도체 로드맵에서 자체 보유하지 않은 엣지 NPU 설계 역량을 보완",
+        "market": "온디바이스 AI 확산으로 엣지 NPU 수요 성장 국면"
+      }
+    }
+  ]
+}

@@ -89,3 +89,4 @@ export async function streamAgentRun(
 export const K_SUPER_RUN_PATH = "/api/k-super/run";
 export const MEETING_AGENT_RUN_PATH = "/api/agents/meeting/run";
 export const NEWS_AGENT_RUN_PATH = "/api/agents/news/run";
+export const ADVISORY_AGENT_RUN_PATH = "/api/agents/advisory/run";

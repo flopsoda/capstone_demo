@@ -13,13 +13,14 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
+from .agents.advisory import run_advisory_agent
 from .agents.k_super import run_k_super
 from .agents.meeting import run_meeting_agent
 from .agents.news import run_news_agent
 from .events import stream_run
 from .schemas import RunRequest
 
-app = FastAPI(title="capstone agents backend", version="0.3.0")
+app = FastAPI(title="capstone agents backend", version="0.4.0")
 
 
 def _ndjson(fn: Callable[[], Any]) -> StreamingResponse:
@@ -41,17 +42,23 @@ def health() -> dict[str, str]:
 
 @app.post("/api/k-super/run")
 def k_super_run(body: RunRequest) -> StreamingResponse:
-    """Scenario Steps 3–4: K Super receives the A2A request and delegates to each specialist. Streams events."""
+    """Scenario Steps 3–5: K Super receives the A2A request and delegates to each specialist. Streams events."""
     return _ndjson(lambda: run_k_super(body.request))
 
 
 @app.post("/api/agents/meeting/run")
 def meeting_run(body: RunRequest) -> StreamingResponse:
     """Direct user → Meeting Agent (sidebar chat), same agent core as Step 3. Streams events."""
-    return _ndjson(lambda: run_meeting_agent(body.request, require_tool=False))
+    return _ndjson(lambda: run_meeting_agent(body.request, invocation="direct"))
 
 
 @app.post("/api/agents/news/run")
 def news_run(body: RunRequest) -> StreamingResponse:
     """Direct user → News Agent (sidebar chat), same agent core as Step 4. Streams events."""
-    return _ndjson(lambda: run_news_agent(body.request, require_tool=False))
+    return _ndjson(lambda: run_news_agent(body.request, invocation="direct"))
+
+
+@app.post("/api/agents/advisory/run")
+def advisory_run(body: RunRequest) -> StreamingResponse:
+    """Direct user → Advisory Agent (sidebar chat), same agent core as Step 5. Streams events."""
+    return _ndjson(lambda: run_advisory_agent(body.request, invocation="direct"))

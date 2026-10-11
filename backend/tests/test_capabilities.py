@@ -12,10 +12,13 @@ def test_registry_lists_capabilities_with_permissions():
         "specialist_delegation": ("skill", {"k_super"}),
         "delegate_to_meeting_agent": ("tool", {"k_super"}),
         "delegate_to_news_agent": ("tool", {"k_super"}),
+        "delegate_to_advisory_agent": ("tool", {"k_super"}),
         "meeting_context_analysis": ("skill", {"meeting"}),
         "run_meeting_context_retrieval": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
+        "mna_feasibility_review": ("skill", {"advisory"}),
+        "run_mna_review": ("tool", {"advisory"}),
     }
 
 
@@ -32,36 +35,46 @@ def test_tool_definition_is_the_source_of_truth():
     assert set(cap.impl.args) == {"query", "company", "topics"}
     assert cap.impl.invoke({"query": "외부 리스크", "company": "뉴로엣지"})["matched"] == 3
 
+    cap = get_capability("run_mna_review")
+    assert isinstance(cap.impl, BaseTool)
+    assert cap.description == cap.impl.description and "persona" in cap.description
+    assert set(cap.impl.args) == {"query", "company", "persona", "context"}
+    out = cap.impl.invoke({"query": "인수 검토", "company": "뉴로엣지", "persona": "CFO"})
+    assert out["recommendation"] == "CONDITIONAL_PROCEED" and out["persona"] == "CFO"
+
 
 def test_each_agent_gets_only_its_subset():
     assert [c.name for c in capabilities_for("k_super")] == [
         "specialist_delegation",
         "delegate_to_meeting_agent",
         "delegate_to_news_agent",
+        "delegate_to_advisory_agent",
     ]
     assert [c.name for c in capabilities_for("meeting")] == ["meeting_context_analysis", "run_meeting_context_retrieval"]
     assert [c.name for c in capabilities_for("news")] == ["external_risk_analysis", "run_company_risk_news_analysis"]
-    assert capabilities_for("advisory") == []
-    for agent in ("meeting", "news"):
+    assert [c.name for c in capabilities_for("advisory")] == ["mna_feasibility_review", "run_mna_review"]
+    assert capabilities_for("group_super") == []
+    for agent in ("meeting", "news", "advisory"):
         assert all(isinstance(s, Skill) for s in skills_for(agent))
         assert all(isinstance(t, BaseTool) for t in tools_for(agent))
 
 
 def test_agents_bind_registry_subset_and_skills_enter_system_prompt():
-    from app.agents import k_super, meeting, news
+    from app.agents import advisory, k_super, meeting, news
 
-    for agent in (k_super, meeting, news):
+    for agent in (k_super, meeting, news, advisory):
         assert [t.name for t in agent.TOOLS] == [t.name for t in tools_for(agent.AGENT_ID)]
         assert agent.IDENTITY.strip() in agent.SYSTEM_PROMPT
         for skill in skills_for(agent.AGENT_ID):
             assert skill.name in agent.SYSTEM_PROMPT and skill.instructions.strip() in agent.SYSTEM_PROMPT
     # Agent ids used for permissions are the real agent ids.
-    known = {k_super.AGENT_ID, meeting.AGENT_ID, news.AGENT_ID}
+    known = {k_super.AGENT_ID, meeting.AGENT_ID, news.AGENT_ID, advisory.AGENT_ID}
     assert all(c.allowed_agents <= known for c in CAPABILITIES)
 
 
 def test_delegation_tools_point_at_registered_agents():
-    from app.capabilities.tools import delegate_to_meeting_agent as dm, delegate_to_news_agent as dn
+    from app.capabilities.tools import delegate_to_advisory_agent as da, delegate_to_meeting_agent as dm, delegate_to_news_agent as dn
 
     assert (dm.FROM_AGENT, dm.TO_AGENT) == ("k_super", "meeting")
     assert (dn.FROM_AGENT, dn.TO_AGENT) == ("k_super", "news")
+    assert (da.FROM_AGENT, da.TO_AGENT) == ("k_super", "advisory")

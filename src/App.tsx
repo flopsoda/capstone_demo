@@ -8,23 +8,22 @@ import { SessionWindows } from "./components/SessionWindows";
 import { Sidebar } from "./components/Sidebar";
 import { useScenarioRunner } from "./hooks/useScenarioRunner";
 import { createAgentEventMapper } from "./live/agentEvents";
-import { MEETING_AGENT_RUN_PATH, NEWS_AGENT_RUN_PATH, streamAgentRun } from "./live/api";
+import { ADVISORY_AGENT_RUN_PATH, MEETING_AGENT_RUN_PATH, NEWS_AGENT_RUN_PATH, streamAgentRun } from "./live/api";
 import { MNA_SAMPLE_PROMPT, mnaScenario } from "./scenario/mnaScenario";
-import { getMockResponse } from "./scenario/mockResponses";
-import { AGENTS, type ChatTabId } from "./types/agent";
+import { getGroupSuperFallback } from "./scenario/mockResponses";
+import type { ChatTabId } from "./types/agent";
 import type { ChatItem } from "./types/scenario";
 
 type SideTab = Exclude<ChatTabId, "group_super">;
 
-/** Specialist tabs answered by the real backend agent (same core K Super delegates to). */
-const LIVE_AGENT_PATHS: Partial<Record<SideTab, string>> = {
+/** Specialist tabs are answered by the real backend agents (same cores K Super delegates to). */
+const LIVE_AGENT_PATHS: Record<SideTab, string> = {
   meeting: MEETING_AGENT_RUN_PATH,
   news: NEWS_AGENT_RUN_PATH,
+  advisory: ADVISORY_AGENT_RUN_PATH,
 };
 
 const MOCK_REPLY_DELAY = 700;
-/** Direct specialist-agent call: node stays active while the Workflow Tool "runs". */
-const DIRECT_RUN_DELAY = 1400;
 
 let sideIdCounter = 0;
 const sideId = () => `s${++sideIdCounter}`;
@@ -64,76 +63,55 @@ export default function App() {
             id: sideId(),
             kind: "assistant",
             sender: "group_super",
-            content: getMockResponse("group_super", text),
+            content: getGroupSuperFallback(),
           });
           setReplyPending(null);
         }, MOCK_REPLY_DELAY);
         return;
       }
 
-      // Direct user → specialist agent. The same agent core and Workflow Tool
-      // that the Super Agent delegates to; the graph node lights up on its own.
+      // REAL: direct user → specialist agent. The same agent graph that K Super
+      // delegates to (Meeting: Step 3, News: Step 4, Advisory: Step 5), invoked in
+      // its "direct" context. Backend events drive the node (status / Workflow
+      // Tool) and this chat live; whether a Workflow Tool runs is the agent's call.
       const side = tab;
       const pushSide = (...items: ChatItem[]) =>
         setSideChats((prev) => ({ ...prev, [side]: [...prev[side], ...items] }));
       pushSide({ id: sideId(), kind: "user", content: text });
       setReplyPending(side);
 
-      const livePath = LIVE_AGENT_PATHS[side];
-      if (livePath) {
-        // REAL: the same specialist agent graph that K Super delegates to (Meeting: Step 3, News: Step 4).
-        // Backend events drive the node (status / Workflow Tool) and this chat live.
-        const mapEvent = createAgentEventMapper();
-        runner
-          .runDirectLive(side, "", () =>
-            streamAgentRun(
-              livePath,
-              text,
-              (event) => {
-                for (const e of mapEvent(event)) {
-                  if (e.type === "message") {
-                    pushSide({ id: sideId(), kind: "assistant", sender: e.sender, title: e.title, content: e.content });
-                  } else if (e.type === "agent_status") {
-                    runner.apply(e);
-                  }
-                  // agent_start / agent_complete are owned by runDirectLive here.
+      const mapEvent = createAgentEventMapper();
+      runner
+        .runDirectLive(side, () =>
+          streamAgentRun(
+            LIVE_AGENT_PATHS[side],
+            text,
+            (event) => {
+              for (const e of mapEvent(event)) {
+                if (e.type === "message") {
+                  pushSide({ id: sideId(), kind: "assistant", sender: e.sender, title: e.title, content: e.content });
+                } else if (e.type === "agent_status") {
+                  runner.apply(e);
                 }
-              },
-              side,
-            ),
-          )
-          .catch((err: unknown) => {
-            pushSide({
-              id: sideId(),
-              kind: "assistant",
-              sender: side,
-              title: "오류",
-              content: [
-                { kind: "badge", text: "실행 실패", tone: "high" },
-                { kind: "text", text: err instanceof Error ? err.message : String(err) },
-              ],
-            });
-          })
-          .finally(() => setReplyPending(null));
-        return;
-      }
-
-      runner.runDirect(side, AGENTS[side].workflow ?? "", DIRECT_RUN_DELAY);
-      replyTimer.current = window.setTimeout(() => {
-        setSideChats((prev) => ({
-          ...prev,
-          [side]: [
-            ...prev[side],
-            {
-              id: sideId(),
-              kind: "assistant",
-              sender: side,
-              content: getMockResponse(side, text),
+                // agent_start / agent_complete are owned by runDirectLive here.
+              }
             },
-          ],
-        }));
-        setReplyPending(null);
-      }, DIRECT_RUN_DELAY);
+            side,
+          ),
+        )
+        .catch((err: unknown) => {
+          pushSide({
+            id: sideId(),
+            kind: "assistant",
+            sender: side,
+            title: "오류",
+            content: [
+              { kind: "badge", text: "실행 실패", tone: "high" },
+              { kind: "text", text: err instanceof Error ? err.message : String(err) },
+            ],
+          });
+        })
+        .finally(() => setReplyPending(null));
     },
     [tab, runner],
   );

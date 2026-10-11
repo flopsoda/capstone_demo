@@ -28,8 +28,6 @@ export interface AgentMeta {
   shortName: string;
   role: string;
   kind: AgentKind;
-  /** Workflow Tool this specialist agent runs (shown on the graph node). */
-  workflow?: string;
 }
 
 export const AGENTS: Record<AgentId, AgentMeta> = {
@@ -60,7 +58,6 @@ export const AGENTS: Record<AgentId, AgentMeta> = {
     shortName: "미팅 에이전트",
     role: "회의 기록",
     kind: "shared",
-    workflow: "run_meeting_context_retrieval",
   },
   news: {
     id: "news",
@@ -68,7 +65,6 @@ export const AGENTS: Record<AgentId, AgentMeta> = {
     shortName: "뉴스 에이전트",
     role: "뉴스 · 리스크",
     kind: "shared",
-    workflow: "run_company_risk_news_analysis",
   },
   advisory: {
     id: "advisory",
@@ -76,7 +72,6 @@ export const AGENTS: Record<AgentId, AgentMeta> = {
     shortName: "경영자문 에이전트",
     role: "경영 · 전략",
     kind: "shared",
-    workflow: "run_mna_review",
   },
 };
 

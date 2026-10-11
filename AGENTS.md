@@ -11,7 +11,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 대기업 경영진용 **Multi-Agent Decision Support System prototype**이다.
 `Group Super ⇅(A2A) K Electronics Super →(delegation) Meeting / News / Advisory Agent → Workflow Tool` 구조를,
 고정된 8-step NeuroEdge M&A demo에서 **한 Step씩 mock → real로 교체**하며 만들고 있다.
-현재 Step 3만 real이다 (K Super → Meeting Agent → `run_meeting_context_retrieval`).
+현재 Step 3·4·5가 real이다 (한 번의 K Super 실행이 Meeting → News → Advisory에 순차 위임). 상태 표는 `docs/architecture.md` 8장.
 
 ## 작업 전
 
@@ -31,6 +31,8 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 - **Agent / Workflow Tool / Delegation / A2A를 섞지 않는다.**
   - Super Agent는 LLM tool calling으로 전문 Agent에게 자연어로 위임한다. 중앙 Router / Planner 노드를 추가하지 않는다.
   - Specialist Agent는 독립 LangGraph Agent다. 함수 호출로 대체하지 않는다. Super Agent 경로와 사용자 직접 대화 경로가 같은 core를 쓴다.
+    새 Specialist는 `agents/common.py`의 `Specialist` / `build_specialist_graph` / `run_specialist`를 쓰고, Agent 파일에는 `AGENT_ID` · `IDENTITY` · Registry 조회만 둔다.
+  - Specialist에게 Tool 호출을 모든 응답에 강제하지 않는다. Workflow Tool 근거 검사는 delegation 경로(`invocation="delegation"`)에만 있고, 직접 대화(`"direct"`)에서는 모델이 Skill 지침에 따라 결정한다.
   - Workflow Tool은 Agent가 아니다. 내부의 결정적 절차를 Agent-visible Tool 여러 개로 쪼개지 않는다.
   - K Super → Specialist는 **delegation**(`delegation_start/end`), Group Super ⇅ K Super는 **A2A**다. Specialist 호출을 A2A라고 부르지 않는다.
 - **Agent state는 message history 중심이다.** `MessagesState`를 쓰고, `meeting_result` 같은 Agent별 결과 field를 추가하지 않는다. 공유 구조가 꼭 필요하면 범용 구조를 제안하고 결정을 받는다.

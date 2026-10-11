@@ -305,16 +305,12 @@ export interface ScenarioRunner extends RunnerState {
   apply: (event: ScenarioEvent) => void;
   /**
    * Runs a specialist agent on its own, outside the orchestrated scenario
-   * (a user talking to the agent directly). The node goes active with the
-   * given Workflow Tool and completes after `durationMs`. No edge is involved.
-   */
-  runDirect: (agent: AgentId, workflow: string, durationMs: number) => void;
-  /**
-   * Same as `runDirect`, but the node stays active until `task` settles.
+   * (a user talking to the agent directly). The node stays active until
+   * `task` settles; the Workflow Tool it runs arrives through backend events.
    * Resolves after the node completes; rejects (after marking the node as
-   * failed) with the task's error.
+   * failed) with the task's error. No edge is involved.
    */
-  runDirectLive: (agent: AgentId, workflow: string, task: () => Promise<void>) => Promise<void>;
+  runDirectLive: (agent: AgentId, task: () => Promise<void>) => Promise<void>;
 }
 
 function errorMessage(err: unknown): string {
@@ -425,26 +421,9 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
     dispatch({ type: "apply", event });
   }, []);
 
-  // Direct runs use their own timers so they never interfere with scenario playback.
-  const directTimers = useRef<Set<number>>(new Set());
-  const runDirect = useCallback((agent: AgentId, workflow: string, durationMs: number) => {
-    dispatch({
-      type: "apply",
-      event: { type: "agent_start", agent, workflow, status: "분석 중..." },
-    });
-    const id = window.setTimeout(() => {
-      directTimers.current.delete(id);
-      dispatch({ type: "apply", event: { type: "agent_complete", agent } });
-    }, durationMs);
-    directTimers.current.add(id);
-  }, []);
-
   const runDirectLive = useCallback(
-    async (agent: AgentId, workflow: string, task: () => Promise<void>) => {
-      dispatch({
-        type: "apply",
-        event: { type: "agent_start", agent, workflow, status: "분석 중..." },
-      });
+    async (agent: AgentId, task: () => Promise<void>) => {
+      dispatch({ type: "apply", event: { type: "agent_start", agent, status: "분석 중..." } });
       try {
         await task();
       } catch (err) {
@@ -456,14 +435,7 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
     [],
   );
 
-  useEffect(() => {
-    const timers = directTimers.current;
-    return () => {
-      clearTimer();
-      for (const id of timers) window.clearTimeout(id);
-      timers.clear();
-    };
-  }, []);
+  useEffect(() => () => clearTimer(), []);
 
   return {
     ...state,
@@ -473,7 +445,6 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
     reset,
     appendMessage,
     apply,
-    runDirect,
     runDirectLive,
   };
 }

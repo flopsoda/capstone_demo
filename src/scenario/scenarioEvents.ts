@@ -2,8 +2,7 @@ import { createAgentEventMapper } from "../live/agentEvents";
 import { K_SUPER_RUN_PATH, isAgentId, streamAgentRun } from "../live/api";
 import type { AgentId } from "../types/agent";
 import type { ScenarioEvent } from "../types/scenario";
-import { COMPANY, DUE_DILIGENCE_CONDITIONS, MNA_REVIEW_STAGES, WORKFLOWS } from "./mockData";
-import { ADVISORY_RESULT } from "./mockResults";
+import { COMPANY, DUE_DILIGENCE_CONDITIONS } from "./mockData";
 
 /* Timing presets (ms). Tuned for a live team-meeting walkthrough. */
 const T = {
@@ -12,7 +11,6 @@ const T = {
   read: 4000, // time to read a returned result before its session collapses
   collapse: 2600, // session collapse animation (COLLAPSE_MS) + settle
   analyze: 3600, // an agent "working"
-  stage: 1300, // one internal workflow stage
 };
 
 /* A2A request from Group Super to K Electronics Super (Step 2). The same text
@@ -34,23 +32,26 @@ export const A2A_REQUEST_TEXT = `${A2A_REQUEST_INTRO}\n\n다음을 포함해주�
 const LIVE_DELEGATION_STEPS: Partial<Record<AgentId, ScenarioEvent>> = {
   meeting: { type: "step", step: 3, title: "미팅 에이전트 위임" },
   news: { type: "step", step: 4, title: "뉴스 에이전트 위임" },
+  advisory: { type: "step", step: 5, title: "경영자문 에이전트 위임" },
 };
 
 /**
  * Pre-defined 8-step NeuroEdge M&A scenario.
  * The runner replays these in order; the graph and chat derive from them.
  *
- * Steps 3–4 are one `live` event: the real K Electronics Super (LangGraph)
+ * Steps 3–5 are one `live` event: the real K Electronics Super (LangGraph)
  * delegates to the real Meeting Agent (run_meeting_context_retrieval), reads
- * its answer, then delegates to the real News Agent
- * (run_company_risk_news_analysis). The backend streams its lifecycle and the
- * UI follows it event by event. Every other step is mock playback.
+ * its answer, delegates to the real News Agent (run_company_risk_news_analysis),
+ * reads that too, and finally delegates to the real Advisory Agent
+ * (run_mna_review) with whatever context it decided to pass on. The backend
+ * streams its lifecycle and the UI follows it event by event. Every other
+ * step is mock playback.
  *
  * Communication model:
  *   그룹 회장 → 그룹 슈퍼에이전트            user request
  *   그룹 슈퍼에이전트 ⇄ K전자 슈퍼에이전트    A2A
  *   K전자 슈퍼에이전트 → 전문가 에이전트      internal agent delegation
- *   전문가 에이전트 → 워크플로 도구           encapsulated (status text only)
+ *   전문가 에이전트 → 워크플로 도구           real tool_start / tool_end events
  */
 export const MNA_SCENARIO_EVENTS: ScenarioEvent[] = [
   /* ------------------------------------------------------------ */
@@ -106,18 +107,21 @@ export const MNA_SCENARIO_EVENTS: ScenarioEvent[] = [
     delay: T.short,
   },
 
-  /* ------------------------------------------------------------ */
-  /* 3–4단계 — 위임: K전자 슈퍼에이전트 → 미팅 에이전트 → 뉴스 에이전트 */
-  /* ------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ */
+  /* 3–5단계 — 위임: K전자 슈퍼에이전트 → 미팅 → 뉴스 → 경영자문 에이전트 */
+  /* ------------------------------------------------------------------ */
   { type: "step", step: 3, title: "미팅 에이전트 위임", delay: 0 },
   {
     // REAL: K전자 슈퍼에이전트(LangGraph)가 A2A 요청을 받아 delegate_to_meeting_agent
     // tool을 호출하고, 미팅 에이전트(LangGraph)가 run_meeting_context_retrieval을
     // 실행한다. 그 결과를 받은 K전자 슈퍼에이전트가 다시 판단해
     // delegate_to_news_agent를 호출하고, 뉴스 에이전트(LangGraph)가
-    // run_company_risk_news_analysis를 실행한다. backend가 실행 중 보내는
-    // lifecycle 이벤트가 도착하는 즉시 세션/노드/메시지 상태로 반영된다
-    // (src/live/agentEvents.ts). Step 번호는 실제 delegation_start에 맞춰 바뀐다.
+    // run_company_risk_news_analysis를 실행한다. 두 결과를 받은 K전자 슈퍼에이전트가
+    // 필요한 맥락을 담아 delegate_to_advisory_agent를 호출하고, 경영자문 에이전트(LangGraph)가
+    // run_mna_review를 실행한다. backend가 실행 중 보내는 lifecycle 이벤트가
+    // 도착하는 즉시 세션/노드/메시지 상태로 반영된다 (src/live/agentEvents.ts).
+    // Step 번호는 실제 delegation_start에 맞춰 바뀐다. 경영자문 결과를 받으면
+    // REAL 구간이 끝나고 6단계 mock으로 이어진다.
     type: "live",
     agent: "k_super",
     run: async ({ emit }) => {
@@ -137,47 +141,6 @@ export const MNA_SCENARIO_EVENTS: ScenarioEvent[] = [
     },
     delay: T.hop,
   },
-
-  /* ------------------------------------------------------------ */
-  /* 5단계 — 위임: K전자 슈퍼에이전트 → 경영자문 에이전트            */
-  /* ------------------------------------------------------------ */
-  { type: "step", step: 5, title: "경영자문 위임 · run_mna_review", delay: 0 },
-  {
-    type: "session_open",
-    communication: "delegation",
-    from: "k_super",
-    to: "advisory",
-    content: `"${COMPANY.name} 인수안의\n본실사 진입 여부를 검토해줘.\n\n지난 전략회의의 판단 기준과\n최근 뉴스 리스크를 반영하고,\n\n재무 타당성,\n전략적 가치,\n주요 리스크,\n본실사 진입 조건을\n종합적으로 평가해."`,
-    delay: T.hop,
-  },
-  {
-    type: "agent_start",
-    agent: "advisory",
-    from: "k_super",
-    communication: "delegation",
-    workflow: WORKFLOWS.advisory,
-    status: MNA_REVIEW_STAGES[0],
-    delay: T.stage,
-  },
-  // Internal stages of run_mna_review — encapsulated in the Workflow Tool,
-  // surfaced only as status text so the team can see the pipeline shape.
-  ...MNA_REVIEW_STAGES.slice(1).map(
-    (stage): ScenarioEvent => ({
-      type: "agent_status",
-      agent: "advisory",
-      status: stage,
-      delay: T.stage,
-    }),
-  ),
-  {
-    type: "message",
-    sender: "advisory",
-    title: "M&A 예비 검토",
-    content: ADVISORY_RESULT,
-    delay: T.read,
-  },
-  { type: "agent_complete", agent: "advisory", from: "k_super", delay: 0 },
-  { type: "session_close", delay: T.collapse },
 
   /* ------------------------------------------------------------ */
   /* 6단계 — K전자 슈퍼에이전트가 세 결과를 종합                      */

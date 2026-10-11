@@ -2,26 +2,19 @@
 
     request → model → (tool call?) → run_company_risk_news_analysis → model → answer
 
-Same structure as the Meeting Agent: the model decides, via tool calling,
-whether to run the Workflow Tool. Which Skills and Tools it has is decided by
-the Capability Registry (app/capabilities/registry.py), looked up by AGENT_ID.
-Lifecycle events (agent_start, tool_start/end, agent_end) are emitted as the
-graph actually runs; see app/events.py.
+The graph and run loop are the shared specialist core in common.py; this
+module only says who the agent is. Which Skills and Tools it has is decided
+by the Capability Registry (app/capabilities/registry.py), looked up by AGENT_ID.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from ..capabilities import skills_for, tools_for
-from ..events import AgentError, emit
-from ..llm import get_chat_model
-from .common import RECURSION_LIMIT, compose_system_prompt, execute_tool_calls, final_response, tool_call_names
+from .common import Invocation, Specialist, build_specialist_graph, compose_system_prompt, run_specialist
 
 AGENT_ID = "news"
 
@@ -39,59 +32,14 @@ SYSTEM_PROMPT = compose_system_prompt(IDENTITY, skills_for(AGENT_ID))
 TOOLS = tools_for(AGENT_ID)
 TOOLS_BY_NAME = {t.name: t for t in TOOLS}
 
-
-def _call_model(state: MessagesState) -> dict:
-    model = get_chat_model().bind_tools(TOOLS)
-    response = model.invoke([SystemMessage(SYSTEM_PROMPT), *state["messages"]])
-    return {"messages": [response]}
-
-
-def _run_tools(state: MessagesState) -> dict:
-    last = state["messages"][-1]
-    assert isinstance(last, AIMessage)
-    return {"messages": execute_tool_calls(AGENT_ID, last, TOOLS_BY_NAME)}
-
-
-def _route(state: MessagesState) -> Literal["tools", "__end__"]:
-    last = state["messages"][-1]
-    return "tools" if isinstance(last, AIMessage) and last.tool_calls else END
+SPEC = Specialist(AGENT_ID, "뉴스 에이전트", SYSTEM_PROMPT, tuple(TOOLS))
 
 
 @lru_cache(maxsize=1)
 def build_news_agent() -> CompiledStateGraph:
-    graph = StateGraph(MessagesState)
-    graph.add_node("model", _call_model)
-    graph.add_node("tools", _run_tools)
-    graph.add_edge(START, "model")
-    graph.add_conditional_edges("model", _route, {"tools": "tools", END: END})
-    graph.add_edge("tools", "model")
-    return graph.compile()
+    return build_specialist_graph(SPEC)
 
 
-def run_news_agent(task: str, *, require_tool: bool = True) -> str:
-    """Handles one natural-language task and returns the final answer.
-
-    require_tool=True (delegation path): raises AgentError("news", ...) if the
-    model answered without running a Workflow Tool — a report not backed by the
-    news data must not reach K Super. The direct-chat endpoint passes False so
-    small talk gets a plain answer; the model still calls the Tool for real tasks.
-    """
-    emit({"type": "agent_start", "agent": AGENT_ID, "request": task})
-    try:
-        state = build_news_agent().invoke(
-            {"messages": [HumanMessage(task)]},
-            config={"recursion_limit": RECURSION_LIMIT},
-        )
-    except AgentError:
-        raise
-    except Exception as e:
-        raise AgentError(AGENT_ID, f"{type(e).__name__}: {e}") from e
-    messages = state["messages"]
-    if require_tool and not tool_call_names(messages):
-        names = ", ".join(TOOLS_BY_NAME)
-        raise AgentError(AGENT_ID, f"뉴스 에이전트가 Workflow Tool({names})을 호출하지 않고 응답했습니다.")
-    response = final_response(messages)
-    if not response:
-        raise AgentError(AGENT_ID, "뉴스 에이전트가 최종 응답을 생성하지 않았습니다.")
-    emit({"type": "agent_end", "agent": AGENT_ID, "response": response})
-    return response
+def run_news_agent(task: str, *, invocation: Invocation = "delegation") -> str:
+    """Handles one task; see common.run_specialist for the invocation contexts."""
+    return run_specialist(SPEC, build_news_agent(), task, invocation=invocation)

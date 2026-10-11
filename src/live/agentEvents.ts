@@ -12,8 +12,8 @@
  *   delegation_end           → session closes, delegator status text
  *   error                    → thrown by the client as LiveRunError → scenario_error
  *
- * One K Super run contains several delegations in sequence (Meeting, then
- * News); the same mapping repeats for each one.
+ * One K Super run contains several delegations in sequence (Meeting, News,
+ * then Advisory); the same mapping repeats for each one.
  */
 
 import { AGENTS, type AgentId } from "../types/agent";
@@ -91,20 +91,91 @@ function companyRiskNewsBlocks(result: unknown): MessageBlock[] {
   });
 }
 
+/** Shape returned by run_mna_review (backend/app/workflows/mna_review.py). */
+interface MnaReviewResult {
+  found: boolean;
+  message?: string;
+  persona_label: string;
+  inputs: {
+    financials: { revenue: string; revenue_cagr_3y: string; operating_margin: string };
+    valuation: { asking: string; fair_value: string };
+    customers: { largest: string; largest_share: string };
+    technology: { internal_development: string; integration_after_acquisition: string; time_to_market_gain: string };
+  };
+  assessments: { label: string; verdict: string; level: string | null; finding: string }[];
+  concerns: { label: string; level: string | null; finding: string }[];
+  recommendation: string;
+  recommendation_label: string;
+  conditions: string[];
+}
+
+function isMnaReviewResult(v: unknown): v is MnaReviewResult {
+  return typeof v === "object" && v !== null && typeof (v as { found?: unknown }).found === "boolean";
+}
+
+const RECOMMENDATION_TONE: Record<string, BadgeTone> = {
+  PROCEED: "ok",
+  CONDITIONAL_PROCEED: "info",
+  DO_NOT_PROCEED: "high",
+};
+
+const VERDICT_TEXT: Record<string, string> = { positive: "긍정", concern: "우려", neutral: "검토" };
+
+function assessmentText(a: { verdict: string; level: string | null; finding: string }): string {
+  const level = a.level ? ` · ${RISK_LEVEL_BADGE[a.level]?.text ?? a.level}` : "";
+  return `${VERDICT_TEXT[a.verdict] ?? a.verdict}${level} — ${a.finding}`;
+}
+
+function mnaReviewBlocks(result: unknown): MessageBlock[] {
+  if (!isMnaReviewResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  if (!result.found) return [{ kind: "text", text: result.message ?? "기업 데이터를 찾지 못했습니다." }];
+  const { inputs } = result;
+  return [
+    { kind: "badge", text: result.persona_label, tone: "info" },
+    { kind: "label", text: "입력 정보" },
+    {
+      kind: "kv",
+      items: [
+        { k: "요구가격", v: inputs.valuation.asking },
+        { k: "추정 적정가치", v: inputs.valuation.fair_value },
+        { k: "매출 / CAGR / 영업이익률", v: `${inputs.financials.revenue} / ${inputs.financials.revenue_cagr_3y} / ${inputs.financials.operating_margin}` },
+        { k: "최대 고객", v: `${inputs.customers.largest} (${inputs.customers.largest_share})` },
+        { k: "자체 개발", v: inputs.technology.internal_development },
+        { k: "인수 + 통합", v: inputs.technology.integration_after_acquisition },
+        { k: "기대 단축 기간", v: inputs.technology.time_to_market_gain },
+      ],
+    },
+    { kind: "label", text: `평가 항목 · ${result.persona_label} 우선순위` },
+    { kind: "kv", items: result.assessments.map((a) => ({ k: a.label, v: assessmentText(a) })) },
+    { kind: "label", text: "권고" },
+    { kind: "badge", text: result.recommendation_label, tone: RECOMMENDATION_TONE[result.recommendation] ?? "info" },
+    { kind: "label", text: "권고 조건" },
+    { kind: "list", ordered: true, items: result.conditions },
+  ];
+}
+
 /** Renders a tool's arguments + result. One case per Workflow Tool; unknown tools fall back to JSON. */
 export function toolResultBlocks(tool: string, args: Record<string, unknown>, result: unknown): MessageBlock[] {
   const head: MessageBlock[] = [];
   if (typeof args.company === "string") {
     head.push({ kind: "label", text: "조사 대상" }, { kind: "text", text: args.company });
   }
+  if (typeof args.persona === "string") {
+    head.push({ kind: "label", text: "평가 관점" }, { kind: "text", text: args.persona });
+  }
   if (typeof args.query === "string") {
     head.push({ kind: "label", text: "조회 질의" }, { kind: "text", text: args.query });
+  }
+  if (typeof args.context === "string" && args.context) {
+    head.push({ kind: "label", text: "전달된 맥락" }, { kind: "text", text: args.context });
   }
   switch (tool) {
     case "run_meeting_context_retrieval":
       return [...head, ...meetingContextBlocks(result)];
     case "run_company_risk_news_analysis":
       return [...head, ...companyRiskNewsBlocks(result)];
+    case "run_mna_review":
+      return [...head, ...mnaReviewBlocks(result)];
     default:
       return [...head, { kind: "text", text: JSON.stringify(result, null, 2) }];
   }
@@ -114,6 +185,7 @@ export function toolResultBlocks(tool: string, args: Record<string, unknown>, re
 const RESULT_TITLE: Partial<Record<AgentId, string>> = {
   meeting: "회의 맥락",
   news: "뉴스 리스크 분석",
+  advisory: "M&A 예비 검토",
 };
 
 /** Time the final answer stays readable before its delegation session collapses (UI only). */
