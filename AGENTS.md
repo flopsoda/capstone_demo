@@ -11,7 +11,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 대기업 경영진용 **Multi-Agent Decision Support System prototype**이다.
 `Group Super ⇅(A2A) K Electronics Super →(delegation) Meeting / News / Advisory Agent → Workflow Tool` 구조를,
 고정된 8-step NeuroEdge M&A demo에서 **한 Step씩 mock → real로 교체**하며 만들고 있다.
-현재 Step 3·4·5가 real이다 (한 번의 K Super 실행이 Meeting → News → Advisory에 순차 위임). 상태 표는 `docs/architecture.md` 8장.
+현재 Step 3·4·5·6이 real이다 (한 번의 K Super 실행이 필요한 전문 Agent에게 순차 위임한 뒤 스스로 최종 검토 결과를 쓴다). 상태 표는 `docs/architecture.md` 8장.
 
 ## 작업 전
 

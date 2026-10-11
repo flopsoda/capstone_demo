@@ -10,10 +10,12 @@
  *   tool_end                 → Workflow result message in the session
  *   agent_end (specialist)   → final answer message, node completed
  *   delegation_end           → session closes, delegator status text
+ *   agent_end (super)        → the Super Agent's own final answer as a message (its node stays
+ *                              active: handing the answer back is the next scenario step)
  *   error                    → thrown by the client as LiveRunError → scenario_error
  *
- * One K Super run contains several delegations in sequence (Meeting, News,
- * then Advisory); the same mapping repeats for each one.
+ * One K Super run contains as many delegations as the model decides it needs
+ * (the same mapping repeats for each one) and ends with K Super's final answer.
  */
 
 import { AGENTS, type AgentId } from "../types/agent";
@@ -181,11 +183,12 @@ export function toolResultBlocks(tool: string, args: Record<string, unknown>, re
   }
 }
 
-/** Title of a specialist agent's final answer in the chat. */
+/** Title of an agent's final answer in the chat. */
 const RESULT_TITLE: Partial<Record<AgentId, string>> = {
   meeting: "회의 맥락",
   news: "뉴스 리스크 분석",
   advisory: "M&A 예비 검토",
+  k_super: "K전자 검토 결과",
 };
 
 /** Time the final answer stays readable before its delegation session collapses (UI only). */
@@ -245,11 +248,20 @@ export function createAgentEventMapper() {
       }
 
       case "agent_end": {
-        if (!isAgentId(ev.agent) || AGENTS[ev.agent].kind !== "shared") return [];
-        return [
-          { type: "message", sender: ev.agent, title: RESULT_TITLE[ev.agent] ?? "결과", content: ev.response },
-          { type: "agent_complete", agent: ev.agent, from: delegatorOf.get(ev.agent), delay: READ_MS },
-        ];
+        if (!isAgentId(ev.agent)) return [];
+        const message: ScenarioEvent = {
+          type: "message",
+          sender: ev.agent,
+          title: RESULT_TITLE[ev.agent] ?? "결과",
+          content: ev.response,
+        };
+        if (AGENTS[ev.agent].kind === "super") {
+          // The Super Agent answered without another delegation: this is its final
+          // review. The node is not completed here — returning the answer to the
+          // requester (A2A response) is what completes it.
+          return [message, { type: "agent_status", agent: ev.agent, status: "검토 결과 작성 완료", delay: READ_MS }];
+        }
+        return [message, { type: "agent_complete", agent: ev.agent, from: delegatorOf.get(ev.agent), delay: READ_MS }];
       }
 
       case "delegation_end": {

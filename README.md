@@ -13,7 +13,7 @@ Step 2  MOCK   A2A 요청 (Group Super → K Super)
 Step 3  REAL   K Super → Meeting Agent → run_meeting_context_retrieval   (Python · LangGraph · Ollama Cloud, 실행 이벤트 스트리밍)
 Step 4  REAL   K Super → News Agent → run_company_risk_news_analysis     (같은 K Super 실행 안에서 Meeting 결과 수신 후 순차 위임)
 Step 5  REAL   K Super → Advisory Agent → run_mna_review                 (Meeting · News 결과를 K Super가 맥락으로 담아 위임, CEO/CFO/CTO 관점 평가)
-Step 6  MOCK   K Super 종합
+Step 6  REAL   K Super 종합                                              (추가 위임이 필요 없다고 판단하면 Tool 호출 없이 최종 검토 결과를 작성 → agent_end)
 Step 7  MOCK   A2A 응답
 Step 8  MOCK   그룹 최종 판단
 ```
@@ -43,9 +43,11 @@ cd backend
 .venv/bin/python -m pytest        # tests/test_agents.py는 OLLAMA_API_KEY가 없으면 skip
 ```
 
-Step 3·4·5의 그래프/세션/메시지는 backend가 실행 중 보내는 lifecycle 이벤트(NDJSON 스트림)를 받는 즉시 바뀝니다.
-Step 번호는 backend `delegation_start`의 대상 Agent(meeting → 3, news → 4, advisory → 5)에 맞춰 바뀝니다.
-backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Workflow Tool을 호출하지 않음, K Super가 일부 전문 Agent에게 위임하지 않고 종료 등) 그 시점에
+Step 3·4·5·6의 그래프/세션/메시지는 backend가 실행 중 보내는 lifecycle 이벤트(NDJSON 스트림)를 받는 즉시 바뀝니다.
+Step 번호는 backend `delegation_start`의 대상 Agent(meeting → 3, news → 4, advisory → 5)와 K Super의 `agent_end`(→ 6)에 맞춰 바뀝니다.
+K Super가 어떤 전문 Agent에게 위임할지, 언제 위임을 멈추고 최종 검토 결과를 쓸지는 요청과 누적된 결과를 보고 매 턴 스스로 판단합니다
+(등록된 Tool을 모두 호출해야 하는 규칙은 없습니다). Step 6 메시지("K전자 검토 결과")는 backend `agent_end(k_super).response` 문자열 그대로입니다.
+backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Workflow Tool을 호출하지 않음, K Super가 전문 Agent에게 전혀 위임하지 않고 답함 등) 그 시점에
 시나리오가 **오류 · 중단** 상태로 멈추고, backend가 지목한 Agent 노드가 error로 표시됩니다 (mock으로 대체하지 않음).
 초기화 또는 새 요청으로 재실행합니다.
 
@@ -88,13 +90,13 @@ src/
     agent.ts           AgentId · 상태 · CommunicationType(a2a | delegation) · 토폴로지 · 좌표
     scenario.ts        ScenarioEvent(live 포함) · ChatItem · MessageBlock · RunnerState
   scenario/
-    mockData.ts        남은 mock Step(1–2, 6–8)용 고정 데이터 (기업명, 가격, 본실사 조건)
-    scenarioEvents.ts  8 Step M&A 시나리오 이벤트 배열 (Step 3·4·5는 `live` 이벤트 하나, 나머지는 mock)
+    mockData.ts        남은 mock Step(1–2, 7–8)용 고정 데이터 (기업명)
+    scenarioEvents.ts  8 Step M&A 시나리오 이벤트 배열 (Step 3·4·5·6은 `live` 이벤트 하나, 나머지는 mock)
     mnaScenario.ts     시나리오 메타 + 트리거 조건 + 예시 문장
     mockResponses.ts   Group Super 탭의 비시나리오 입력 안내문
   live/
     api.ts             backend NDJSON 스트림 클라이언트 (POST /api/k-super/run, /api/agents/{meeting,news,advisory}/run)
-    agentEvents.ts     backend lifecycle 이벤트 → ScenarioEvent 변환 (Workflow 결과 블록: meeting / news / mna_review)
+    agentEvents.ts     backend lifecycle 이벤트 → ScenarioEvent 변환 (Workflow 결과 블록: meeting / news / mna_review, K Super 최종 응답 메시지)
   hooks/
     useScenarioRunner.ts  이벤트 재생 → 노드/엣지/채팅 상태. `live` 이벤트 실행 중 도착하는 이벤트를 즉시 적용.
                           runDirectLive()로 전문 Agent 단독 실행(실제 backend), apply()로 단일 이벤트 적용
@@ -115,7 +117,7 @@ backend/
     agents/
       common.py                      공통 specialist core: Specialist / build_specialist_graph / run_specialist (MessagesState, model ⇄ tools 루프,
                                      호출 맥락 delegation|direct, tool_start/end 발행), system prompt 조립(identity + Skills), 응답 추출
-      k_super.py                     K전자 슈퍼에이전트 그래프. Registry에서 받은 위임 Tool로 전문 Agent에 순차 위임, 모두 위임하면 종료
+      k_super.py                     K전자 슈퍼에이전트 그래프. Registry에서 받은 위임 Tool로 필요한 전문 Agent에 순차 위임, 충분하면 Tool 없이 최종 검토 결과 작성 → 종료
       meeting.py                     미팅 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_meeting_context_retrieval)
       news.py                        뉴스 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_company_risk_news_analysis)
       advisory.py                    경영자문 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_mna_review)
@@ -167,8 +169,11 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
                          model ──▶ 최종 응답 (한국어)
                               │
                        ToolMessage(최종 응답만) ──▶ K전자 슈퍼에이전트
-  허용된 위임 Tool을 모두 사용 → 현재 REAL 구간 종료 (종합은 Step 6 mock)
+  model ──▶ 요청의 항목에 대한 결과가 모두 있음 → Tool 호출 없이 최종 검토 결과 작성 (Step 6) → END
 ```
+
+- 위임 대상과 횟수는 K전자 슈퍼에이전트가 요청을 보고 정합니다. 위 순서는 NeuroEdge 요청(회의 결정사항 · 외부 리스크 · 인수 타당성 · 본실사 여부)에서
+  실제로 나오는 흐름이며, 코드에 고정된 것이 아닙니다. 회의 결정사항만 묻는 요청이면 미팅 에이전트 한 번 뒤 바로 답합니다.
 
 - 각 Agent는 독립된 message history를 가집니다. 전문 에이전트 내부의 tool call / result는
   K Super의 history에 들어가지 않고, 최종 응답만 ToolMessage로 돌아갑니다.
@@ -184,6 +189,7 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 | `tool_end`                          | 세션에 Workflow 인자·결과 메시지                                |
 | `agent_end` (전문 Agent)            | 세션에 최종 응답 메시지 · 전문 노드 completed · edge completed  |
 | `delegation_end`                    | 위임 세션 닫힘 · K전자 status "결과 수신" (다음 위임이 있으면 반복) |
+| `agent_end` (k_super)               | Step 6 표시 · A2A 세션에 "K전자 검토 결과" 메시지(실제 응답 문자열) · K전자 status "검토 결과 작성 완료" |
 | `error` (agent 지목)                | 해당 노드 error · 오류 메시지 · 시나리오 중단                    |
 
 - K Super 위임 경로에서 전문 Agent가 Workflow Tool을 호출하지 않고 답하면 backend가 `error`(agent=meeting | news | advisory)로 처리하므로,
@@ -193,8 +199,7 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
   어떤 항목을 먼저 보고 어떤 우려와 조건을 앞세우는지가 달라집니다.
 - 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 `capabilities/registry.py`에서
   `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
-- Step 6 이후: 종합은 `k_super.py`의 `_after_tools` 종료 조건을 마지막 `model` 턴으로 바꿔 구현합니다.
-  frontend는 `scenarioEvents.ts`의 Step 6 mock을 제거하고 K Super `agent_end`(응답 있음)를 종합 메시지로 표시합니다.
+- Step 7 이후: K Super의 실제 Step 6 응답을 A2A 응답으로 Group Super에게 넘기는 부분은 아직 mock입니다 (`scenarioEvents.ts`의 `session_close` 고정 문장).
 
 ### 시나리오 로직과 그래프 렌더링 분리
 

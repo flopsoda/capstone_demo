@@ -91,14 +91,18 @@ def _delegation_blocks(events: list[dict]) -> list[tuple[str, list[str]]]:
     return blocks
 
 
-def test_k_super_delegates_to_each_specialist_in_sequence():
+def test_k_super_delegates_to_each_specialist_in_sequence_then_answers():
     from app.agents.k_super import run_k_super
     from app.events import collect_events
 
-    _, events = collect_events(lambda: run_k_super(A2A_REQUEST))
+    response, events = collect_events(lambda: run_k_super(A2A_REQUEST))
     types = [e["type"] for e in events]
     assert types[0] == "agent_start" and events[0]["agent"] == "k_super"
     assert types[-1] == "agent_end" and events[-1]["agent"] == "k_super"
+    # Step 6: K Super's own final review, written from its message history — no
+    # synthesis tool, no template. It answers the request's last item (본실사 진입 여부).
+    assert events[-1]["response"] == response and response
+    assert "본실사" in response, response
 
     blocks = _delegation_blocks(events)
     # Real nesting, one specialist at a time: K Super delegates → specialist runs its tool → returns.
@@ -129,8 +133,24 @@ def test_k_super_decides_each_delegation_in_its_own_model_turn():
     turns = [[c["name"] for c in m.tool_calls] for m in state["messages"] if isinstance(m, AIMessage) and m.tool_calls]
     # Meeting result arrives, the model decides again, then News — not both in one turn.
     assert turns == [["delegate_to_meeting_agent"], ["delegate_to_news_agent"], ["delegate_to_advisory_agent"]], turns
-    # The run ends right after the last delegation result (no synthesis yet).
-    assert not isinstance(state["messages"][-1], AIMessage)
+    # The run ends because the model answered without a tool call, not because
+    # of a termination rule: the last message is a plain AI message.
+    last = state["messages"][-1]
+    assert isinstance(last, AIMessage) and not last.tool_calls and last.content
+
+
+def test_k_super_consults_only_the_specialist_the_request_needs():
+    """No 'call every registered tool' rule: a request that only asks for past
+    meeting decisions is answered after the Meeting Agent alone."""
+    from app.agents.k_super import run_k_super
+    from app.events import collect_events
+
+    response, events = collect_events(
+        lambda: run_k_super("뉴로엣지 인수와 관련해 과거 경영회의에서 정해진 결정사항과 기준만 정리해서 회신해주세요.")
+    )
+    assert [e["to"] for e in events if e["type"] == "delegation_start"] == ["meeting"], events
+    assert events[-1]["type"] == "agent_end" and events[-1]["agent"] == "k_super"
+    assert "2.5조" in response, response
 
 
 def test_api_streams_ndjson_events():

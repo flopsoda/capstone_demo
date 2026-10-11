@@ -2,7 +2,7 @@ import { createAgentEventMapper } from "../live/agentEvents";
 import { K_SUPER_RUN_PATH, isAgentId, streamAgentRun } from "../live/api";
 import type { AgentId } from "../types/agent";
 import type { ScenarioEvent } from "../types/scenario";
-import { COMPANY, DUE_DILIGENCE_CONDITIONS } from "./mockData";
+import { COMPANY } from "./mockData";
 
 /* Timing presets (ms). Tuned for a live team-meeting walkthrough. */
 const T = {
@@ -28,6 +28,8 @@ export const A2A_REQUEST_TEXT = `${A2A_REQUEST_INTRO}\n\n다음을 포함해주�
  * Scenario Step shown for each specialist the real K Super delegates to.
  * "Step" is a UI concept only: the backend has no steps, so the step counter
  * advances when the backend reports the corresponding delegation_start.
+ * Which specialists K Super consults (and in what order) is its own decision
+ * per request; a specialist it does not need simply has no step here.
  */
 const LIVE_DELEGATION_STEPS: Partial<Record<AgentId, ScenarioEvent>> = {
   meeting: { type: "step", step: 3, title: "미팅 에이전트 위임" },
@@ -35,17 +37,22 @@ const LIVE_DELEGATION_STEPS: Partial<Record<AgentId, ScenarioEvent>> = {
   advisory: { type: "step", step: 5, title: "경영자문 에이전트 위임" },
 };
 
+/** Step shown when the real K Super answers instead of delegating again (its agent_end). */
+const LIVE_SYNTHESIS_STEP: ScenarioEvent = { type: "step", step: 6, title: "K전자 종합 결과" };
+
 /**
  * Pre-defined 8-step NeuroEdge M&A scenario.
  * The runner replays these in order; the graph and chat derive from them.
  *
- * Steps 3–5 are one `live` event: the real K Electronics Super (LangGraph)
- * delegates to the real Meeting Agent (run_meeting_context_retrieval), reads
- * its answer, delegates to the real News Agent (run_company_risk_news_analysis),
- * reads that too, and finally delegates to the real Advisory Agent
- * (run_mna_review) with whatever context it decided to pass on. The backend
- * streams its lifecycle and the UI follows it event by event. Every other
- * step is mock playback.
+ * Steps 3–6 are one `live` event: the real K Electronics Super (LangGraph)
+ * reads the A2A request and, turn by turn, delegates to whichever specialist
+ * it still needs — in this scenario the Meeting Agent
+ * (run_meeting_context_retrieval), the News Agent
+ * (run_company_risk_news_analysis) and the Advisory Agent (run_mna_review),
+ * carrying earlier results into later tasks as it sees fit — and, once it has
+ * enough, writes its own final review instead of delegating again. The
+ * backend streams its lifecycle and the UI follows it event by event. Every
+ * other step is mock playback.
  *
  * Communication model:
  *   그룹 회장 → 그룹 슈퍼에이전트            user request
@@ -108,20 +115,19 @@ export const MNA_SCENARIO_EVENTS: ScenarioEvent[] = [
   },
 
   /* ------------------------------------------------------------------ */
-  /* 3–5단계 — 위임: K전자 슈퍼에이전트 → 미팅 → 뉴스 → 경영자문 에이전트 */
+  /* 3–6단계 — 위임(미팅 → 뉴스 → 경영자문)과 K전자 슈퍼에이전트의 종합     */
   /* ------------------------------------------------------------------ */
   { type: "step", step: 3, title: "미팅 에이전트 위임", delay: 0 },
   {
-    // REAL: K전자 슈퍼에이전트(LangGraph)가 A2A 요청을 받아 delegate_to_meeting_agent
-    // tool을 호출하고, 미팅 에이전트(LangGraph)가 run_meeting_context_retrieval을
-    // 실행한다. 그 결과를 받은 K전자 슈퍼에이전트가 다시 판단해
-    // delegate_to_news_agent를 호출하고, 뉴스 에이전트(LangGraph)가
-    // run_company_risk_news_analysis를 실행한다. 두 결과를 받은 K전자 슈퍼에이전트가
-    // 필요한 맥락을 담아 delegate_to_advisory_agent를 호출하고, 경영자문 에이전트(LangGraph)가
-    // run_mna_review를 실행한다. backend가 실행 중 보내는 lifecycle 이벤트가
-    // 도착하는 즉시 세션/노드/메시지 상태로 반영된다 (src/live/agentEvents.ts).
-    // Step 번호는 실제 delegation_start에 맞춰 바뀐다. 경영자문 결과를 받으면
-    // REAL 구간이 끝나고 6단계 mock으로 이어진다.
+    // REAL: K전자 슈퍼에이전트(LangGraph)가 A2A 요청을 받아 매 model 턴마다 추가 위임이
+    // 필요한지 판단한다. 이 scenario의 요청은 회의 결정사항 · 외부 리스크 · 인수 타당성 ·
+    // 본실사 진입 여부를 요구하므로 미팅 에이전트(run_meeting_context_retrieval),
+    // 뉴스 에이전트(run_company_risk_news_analysis), 경영자문 에이전트(run_mna_review)에
+    // 차례로 위임하고, 결과가 충분해지면 Tool 호출 없이 K전자 차원의 최종 검토 결과를
+    // 쓴다(agent_end). backend가 실행 중 보내는 lifecycle 이벤트가 도착하는 즉시
+    // 세션/노드/메시지 상태로 반영된다 (src/live/agentEvents.ts). Step 번호는 실제
+    // delegation_start(3·4·5)와 K전자의 agent_end(6)에 맞춰 바뀐다. 이 실행이 끝나면
+    // 7단계 mock(A2A 응답)으로 이어진다.
     type: "live",
     agent: "k_super",
     run: async ({ emit }) => {
@@ -134,46 +140,13 @@ export const MNA_SCENARIO_EVENTS: ScenarioEvent[] = [
             const step = LIVE_DELEGATION_STEPS[event.to];
             if (step) emit(step);
           }
+          if (event.type === "agent_end" && event.agent === "k_super") emit(LIVE_SYNTHESIS_STEP);
           mapEvent(event).forEach(emit);
         },
         "k_super",
       );
     },
     delay: T.hop,
-  },
-
-  /* ------------------------------------------------------------ */
-  /* 6단계 — K전자 슈퍼에이전트가 세 결과를 종합                      */
-  /* ------------------------------------------------------------ */
-  { type: "step", step: 6, title: "K전자 종합 결과", delay: 0 },
-  {
-    type: "agent_status",
-    agent: "k_super",
-    status: "결과 종합 중...",
-    emphasized: true,
-    delay: T.short,
-  },
-  {
-    type: "message",
-    sender: "k_super",
-    title: "K전자 M&A 검토 결과",
-    content: [
-      { kind: "label", text: "권고" },
-      { kind: "badge", text: "조건부 진행", tone: "info" },
-      { kind: "label", text: "근거" },
-      {
-        kind: "list",
-        items: [
-          `현재 요구가격 ${COMPANY.askingValuation}은 내부 적정가치 ${COMPANY.estimatedFairValue}보다 높음`,
-          "반면 인수를 통해 자체 개발 대비 약 2 ~ 3년 빠르게 AI NPU 기술 확보 가능",
-          "전략적 기술 가치는 높음",
-          "고객 집중도, 핵심인력 이탈, 특허소송 리스크 확인 필요",
-        ],
-      },
-      { kind: "label", text: "본실사 조건" },
-      { kind: "list", ordered: true, items: [...DUE_DILIGENCE_CONDITIONS] },
-    ],
-    delay: T.short,
   },
 
   /* ------------------------------------------------------------ */

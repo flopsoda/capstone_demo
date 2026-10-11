@@ -6,7 +6,7 @@
 문서 전체에서 **Current implementation**(지금 코드에 있는 것)과 **Target architecture**(지향하는 구조)를 구분해서 적는다.
 둘이 다른 곳은 [10. 현재 구현과 목표 구조의 차이](#10-현재-구현과-목표-구조의-차이)에 모아 두었다.
 
-기준 시점: 2026-10-11 (Step 3·4·5 real + Capability Registry, 나머지 mock).
+기준 시점: 2026-10-11 (Step 3·4·5·6 real + Capability Registry, 나머지 mock).
 
 ---
 
@@ -89,13 +89,18 @@ K Electronics Super
 - LangGraph `StateGraph(MessagesState)`, 노드 `model` / `tools`.
 - Registry가 허용한 Capability: Skill `specialist_delegation`(위임 지침), Tool `delegate_to_meeting_agent`, `delegate_to_news_agent`, `delegate_to_advisory_agent`. 모두 `backend/app/capabilities/`에 있다 ([4장](#4-capability-registry)).
 - `tools → model` 루프. 위임 결과(`ToolMessage`)를 받은 모델이 다시 판단해 다음 위임을 결정한다. 위임 순서와 `task` 문장은 모델이 정한다.
-  Skill이 "한 번에 하나의 전문 에이전트에게만 위임하고 결과를 받은 뒤 다음을 판단"하도록 지시하므로 Meeting → News → Advisory가 **순차**로 일어난다 (병렬 위임 없음).
+  Skill이 "한 번에 하나의 전문 에이전트에게만 위임하고 결과를 받은 뒤 다음을 판단"하도록 지시하므로 현재 scenario에서는 Meeting → News → Advisory가 **순차**로 일어난다 (병렬 위임 없음).
 - **이전 결과의 전달은 모델의 판단이다.** Skill이 "앞서 받은 결과 중 이번 업무에 필요한 사실이 있으면 위임 문장에 담으라"고 지시할 뿐,
   Meeting / News 결과를 추출해 고정 template에 끼워 넣는 코드는 없다. Advisory 위임 `task`에 회의 기준과 외부 리스크가 어떻게 들어가는지는 실행마다 다를 수 있다.
-- **현재 real 범위의 종료 조건**: `tools` 노드 뒤의 조건 엣지 `_after_tools`가, Registry가 K Super에 허용한 위임 Tool을 모두 한 번 이상 호출했으면 `END`, 아니면 `model`로 보낸다.
-  즉 마지막 전문 Agent의 결과를 받은 시점에 실행이 끝나고 종합(Step 6)은 아직 없다. `run_k_super()`의 반환값(K Super 자신의 마무리 응답)은 빈 문자열이다.
-  Step 6에서는 이 엣지가 종합을 위한 마지막 `model` 턴으로 바뀐다.
-- 위임 Tool을 하나도 호출하지 않거나, 일부 전문 Agent에게 위임하지 않은 채 모델이 응답을 끝내면 `AgentError("k_super", ...)`로 실패 처리한다 (mock으로 대체하지 않는다).
+- **종료 조건은 모델의 판단이다.** `tools` 노드 뒤에는 무조건 `model`로 돌아가는 엣지만 있다 (`graph.add_edge("tools", "model")`).
+  매 `model` 턴에서 모델은 원 요청과 지금까지 받은 전문 Agent 결과를 보고 (a) 위임 Tool을 호출하거나 (b) Tool 호출 없이 최종 응답을 쓴다.
+  (b)이면 `_route`가 `END`로 보내고, 그 응답이 `run_k_super()`의 반환값이자 `agent_end(k_super).response`(Step 6)다.
+  "등록된 위임 Tool을 모두 호출했는가"를 보는 코드는 없다. Registry의 Tool 목록은 checklist가 아니며, 요청에 따라 일부 전문 Agent만 쓸 수 있다
+  (`tests/test_agents.py`: 회의 결정사항만 묻는 요청은 Meeting 위임 한 번 뒤 바로 답한다).
+- 종합은 K Super LLM이 자기 message history(원 요청 + 위임 `ToolMessage`들)를 보고 쓴다. 별도 Synthesis Tool / Agent, 결과 aggregation 구조, 고정 template은 없다.
+  어떤 항목을 어떻게 쓰는지는 실행마다 다를 수 있다. 출력 형식 규칙(한국어, 마크다운 없이 줄바꿈과 "- " 목록)은 `IDENTITY`에 있다.
+- 남은 검사는 근거 검사 둘뿐이다: 위임 Tool을 하나도 호출하지 않고 응답하면(K Super가 스스로 지어낸 답) `AgentError("k_super", ...)`,
+  최종 응답이 비어 있으면 `AgentError`. mock으로 대체하지 않는다.
 
 ### 3.2 Specialist Agent
 
@@ -337,17 +342,18 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 | `error` | `agent, message` | `stream_run`이 예외를 변환 |
 | `done` | – | 정상 종료 |
 
-K Super 실행 한 번(Step 3·4·5)의 실제 이벤트 순서 (`tests/test_agents.py`가 검증):
+K Super 실행 한 번(Step 3·4·5·6)의 현재 scenario에서의 실제 이벤트 순서 (`tests/test_agents.py`가 검증). 위임 횟수와 대상은 요청에 따라 달라진다:
 
 ```text
 agent_start(k_super)
 → delegation_start(k_super→meeting)  → agent_start(meeting)  → tool_start → tool_end → agent_end(meeting)  → delegation_end
 → delegation_start(k_super→news)     → agent_start(news)     → tool_start → tool_end → agent_end(news)     → delegation_end
 → delegation_start(k_super→advisory) → agent_start(advisory) → tool_start → tool_end → agent_end(advisory) → delegation_end
-→ agent_end(k_super) → done
+→ agent_end(k_super, response=최종 검토 결과)   ← Step 6
+→ done
 ```
 
-Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이벤트 타입 없음).
+Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이벤트 타입 없음). Step 6의 신호는 K Super의 `agent_end`이며 `response`가 비어 있지 않다.
 
 ### Current implementation — API
 
@@ -356,7 +362,7 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 | Endpoint | 역할 |
 | --- | --- |
 | `GET /api/health` | 상태 확인 |
-| `POST /api/k-super/run` `{request}` | Step 3·4·5. K Super 실행(Meeting → News → Advisory 순차 위임), lifecycle을 NDJSON으로 스트리밍 |
+| `POST /api/k-super/run` `{request}` | Step 3·4·5·6. K Super 실행(필요한 전문 Agent에게 순차 위임 후 최종 검토 결과 작성), lifecycle을 NDJSON으로 스트리밍 |
 | `POST /api/agents/meeting/run` `{request}` | 사용자 → Meeting Agent 직접 대화 (`invocation="direct"`). 같은 Agent core |
 | `POST /api/agents/news/run` `{request}` | 사용자 → News Agent 직접 대화. 같은 Agent core |
 | `POST /api/agents/advisory/run` `{request}` | 사용자 → Advisory Agent 직접 대화. 같은 Agent core |
@@ -368,8 +374,9 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
   Workflow 결과 렌더링(`toolResultBlocks`)은 Tool 이름별 `switch`(meeting, news, advisory)이고, 모르는 Tool은 JSON으로 표시한다.
   `run_mna_review`는 persona 배지 · 입력 정보 · persona 우선순위대로의 평가 항목 · 권고 배지 · 조건 목록으로 그린다. 값은 전부 backend 결과이며 frontend가 만들지 않는다.
   한 K Super 실행에 위임이 여러 번 있어도 같은 변환이 반복된다. `delegation_end`의 `session_close`에는 UI 전용 `delay`가 있어 다음 세션 창이 열리기 전에 이전 창이 접힌다.
-- `src/scenario/scenarioEvents.ts` — Step 3·4·5는 `live` 이벤트 하나다. Step 번호는 UI 개념으로만 남기되, backend `delegation_start`의 대상 Agent에 따라
-  `LIVE_DELEGATION_STEPS`(meeting → 3, news → 4, advisory → 5)로 Step 표시를 올린다. backend는 Step을 모른다. Advisory의 `delegation_end` 뒤 `done`이 오면 `live` 이벤트가 끝나고 Step 6 mock이 이어진다.
+- `src/scenario/scenarioEvents.ts` — Step 3·4·5·6은 `live` 이벤트 하나다. Step 번호는 UI 개념으로만 남기되, backend `delegation_start`의 대상 Agent에 따라
+  `LIVE_DELEGATION_STEPS`(meeting → 3, news → 4, advisory → 5)로, K Super의 `agent_end`에 `LIVE_SYNTHESIS_STEP`(6)으로 Step 표시를 올린다. backend는 Step을 모른다.
+  `done`이 오면 `live` 이벤트가 끝나고 Step 7 mock(A2A 응답)이 이어진다.
 - `src/hooks/useScenarioRunner.ts` — reducer가 `nodes / edges / messages / sessions` 상태를 만든다.
   `live` 이벤트는 실행 중 도착하는 이벤트를 **도착 순서대로 즉시 적용**한다. 이벤트의 `delay`는 상태 변경을 늦추지 않고 다음 이벤트만 보류한다.
 - 실패 시 backend가 지목한 Agent 노드를 error로 표시하고 scenario를 **중단**한다. mock으로 대체하지 않는다.
@@ -382,6 +389,7 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 | `tool_end` | 세션에 Workflow 인자·결과 메시지 |
 | `agent_end`(specialist) | 세션에 최종 응답, 노드 completed, edge completed |
 | `delegation_end` | 세션 닫힘, 위임자 status "결과 수신" |
+| `agent_end`(k_super) | Step 6 · 열린 A2A 세션에 "K전자 검토 결과" 메시지(실제 `response` 문자열 그대로), K전자 status "검토 결과 작성 완료". 노드 completed는 Step 7 mock(A2A 응답)이 담당 |
 | `error` | 해당 노드 error, 오류 메시지, scenario `error` 상태 |
 
 직접 대화(Sidebar "미팅" · "뉴스" · "경영자문" 탭)는 `App.tsx`가 `LIVE_AGENT_PATHS` + `runDirectLive` + 같은 mapper로 처리한다. 전문 Agent 탭에 mock 응답 경로는 없다.
@@ -401,13 +409,14 @@ Step 2 MOCK     Step 2 MOCK
 Step 3 REAL     Step 3 REAL
 Step 4 REAL     Step 4 REAL
 Step 5 REAL     Step 5 REAL
-Step 6 MOCK  →  Step 6 REAL
+Step 6 REAL     Step 6 REAL
+Step 7 MOCK  →  Step 7 REAL
 ...
 ```
 
 - 기존 UI와 scenario shell(`scenarioEvents.ts`, AgentGraph, Session UI)은 최대한 유지하고 내부 실행부만 실제 Agent로 바꾼다.
 - 한 Step을 real로 바꿀 때 그 Step의 mock 이벤트를 `live` 이벤트로 치환하고, 나머지 Step은 그대로 둔다.
-- mock Step은 **의도된 임시 상태**다. 교체 전까지는 frontend 상수(`mockData.ts`의 `COMPANY`, `DUE_DILIGENCE_CONDITIONS`)로 재생된다. 이것이 6장 원칙에 아직 미치지 못하는 부분이며, Step이 real이 될수록 해소된다.
+- mock Step은 **의도된 임시 상태**다. 교체 전까지는 frontend 상수(`mockData.ts`의 `COMPANY`)와 `scenarioEvents.ts`의 고정 문장으로 재생된다. 이것이 6장 원칙에 아직 미치지 못하는 부분이며, Step이 real이 될수록 해소된다.
 - 실패 시 mock fallback은 하지 않는다. backend가 꺼져 있거나 Agent가 실패하면 scenario는 오류 상태로 멈춘다.
 
 ---
@@ -423,9 +432,9 @@ Group Super 탭에서 `NeuroEdge` / `뉴로엣지` / `인수` 키워드가 들�
 | 2 | Group Super → K Super. A2A 인수안 검토 요청 | **MOCK** | frontend 이벤트 (A2A 세션 열림) |
 | 3 | K Super → Meeting Agent → `run_meeting_context_retrieval` | **REAL** | backend `POST /api/k-super/run`, LangGraph, Ollama Cloud |
 | 4 | K Super → News Agent → `run_company_risk_news_analysis` | **REAL** | 같은 K Super 실행 안에서 Meeting 결과 수신 후 순차 위임 |
-| 5 | K Super → Advisory Agent → `run_mna_review` | **REAL** | 같은 K Super 실행 안에서 Meeting · News 결과를 보고 맥락을 담아 순차 위임. 결과 수신 후 REAL 구간 종료 |
-| 6 | K Super가 전문 Agent 결과 종합 | **MOCK** · 다음 구현 대상 | frontend 이벤트 |
-| 7 | K Super → Group Super. A2A 응답 | **MOCK** | frontend 이벤트 (A2A 세션 닫힘) |
+| 5 | K Super → Advisory Agent → `run_mna_review` | **REAL** | 같은 K Super 실행 안에서 Meeting · News 결과를 보고 맥락을 담아 순차 위임 |
+| 6 | K Super가 전문 Agent 결과 종합 → K전자 차원의 최종 검토 결과 | **REAL** | 같은 K Super 실행의 마지막 `model` 턴. 추가 위임이 필요 없다고 판단해 Tool 호출 없이 응답 → `agent_end(k_super)`. REAL 구간 종료 |
+| 7 | K Super → Group Super. A2A 응답 | **MOCK** · 다음 구현 대상 | frontend 이벤트 (A2A 세션 닫힘). 결과 문장은 아직 mock 고정 문장 |
 | 8 | Group Super → 회장. 그룹 투자심의 최종 판단 | **MOCK** | frontend 이벤트 |
 
 직접 대화 탭:
@@ -441,7 +450,7 @@ K Electronics Super는 Sidebar에 없고 그래프에서만 보인다.
 
 ---
 
-## 9. Step 3·4·5의 현재 architecture
+## 9. Step 3·4·5·6의 현재 architecture
 
 의도:
 
@@ -482,8 +491,12 @@ companies.json + persona 평가 기준 + context 신호
     ↓
 Advisory Agent 최종 응답 (한국어)
     ↓ ToolMessage
-K Super — 허용된 위임 Tool을 모두 사용했으므로 현재 real 범위 종료 (종합 없음)
+K Super
+    ↓ LLM 판단 (요청의 항목에 대한 결과가 모두 있음 → 추가 위임 없음)
+최종 검토 결과 (Tool 호출 없는 AI 응답, 한국어) → END, agent_end(k_super)
 ```
+
+위 흐름에서 위임 대상과 횟수는 요청이 정한다. 코드에는 "Meeting → News → Advisory" 순서도, "세 번 위임 후 종료"도 없다.
 
 코드 대응:
 
@@ -496,8 +509,9 @@ K Super — 허용된 위임 Tool을 모두 사용했으므로 현재 real 범�
 | 전문 Agent LLM 판단 | `common.build_specialist_graph`의 `call_model` (각 Agent 모듈이 Registry에서 받은 `SYSTEM_PROMPT`, `TOOLS` + 호출 맥락 문단) |
 | Workflow Tool 실행 | `common.execute_tool_calls` → `tool_start` emit → `capabilities/tools/run_*.invoke` → `workflows/*` → `tool_end` emit |
 | 응답 | `common.run_specialist`: delegation이면 Tool 호출 검사 → `final_response` → `agent_end` emit → 반환 → `delegation_end` emit → `ToolMessage` |
-| 다음 위임 / 종료 | `k_super.py` `_after_tools`: 아직 호출하지 않은 위임 Tool이 있으면 `model`, 없으면 `END` |
-| UI 반영 | `agentEvents.ts` mapper → `useScenarioRunner` reducer. `delegation_start`의 대상에 따라 Step 3 / 4 / 5 표시 |
+| 다음 위임 / 종료 | `k_super.py`: `tools → model` 고정 엣지. 다음 `model` 턴이 Tool을 호출하면 `_route` → `tools`, 아니면 `_route` → `END` |
+| 종합 (Step 6) | 마지막 `model` 턴의 AI 응답. `run_k_super`가 근거 검사(위임 1회 이상, 응답 비어 있지 않음) 후 `agent_end(k_super, response)` emit |
+| UI 반영 | `agentEvents.ts` mapper → `useScenarioRunner` reducer. `delegation_start`의 대상에 따라 Step 3 / 4 / 5, K Super `agent_end`에 Step 6 표시 |
 
 LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 기본 모델 `deepseek-v4.1-flash`, `OLLAMA_API_KEY` 필요. 키는 `backend/.env`에 두고 Git에 넣지 않는다.
 
@@ -509,9 +523,9 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 | `backend/tests/test_news_workflow.py` | 아니오 | 뉴스 리스크 workflow (기업 alias, category 필터, 정렬) |
 | `backend/tests/test_mna_review_workflow.py` | 아니오 | M&A 검토 workflow (persona별 항목 순서 · 우려 · 조건 순서, 같은 권고와 조건 집합, context 신호, 모르는 기업/persona) |
 | `backend/tests/test_capabilities.py` | 아니오 | Registry 내용(kind, allowed_agents), Tool 정의가 source of truth, Agent가 Registry subset을 쓰는지, Skill이 system prompt에 들어가는지 |
-| `backend/tests/test_k_super.py` | 아니오 | `_after_tools` / `pending_delegations`: 모든 위임 Tool을 쓸 때까지 `model`로 루프 |
+| `backend/tests/test_k_super.py` | 아니오 | `_route`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
 | `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속 |
-| `backend/tests/test_agents.py` | 예 (`OLLAMA_API_KEY` 없으면 skip) | Meeting / News / Advisory Agent 단독 실행, K Super가 Meeting → News → Advisory를 각각 별도 model 턴에서 순차 위임하고 Advisory task에 회의 기준·외부 리스크를 담았는지(`context_signals`), NDJSON API, 경영자문 직접 대화의 개념 질문(Tool 없음) / 실제 검토(Tool 사용), delegation 경로의 Tool 검사 |
+| `backend/tests/test_agents.py` | 예 (`OLLAMA_API_KEY` 없으면 skip) | Meeting / News / Advisory Agent 단독 실행, K Super가 NeuroEdge 요청에 Meeting → News → Advisory를 각각 별도 model 턴에서 순차 위임하고 Advisory task에 회의 기준·외부 리스크를 담았는지(`context_signals`), 마지막에 Tool 호출 없는 최종 응답(본실사 판단 포함)으로 끝나는지, 회의 결정사항만 묻는 요청에는 Meeting에게만 위임하고 답하는지, NDJSON API, 경영자문 직접 대화의 개념 질문(Tool 없음) / 실제 검토(Tool 사용), delegation 경로의 Tool 검사 |
 
 ---
 
@@ -520,24 +534,26 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 | 영역 | Current implementation | Target architecture |
 | --- | --- | --- |
 | Capability 정의 | `capabilities/registry.py`에서 Agent별 Skill / Tool subset 제공. frontend에 Workflow 이름 상수 없음 | 같음 |
-| K Super 그래프 | `tools → model` 루프. 허용된 위임 Tool을 모두 쓰면 `END`, 종합 없음 | 마지막 위임 뒤 `model` 턴에서 결과 종합 (Step 6) |
+| K Super 그래프 | `tools → model` 루프. 모델이 Tool 없이 응답하면 `END`, 그 응답이 종합 결과 | 같음 |
 | Group Super | backend 없음. frontend mock | 독립 Super Agent. K Super와 A2A |
 | A2A | frontend가 A2A 요청 문장을 K Super API에 전달 | 독립 Agent System 간 통신 경계 |
 | News 데이터 | `data/news.json` 고정 fixture를 키워드로 조회 | 실제 뉴스 API / 검색 / RAG (`analyze_company_risk_news` 본문만 교체) |
 | Advisory 데이터 | `data/companies.json` 고정 fixture + 결정적 규칙 evaluator | 실제 재무 모델 / 밸류에이션 / 실사 데이터 (evaluator만 교체) |
 | Workflow 결과 렌더링 | `toolResultBlocks`가 Tool 이름별 `switch` (meeting, news, advisory 전용 렌더) | Tool이 늘어나도 frontend가 Tool별 지식을 과도하게 갖지 않는 방식 (미결정) |
-| 상위 Agent로의 결과 전달 | 최종 응답 문자열만 `ToolMessage`. Advisory에 필요한 이전 결과는 K Super가 쓴 `task` 문장으로만 전달 | 필요 시 범용 `artifacts` / `context` 구조 (미결정) |
+| 상위 Agent로의 결과 전달 | 최종 응답 문자열만 `ToolMessage`. Advisory에 필요한 이전 결과는 K Super가 쓴 `task` 문장으로만 전달. 종합도 K Super가 history의 텍스트만 보고 쓴다 | 필요 시 범용 `artifacts` / `context` 구조 (미결정) |
+| K Super 최종 응답의 frontend 표시 | `agent_end.response` 문자열을 그대로 메시지로 표시 (줄바꿈 유지) | 같음 또는 구조화 표시 (미결정, 12장 4·5번) |
 | 오류 귀속 | `AgentError`가 없으면 `k_super`로 귀속 | 실행 중인 Agent에 정확히 귀속 |
 
 ---
 
-## 11. 다음 구현 대상: Step 6 (K Super 종합)
+## 11. 다음 구현 대상: Step 7 (K Super → Group Super A2A 응답)
 
 이번 문서화 시점에서 **아직 구현하지 않았다.** 방향만 적는다.
 
-- `k_super.py`의 `_after_tools`가 모든 위임 뒤 `END`로 가는 대신 마지막 `model` 턴으로 가서, K Super가 세 전문 Agent의 `ToolMessage`를 보고 종합 응답을 쓴다 (`run_k_super()`의 반환값이 비어 있지 않게 됨).
-- frontend는 K Super의 `agent_end`(응답 있음)를 Step 6 표시와 종합 메시지로 바꾸고 `scenarioEvents.ts`의 Step 6 mock을 제거한다. Step 번호를 올리는 신호가 `delegation_start`가 아니므로 [12장](#12-current-limitations--next-architectural-work) 1번을 먼저 결정한다.
-- 종합에 텍스트 응답만으로 충분한지는 [12장](#12-current-limitations--next-architectural-work) 5번이다.
+- Step 6의 실제 K Super 응답이 이미 "Group Super에게 돌아갈 K전자 차원의 검토 결과"다. Step 7은 그 응답을 A2A 경계를 넘겨 전달하는 부분이며,
+  현재는 frontend가 `session_close`에 고정 문장("위 4개 핵심 조건을 ... 본실사 진입을 권고합니다")을 붙인다. 이 문장은 실제 Step 6 응답과 무관한 mock이다.
+- Step 7을 real로 바꾸려면 [12장](#12-current-limitations--next-architectural-work) 6번(A2A 경계 — 별도 프로세스인지, 같은 backend의 별도 Agent인지)을 먼저 결정해야 한다.
+  결정 전까지의 최소 교체는 A2A 세션 닫힘의 result를 mock 문장 대신 Step 6의 실제 `agent_end(k_super).response`로 바꾸는 것이다.
 
 ---
 
@@ -547,12 +563,13 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 
 1. **Scenario Step 경계 (Step 4에서 내린 결정).** Step은 **UI 전용** 개념으로 유지한다. backend에는 Step이 없다.
    K Super 실행 한 번이 Step 3·4·5를 포함하므로 `scenarioEvents.ts`의 `LIVE_DELEGATION_STEPS`가 backend `delegation_start`의 대상 Agent를 Step 번호로 매핑한다 (meeting → 3, news → 4, advisory → 5).
-   종합(Step 6)은 위임이 아니므로 K Super의 `agent_end`(응답 있음) 같은 다른 신호로 올려야 한다 — Step 6에서 결정.
+   종합(Step 6)은 위임이 아니므로 K Super의 `agent_end`(`response` 있음)로 올린다 (Step 6에서 내린 결정, `LIVE_SYNTHESIS_STEP`).
+   Step 7·8은 여전히 mock 이벤트가 Step을 올린다.
 2. **K Super 위임 정책 (Step 4에서 내린 결정과 남은 부분).** `tools → model` 루프로 바꿨고, 위임은 **순차**다: Skill이 "한 번에 하나"를 지시하고 `tests/test_agents.py`가 각 위임이 별도 model 턴에서 일어남을 검증한다.
    모델이 한 턴에 여러 tool call을 보내면 `_run_tools`는 그대로 순차 실행한다 (거부하지 않음). 이벤트 순서는 그래도 순차다.
-   **현재 real 범위의 종료 조건**은 "허용된 위임 Tool을 모두 1회 이상 호출"(`_after_tools`)이다. 이는 Step 5 범위를 위한 임시 경계다:
-   - Step 6에서 종합을 위한 마지막 `model` 턴으로 교체해야 한다.
-   - 요청에 따라 일부 전문 Agent만 필요한 경우(모든 Agent 호출을 요구하는 것이 맞지 않는 경우)를 아직 다루지 않는다. 현재 demo 요청은 항상 모든 전문 Agent를 필요로 한다.
+   **종료 조건 (Step 6에서 내린 결정)**: "허용된 위임 Tool을 모두 호출"하는 임시 규칙(`_after_tools`, `pending_delegations`)을 제거했다.
+   매 `model` 턴이 다음 행동을 정하고, Tool 호출 없는 응답이 곧 종료다. 어떤 전문 Agent를 쓸지는 Skill `specialist_delegation`의 지침(요청의 항목 ↔ 위임 Tool 설명)에 따른 모델 판단이며,
+   `tests/test_agents.py`가 NeuroEdge 요청(세 Agent 모두)과 회의 결정사항만 묻는 요청(Meeting만)으로 확인한다. 모델이 필요한 Agent를 빠뜨리거나 불필요한 Agent를 부르는 것을 막는 코드는 없다 (의도적).
    병렬 위임과 frontend session stack(중첩 전제)의 형제 세션 처리는 여전히 열려 있다.
 3. **위임 Tool ↔ 대상 Agent의 순환 의존 (Step 5에서 내린 결정과 남은 부분).** `delegate_to_*` Tool은 대상 Agent의 `run_*`를 호출 시점에 import해서 순환을 끊는다 ([4장](#4-capability-registry)).
    Step 5에서 **공통 specialist core는 도입했다** (`common.Specialist` / `build_specialist_graph` / `run_specialist`, [3.2](#32-specialist-agent)). Agent 파일은 정체성과 Registry 조회만 갖는다.
@@ -561,7 +578,8 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 4. **Workflow 결과의 frontend 렌더링.** Tool별 `switch`를 계속 늘릴지, backend가 표시 힌트를 함께 보낼지, 범용 렌더로 갈지.
 5. **상위 Agent로 전달할 구조화 결과 (Step 5에서 내린 결정과 남은 부분).** Step 5에서는 공유 구조를 만들지 않았다. Advisory가 필요로 하는 Meeting / News 결과는 K Super가 자기 history를 보고 **자연어 위임 문장에 직접 담는다** (Skill `specialist_delegation`의 지침, 코드 template 없음).
    Advisory Agent는 그 문장을 `run_mna_review`의 `context`(자유 텍스트)로 넘기고 workflow가 신호를 추출한다. 따라서 K Super가 무엇을 옮겨 적는지, Advisory가 무엇을 `context`에 넣는지는 모델 판단이며 실행마다 다를 수 있다 (`tests/test_agents.py`가 가격 기준 · 리스크 주제가 전달됐는지만 검증).
-   Step 6 종합에 텍스트 응답만으로 충분한지, `artifacts` / `context` 같은 공유 구조가 필요한지는 여전히 열려 있다.
+   Step 6 종합은 **텍스트만으로 구현했다**: K Super는 history의 `ToolMessage` 텍스트를 보고 최종 응답을 쓰고, frontend는 그 문자열을 그대로 표시한다.
+   Step 7·8(Group Super가 K Super 응답을 받아 판단)에서 구조화된 결과(권고 코드, 조건 목록 등)가 필요해지면 `artifacts` / `context` 같은 공유 구조를 다시 본다.
 6. **Group Super와 A2A.** 현재 범위 밖이지만, Step 7·8을 real로 바꾸려면 A2A 경계를 어디에 둘지(별도 프로세스/서비스인지, 같은 backend 안의 별도 Agent인지) 결정해야 한다.
 7. **오류 귀속.** `stream_run`이 `AgentError` 외 예외를 `k_super`로 귀속한다. Agent가 늘면 실행 중인 Agent를 추적하는 방식이 필요하다.
 8. **Agent 식별자 동기화.** backend `AGENT_ID` 문자열과 frontend `AgentId`가 수동으로 일치해야 한다. frontend는 모르는 id의 이벤트를 조용히 버린다. `LIVE_DELEGATION_STEPS`(frontend)도 같은 id를 쓴다.
