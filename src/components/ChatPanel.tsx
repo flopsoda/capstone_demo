@@ -143,7 +143,7 @@ export function ChatPanel({
           onClick={submit}
           disabled={busy || draft.trim().length === 0}
         >
-          Send
+          전송
         </button>
       </div>
     </section>

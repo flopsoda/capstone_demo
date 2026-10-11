@@ -57,7 +57,7 @@ export function AgentNode({ data }: NodeProps<AgentFlowNode>) {
       </div>
       <div className="agent-node__role">{data.role}</div>
       {data.workflow && data.state !== "idle" && (
-        <div className="agent-node__workflow" title="Workflow Tool">
+        <div className="agent-node__workflow" title="워크플로 도구">
           {data.workflow}
         </div>
       )}

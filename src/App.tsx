@@ -7,6 +7,8 @@ import { ScenarioStatus } from "./components/ScenarioStatus";
 import { SessionWindows } from "./components/SessionWindows";
 import { Sidebar } from "./components/Sidebar";
 import { useScenarioRunner } from "./hooks/useScenarioRunner";
+import { runMeetingAgent } from "./live/api";
+import { MEETING_RESULT_TITLE, toolCallBlocks } from "./live/meetingAgent";
 import { MNA_SAMPLE_PROMPT, mnaScenario } from "./scenario/mnaScenario";
 import { getMockResponse } from "./scenario/mockResponses";
 import { AGENTS, type ChatTabId } from "./types/agent";
@@ -66,11 +68,51 @@ export default function App() {
       // Direct user → specialist agent. The same agent core and Workflow Tool
       // that the Super Agent delegates to; the graph node lights up on its own.
       const side = tab;
-      setSideChats((prev) => ({
-        ...prev,
-        [side]: [...prev[side], { id: sideId(), kind: "user", content: text }],
-      }));
+      const pushSide = (...items: ChatItem[]) =>
+        setSideChats((prev) => ({ ...prev, [side]: [...prev[side], ...items] }));
+      pushSide({ id: sideId(), kind: "user", content: text });
       setReplyPending(side);
+
+      if (side === "meeting") {
+        // REAL: the same Meeting Agent graph that K Super delegates to in Step 3.
+        runner
+          .runDirectLive(side, AGENTS[side].workflow ?? "", async () => {
+            const run = await runMeetingAgent(text);
+            pushSide(
+              ...run.tool_calls.map(
+                (call): ChatItem => ({
+                  id: sideId(),
+                  kind: "assistant",
+                  sender: side,
+                  title: call.name,
+                  content: toolCallBlocks(call),
+                }),
+              ),
+              {
+                id: sideId(),
+                kind: "assistant",
+                sender: side,
+                title: MEETING_RESULT_TITLE,
+                content: run.response,
+              },
+            );
+          })
+          .catch((err: unknown) => {
+            pushSide({
+              id: sideId(),
+              kind: "assistant",
+              sender: side,
+              title: "오류",
+              content: [
+                { kind: "badge", text: "실행 실패", tone: "high" },
+                { kind: "text", text: err instanceof Error ? err.message : String(err) },
+              ],
+            });
+          })
+          .finally(() => setReplyPending(null));
+        return;
+      }
+
       runner.runDirect(side, AGENTS[side].workflow ?? "", DIRECT_RUN_DELAY);
       replyTimer.current = window.setTimeout(() => {
         setSideChats((prev) => ({

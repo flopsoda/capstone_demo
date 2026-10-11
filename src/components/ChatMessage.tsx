@@ -8,7 +8,7 @@ interface UserMessageProps {
   label?: string;
 }
 
-export function UserMessage({ content, label = "Chairman" }: UserMessageProps) {
+export function UserMessage({ content, label = "회장" }: UserMessageProps) {
   return (
     <div className="msg msg--user">
       <div className="msg__bubble msg__bubble--user">

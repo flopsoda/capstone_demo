@@ -6,8 +6,8 @@ import { AssistantMessage, UserMessage } from "./ChatMessage";
 import { MessageContent } from "./MessageContent";
 
 const DEFAULT_TITLE: Record<CommunicationType, string> = {
-  a2a: "A2A Request",
-  delegation: "Agent Delegation",
+  a2a: "A2A 요청",
+  delegation: "에이전트 위임",
 };
 
 /* ------------------------------------------------------------------ */
@@ -114,14 +114,14 @@ export function SessionCard({ session, sessions, onOpenSessions }: SessionCardPr
           {isOpen ? (
             <>
               <span className="session-card__live-dot" aria-hidden="true" />
-              Session live
+              대화 진행 중
             </>
           ) : (
             <>
               <span className="session-card__done" aria-hidden="true">
                 ✓
               </span>
-              Returned
+              결과 반환
             </>
           )}
         </span>
@@ -136,7 +136,7 @@ export function SessionCard({ session, sessions, onOpenSessions }: SessionCardPr
           <span>{to.shortName}와(과) 별도 채팅창에서 대화 중입니다.</span>
           {onOpenSessions && (
             <button type="button" className="session-card__link" onClick={onOpenSessions}>
-              Agent Sessions 보기 →
+              협업 대화 보기 →
             </button>
           )}
         </div>

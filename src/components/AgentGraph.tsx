@@ -32,7 +32,7 @@ const EDGE_COLORS: Record<CommunicationType, string> = {
 };
 const EDGE_LABELS: Record<CommunicationType, string> = {
   a2a: "A2A",
-  delegation: "Delegate",
+  delegation: "위임",
 };
 const IDLE_COLOR = "#c3cad4";
 const USER_COLOR = "#475569";
@@ -97,7 +97,7 @@ export function AgentGraph({ nodes, edges, selectedAgent }: AgentGraphProps) {
       id: "pool",
       type: "pool",
       position: { x: 20, y: 428 },
-      data: { label: "K Electronics · Specialist Agents" },
+      data: { label: "K전자 · 전문가 에이전트" },
       draggable: false,
       selectable: false,
       connectable: false,

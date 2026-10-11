@@ -24,20 +24,21 @@ export function ScenarioStatus({
   return (
     <div className="scenario-status">
       <span className="scenario-status__title">
-        {status === "idle" ? "Agent Pipeline" : title}
+        {status === "idle" ? "에이전트 파이프라인" : title}
       </span>
       <span className="scenario-status__step">
-        {status === "idle" && "Group Super Agent에 요청을 보내면 시나리오가 시작됩니다."}
-        {status === "running" && (
+        {status === "idle" && "그룹 슈퍼에이전트에 요청을 보내면 시나리오가 시작됩니다."}
+        {(status === "running" || status === "error") && (
           <>
-            Step {currentStep} / {totalSteps}
+            {currentStep} / {totalSteps} 단계
             {stepTitle && <span className="scenario-status__step-title"> · {stepTitle}</span>}
           </>
         )}
-        {status === "completed" && `Step ${totalSteps} / ${totalSteps}`}
+        {status === "completed" && `${totalSteps} / ${totalSteps} 단계`}
       </span>
-      {status === "running" && <span className="badge badge--running">Running</span>}
-      {status === "completed" && <span className="badge badge--done">Completed ✓</span>}
+      {status === "running" && <span className="badge badge--running">진행 중</span>}
+      {status === "completed" && <span className="badge badge--done">완료 ✓</span>}
+      {status === "error" && <span className="badge badge--high">오류 · 중단</span>}
 
       <button
         type="button"
@@ -45,7 +46,7 @@ export function ScenarioStatus({
         onClick={onReset}
         disabled={status === "idle"}
       >
-        Reset
+        초기화
       </button>
 
       {status !== "idle" && (

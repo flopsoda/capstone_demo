@@ -104,7 +104,7 @@ function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
         edges = setEdge(edges, ev.from, ev.agent, "active");
         // A caller that is still idle (e.g. the Chairman) becomes active too.
         if (nodes[ev.from].state === "idle") {
-          nodes[ev.from] = { state: "active", status: "Requesting" };
+          nodes[ev.from] = { state: "active", status: "요청 중" };
         }
       }
       return { ...state, nodes, edges };
@@ -121,6 +121,33 @@ function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
       let edges = state.edges;
       if (ev.from) edges = setEdge(edges, ev.from, ev.agent, "completed");
       return { ...state, nodes, edges };
+    }
+
+    case "agent_error":
+      return {
+        ...state,
+        nodes: {
+          ...state.nodes,
+          [ev.agent]: { state: "error", workflow: state.nodes[ev.agent].workflow },
+        },
+      };
+
+    case "scenario_error": {
+      const failed = applyEvent(state, { type: "agent_error", agent: ev.agent });
+      return {
+        ...pushItem(failed, {
+          id: nextId(),
+          kind: "assistant",
+          sender: ev.agent,
+          title: "오류",
+          content: [
+            { kind: "badge", text: "실행 중단", tone: "high" },
+            { kind: "text", text: ev.message },
+          ],
+        }),
+        status: "error",
+        error: ev.message,
+      };
     }
 
     case "agent_status":
@@ -262,13 +289,23 @@ export interface ScenarioRunner extends RunnerState {
    * given Workflow Tool and completes after `durationMs`. No edge is involved.
    */
   runDirect: (agent: AgentId, workflow: string, durationMs: number) => void;
+  /**
+   * Same as `runDirect`, but the node stays active until `task` settles.
+   * Resolves after the node completes; rejects (after marking the node as
+   * failed) with the task's error.
+   */
+  runDirectLive: (agent: AgentId, workflow: string, task: () => Promise<void>) => Promise<void>;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
  * Replays a scenario's event list on a timer. The hook is intentionally
  * agnostic of the UI: it only produces node/edge runtime state and chat items.
- * Swapping the timer-driven replay for a real agent event stream later only
- * requires dispatching `apply` with live events.
+ * A `live` event pauses playback, runs a real agent, and splices the events
+ * it produced into the queue so the rest of the scenario continues as mock.
  */
 export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialRunnerState);
@@ -295,16 +332,46 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
       clearTimer();
       dispatch({ type: "start", userText });
 
+      // Local queue: live events insert their output right after themselves.
+      const queue = [...scenario.events];
       let index = 0;
-      const tick = () => {
-        if (runId !== runIdRef.current) return;
-        if (index >= scenario.events.length) return;
-        const ev = scenario.events[index++];
-        dispatch({ type: "apply", event: ev });
-        timerRef.current = window.setTimeout(tick, ev.delay ?? DEFAULT_DELAY);
+      const isCurrent = () => runId === runIdRef.current;
+      const schedule = (delay: number) => {
+        timerRef.current = window.setTimeout(tick, delay);
       };
 
-      timerRef.current = window.setTimeout(tick, 400);
+      const tick = async () => {
+        if (!isCurrent() || index >= queue.length) return;
+        const ev = queue[index++];
+
+        if (ev.type !== "live") {
+          dispatch({ type: "apply", event: ev });
+          schedule(ev.delay ?? DEFAULT_DELAY);
+          return;
+        }
+
+        let produced: ScenarioEvent[];
+        try {
+          produced = await ev.run({
+            emit: (event) => {
+              if (isCurrent()) dispatch({ type: "apply", event });
+            },
+          });
+        } catch (err) {
+          // A reset/restart during the call wins; otherwise stop the scenario here.
+          if (!isCurrent()) return;
+          dispatch({
+            type: "apply",
+            event: { type: "scenario_error", agent: ev.agent, message: errorMessage(err) },
+          });
+          return;
+        }
+        if (!isCurrent()) return;
+        queue.splice(index, 0, ...produced);
+        schedule(ev.delay ?? 0);
+      };
+
+      schedule(400);
     },
     [scenario],
   );
@@ -318,7 +385,7 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
   const runDirect = useCallback((agent: AgentId, workflow: string, durationMs: number) => {
     dispatch({
       type: "apply",
-      event: { type: "agent_start", agent, workflow, status: "Analyzing..." },
+      event: { type: "agent_start", agent, workflow, status: "분석 중..." },
     });
     const id = window.setTimeout(() => {
       directTimers.current.delete(id);
@@ -326,6 +393,23 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
     }, durationMs);
     directTimers.current.add(id);
   }, []);
+
+  const runDirectLive = useCallback(
+    async (agent: AgentId, workflow: string, task: () => Promise<void>) => {
+      dispatch({
+        type: "apply",
+        event: { type: "agent_start", agent, workflow, status: "분석 중..." },
+      });
+      try {
+        await task();
+      } catch (err) {
+        dispatch({ type: "apply", event: { type: "agent_error", agent } });
+        throw err;
+      }
+      dispatch({ type: "apply", event: { type: "agent_complete", agent } });
+    },
+    [],
+  );
 
   useEffect(() => {
     const timers = directTimers.current;
@@ -344,5 +428,6 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
     reset,
     appendMessage,
     runDirect,
+    runDirectLive,
   };
 }

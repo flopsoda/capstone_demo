@@ -26,9 +26,9 @@ export function SessionWindows({ sessions }: SessionWindowsProps) {
       {livePhase === "closed" && (
         <div className="panel panel--session-empty">
           <div className="sessions__empty">
-            <p>A2A 또는 Agent Delegation이 시작되면 여기에 새 채팅창이 열립니다.</p>
+            <p>A2A 요청이나 에이전트 위임이 시작되면 여기에 새 채팅창이 열립니다.</p>
             <p className="sessions__empty-sub">
-              세션이 끝나면 창은 요청 말풍선으로 접혀 들어가고, 결과만 남습니다.
+              대화가 끝나면 창은 요청 말풍선으로 접혀 들어가고, 결과만 남습니다.
             </p>
           </div>
         </div>

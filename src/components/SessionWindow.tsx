@@ -78,11 +78,11 @@ export function SessionWindow({ session, sessions }: SessionWindowProps) {
         <div className="chat__header session-window__header">
           <div className="session-window__title-row">
             <span className={`badge ${isA2A ? "badge--a2a" : "badge--task"}`}>
-              {isA2A ? "A2A Session" : "Delegation Session"}
+              {isA2A ? "A2A 대화" : "위임 대화"}
             </span>
             <span className="session-window__live">
               <span className="session-card__live-dot" aria-hidden="true" />
-              live
+              진행 중
             </span>
           </div>
           <div className="chat__title">{to.name}</div>

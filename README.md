@@ -1,17 +1,49 @@
 # Executive AI — Multi-Agent Decision Support Demo
 
-대기업 경영진을 위한 Multi-Agent AI 시스템의 **deterministic mock demo**입니다.
-실제 Agent backend 없이, 고정된 NeuroEdge M&A 시나리오를 재생하면서
+대기업 경영진을 위한 Multi-Agent AI 시스템 데모입니다.
+고정된 NeuroEdge M&A 8 Step 시나리오를 재생하면서
 `Group Super → A2A → K Electronics Super → Agent Delegation → Workflow Tool → 결과 종합`
 구조를 채팅과 그래프에서 동시에 보여줍니다.
+
+mock을 한 단계씩 실제 Agent 실행으로 교체하는 중입니다. 현재 상태:
+
+```text
+Step 1  MOCK   회장 요청 접수
+Step 2  MOCK   A2A 요청 (Group Super → K Super)
+Step 3  REAL   K Super → Meeting Agent → run_meeting_context_retrieval   (Python · LangGraph · Ollama Cloud)
+Step 4  MOCK   News Agent
+Step 5  MOCK   Advisory Agent
+Step 6  MOCK   K Super 종합
+Step 7  MOCK   A2A 응답
+Step 8  MOCK   그룹 최종 판단
+```
+
+Sidebar **미팅** 탭의 직접 채팅도 같은 Meeting Agent가 실제로 응답합니다.
 
 ## 실행
 
 ```bash
+# 1) Python backend (별도 터미널)
+cd backend
+python3.13 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+cp .env.example .env            # OLLAMA_API_KEY 입력 (https://ollama.com/settings/keys)
+.venv/bin/uvicorn app.main:app --port 8000 --reload
+
+# 2) React frontend
 npm install
-npm run dev      # http://localhost:5173
+npm run dev      # http://localhost:5173  (/api → localhost:8000 proxy)
 npm run build    # tsc + vite build
 ```
+
+backend 테스트:
+
+```bash
+cd backend
+.venv/bin/python -m pytest        # tests/test_agents.py는 OLLAMA_API_KEY가 없으면 skip
+```
+
+backend가 꺼져 있거나 LLM 호출이 실패하면 Step 3에서 시나리오가 **오류 · 중단** 상태로 멈추고
+K전자 슈퍼에이전트 노드가 error로 표시됩니다 (mock으로 대체하지 않음). 초기화 또는 새 요청으로 재실행합니다.
 
 ## 시연 순서
 
@@ -48,16 +80,19 @@ Meeting Agent, News Agent, Management Advisory. K Electronics Super는 Sidebar�
 src/
   types/
     agent.ts           AgentId · 상태 · CommunicationType(a2a | delegation) · 토폴로지 · 좌표
-    scenario.ts        ScenarioEvent · ChatItem · MessageBlock · RunnerState
+    scenario.ts        ScenarioEvent(live 포함) · ChatItem · MessageBlock · RunnerState
   scenario/
     mockData.ts        기업 / 뉴스 / 회의 고정 데이터, Workflow Tool 이름, run_mna_review 단계
     mockResults.ts     각 Workflow Tool의 구조화된 mock 결과 (시나리오·직접 채팅 공용)
-    scenarioEvents.ts  8 Step M&A 시나리오 이벤트 배열 (delay 포함)
+    scenarioEvents.ts  8 Step M&A 시나리오 이벤트 배열 (Step 3은 `live` 이벤트, 나머지는 mock)
     mnaScenario.ts     시나리오 메타 + 트리거 조건 + 예시 문장
-    mockResponses.ts   Advisory / News / Meeting 직접 채팅 응답
+    mockResponses.ts   Advisory / News 직접 채팅 응답
+  live/
+    api.ts             Python backend 클라이언트 (POST /api/k-super/run, /api/agents/meeting/run)
+    meetingAgent.ts    Meeting Agent 실행 trace → 세션/메시지 이벤트 · 채팅 블록 변환
   hooks/
-    useScenarioRunner.ts  이벤트 재생 → 노드/엣지/채팅 상태. runDirect()로 전문 Agent 단독 실행
-  hooks/
+    useScenarioRunner.ts  이벤트 재생 → 노드/엣지/채팅 상태. `live` 이벤트를 await 후 결과 이벤트를 큐에 삽입.
+                          runDirect()(mock) / runDirectLive()(실제)로 전문 Agent 단독 실행
     useCollapsePhase.ts   open → collapsing → closed 전환 (창/카드 접힘 애니메이션용)
   components/
     Header, Sidebar, ChatPanel, ChatMessage, ActivityCard, ComparisonCard(미사용),
@@ -65,23 +100,63 @@ src/
     SessionCard (세션을 연 요청 카드 + 결과/재생), SessionWindow (세션별 채팅창),
     SessionWindows (열린 세션 창 목록)
   App.tsx
+
+backend/
+  app/
+    main.py                          FastAPI: /api/health, /api/k-super/run, /api/agents/meeting/run
+    llm.py                           ChatOllama (Ollama Cloud, OLLAMA_* 환경변수)
+    schemas.py                       응답 스키마 (AgentRun = agent · request · tool_calls · response)
+    agents/
+      common.py                      MessagesState 기반 공통: tool 실행, trace 추출
+      k_super.py                     K전자 슈퍼에이전트 그래프. delegate_to_meeting_agent tool로 위임
+      meeting.py                     미팅 에이전트 그래프. run_meeting_context_retrieval tool 사용
+    workflows/
+      meeting_context_retrieval.py   Workflow Tool: fixture 조회 (키워드 점수 기반)
+    data/meetings.json               회의 fixture (NeuroEdge 전략회의 + 무관한 회의 2건)
+  tests/                             test_workflow.py (LLM 불필요), test_agents.py (Ollama Cloud 필요)
 ```
+
+### Agent 구조 (backend)
+
+```text
+K전자 슈퍼에이전트 (LangGraph, MessagesState)
+  model ──tool call──▶ delegate_to_meeting_agent(task)   ← LLM이 자연어 업무를 작성해 호출
+                              │ invoke
+                              ▼
+                       미팅 에이전트 (LangGraph, MessagesState)
+                         model ──tool call──▶ run_meeting_context_retrieval(query, topics)
+                               ◀── tool result ──┘        (meetings.json 조회)
+                         model ──▶ 최종 응답 (한국어)
+                              │
+                       ToolMessage(최종 응답만) ──▶ K전자 슈퍼에이전트
+```
+
+- 두 Agent는 각각 독립된 message history를 가집니다. 미팅 에이전트 내부의 tool call / result는
+  K Super의 history에 들어가지 않고, 최종 응답만 ToolMessage로 돌아갑니다.
+- 전체 trace(위임 문장, tool 호출 인자/결과, 최종 응답)는 API 응답으로 frontend에 전달되어
+  기존 세션 창 / 그래프에 표시됩니다.
+- Step 4 이후: `k_super.py`의 `TOOLS`에 `delegate_to_news_agent` 등을 추가하고,
+  `tools → END` 엣지를 `tools → model`로 바꾸면 K Super가 여러 Agent에 위임하고 종합(Step 6)까지 수행합니다.
+  frontend는 `scenarioEvents.ts`의 해당 Step을 `live` 이벤트로 바꾸고 trace → 이벤트 변환을 `src/live/`에 추가합니다.
 
 ### 시나리오 로직과 그래프 렌더링 분리
 
 - `scenarioEvents.ts`에는 UI 코드가 없고, `AgentGraph.tsx`에는 시나리오 내용이 없습니다.
 - `useScenarioRunner`가 이벤트를 reducer로 `nodes` / `edges` / `messages` 상태로 변환하고,
   그래프와 채팅은 그 상태만 읽습니다.
-- 추후 실제 Agent backend가 생기면 타이머 재생 대신 live 이벤트를 같은 reducer에
-  dispatch하면 됩니다.
+- `live` 이벤트는 runner가 await한 뒤, 반환된 이벤트 배열을 큐의 현재 위치에 삽입합니다.
+  실패하면 `scenario_error`로 시나리오를 중단합니다.
 
 ### 이벤트 타입
 
 | type                | 역할                                                       |
 | ------------------- | ---------------------------------------------------------- |
 | `step`              | 진행 Step 번호 / 제목 갱신                                 |
+| `live`              | 실제 Agent 실행. `run()` 결과 이벤트를 제자리에 삽입, 실패 시 중단 |
 | `agent_start`       | 노드 active (+ `workflow` 표시) + from이 있으면 edge active |
 | `agent_complete`    | 노드 completed + edge completed                            |
+| `agent_error`       | 노드 error                                                 |
+| `scenario_error`    | 노드 error + 오류 메시지 + 시나리오 상태 `error` (중단)     |
 | `agent_status`      | 노드 status 텍스트 / 강조만 변경 (Workflow 내부 단계 표시) |
 | `edge`              | edge 상태 직접 제어 (A2A 응답 등 역방향)                   |
 | `message`           | Assistant 메시지 추가                                      |
@@ -92,5 +167,5 @@ src/
 
 ## 범위 밖
 
-실제 LLM 호출, A2A 프로토콜, 뉴스/공시 API, RAG, Vector DB, Meeting DB,
-valuation 계산, 인증, DB, 배포, LangGraph 등은 포함하지 않습니다.
+News / Advisory / Group Super의 실구현, A2A 프로토콜, 뉴스/공시 API, RAG, Vector DB,
+실제 Meeting DB, valuation 계산, token streaming, 인증, 배포는 포함하지 않습니다.

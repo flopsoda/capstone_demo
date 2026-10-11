@@ -6,16 +6,16 @@ interface SidebarProps {
 }
 
 const TABS: { id: ChatTabId; label: string; hint: string }[] = [
-  { id: "group_super", label: "Group Super Agent", hint: "Super Agent" },
-  { id: "advisory", label: "Management Advisory", hint: "Specialist Agent" },
-  { id: "news", label: "News", hint: "Specialist Agent" },
-  { id: "meeting", label: "Meeting", hint: "Specialist Agent" },
+  { id: "group_super", label: "그룹 슈퍼에이전트", hint: "슈퍼에이전트" },
+  { id: "advisory", label: "경영자문", hint: "전문가 에이전트" },
+  { id: "news", label: "뉴스", hint: "전문가 에이전트" },
+  { id: "meeting", label: "미팅", hint: "전문가 에이전트" },
 ];
 
 export function Sidebar({ selected, onSelect }: SidebarProps) {
   return (
     <aside className="sidebar">
-      <div className="sidebar__section-title">Agents</div>
+      <div className="sidebar__section-title">에이전트</div>
       <nav className="sidebar__nav">
         {TABS.map((tab) => {
           const meta = AGENTS[tab.id];
@@ -42,21 +42,21 @@ export function Sidebar({ selected, onSelect }: SidebarProps) {
       </nav>
 
       <div className="sidebar__footer">
-        <div className="sidebar__legend-title">Legend</div>
+        <div className="sidebar__legend-title">범례</div>
         <div className="sidebar__legend-row">
-          <span className="sidebar__dot sidebar__dot--super" /> Super Agent
+          <span className="sidebar__dot sidebar__dot--super" /> 슈퍼에이전트
         </div>
         <div className="sidebar__legend-row">
-          <span className="sidebar__dot sidebar__dot--shared" /> Specialist Agent
+          <span className="sidebar__dot sidebar__dot--shared" /> 전문가 에이전트
         </div>
         <div className="sidebar__legend-row">
-          <span className="legend-line legend-line--a2a" /> A2A (Super ↔ Super)
+          <span className="legend-line legend-line--a2a" /> A2A (슈퍼에이전트 간 통신)
         </div>
         <div className="sidebar__legend-row">
-          <span className="legend-line legend-line--task" /> Agent Delegation
+          <span className="legend-line legend-line--task" /> 에이전트 위임
         </div>
         <div className="sidebar__legend-row">
-          <span className="legend-code">run_*</span> Workflow Tool
+          <span className="legend-code">run_*</span> 워크플로 도구
         </div>
       </div>
     </aside>

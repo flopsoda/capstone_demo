@@ -7,10 +7,10 @@ interface PanelSwitchProps {
   liveCount: number;
 }
 
-/** Compact segmented toggle: topology graph vs. live session windows. */
+/** Compact segmented toggle: topology graph vs. live collaboration windows. */
 export function PanelSwitch({ view, onChange, liveCount }: PanelSwitchProps) {
   return (
-    <div className="panel-switch" role="tablist" aria-label="Right panel view">
+    <div className="panel-switch" role="tablist" aria-label="오른쪽 화면 전환">
       <button
         type="button"
         role="tab"
@@ -18,7 +18,7 @@ export function PanelSwitch({ view, onChange, liveCount }: PanelSwitchProps) {
         className={`panel-switch__tab${view === "graph" ? " panel-switch__tab--on" : ""}`}
         onClick={() => onChange("graph")}
       >
-        Graph
+        그래프
       </button>
       <button
         type="button"
@@ -27,9 +27,9 @@ export function PanelSwitch({ view, onChange, liveCount }: PanelSwitchProps) {
         className={`panel-switch__tab${view === "sessions" ? " panel-switch__tab--on" : ""}`}
         onClick={() => onChange("sessions")}
       >
-        Sessions
+        협업 대화
         {liveCount > 0 && (
-          <span className="panel-switch__live" title={`${liveCount} live session(s)`}>
+          <span className="panel-switch__live" title={`진행 중인 협업 대화 ${liveCount}건`}>
             <span className="session-card__live-dot" aria-hidden="true" />
             {liveCount}
           </span>

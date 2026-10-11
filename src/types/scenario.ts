@@ -89,7 +89,22 @@ interface BaseEvent {
   delay?: number;
 }
 
+/** Handed to a `live` event while it runs, for intermediate graph/chat updates. */
+export interface LiveContext {
+  emit: (event: ScenarioEvent) => void;
+}
+
 export type ScenarioEvent =
+  /**
+   * A real agent execution instead of mock playback. The runner awaits `run`
+   * and then plays the returned events in place. If `run` throws, the runner
+   * marks `agent` and the scenario as failed and stops.
+   */
+  | (BaseEvent & {
+      type: "live";
+      agent: AgentId;
+      run: (ctx: LiveContext) => Promise<ScenarioEvent[]>;
+    })
   | (BaseEvent & { type: "step"; step: number; title: string })
   | (BaseEvent & {
       type: "agent_start";
@@ -101,6 +116,9 @@ export type ScenarioEvent =
       workflow?: string;
     })
   | (BaseEvent & { type: "agent_complete"; agent: AgentId; from?: AgentId })
+  | (BaseEvent & { type: "agent_error"; agent: AgentId })
+  /** Stops the scenario: `agent` goes to error and `message` lands in the current transcript. */
+  | (BaseEvent & { type: "scenario_error"; agent: AgentId; message: string })
   | (BaseEvent & {
       type: "agent_status";
       agent: AgentId;
@@ -161,7 +179,7 @@ export interface Scenario {
 /* Runtime state produced by the scenario runner                       */
 /* ------------------------------------------------------------------ */
 
-export type ScenarioStatus = "idle" | "running" | "completed";
+export type ScenarioStatus = "idle" | "running" | "completed" | "error";
 
 export interface NodeRuntime {
   state: AgentState;
@@ -180,6 +198,8 @@ export interface RunnerState {
   status: ScenarioStatus;
   currentStep: number;
   stepTitle: string;
+  /** Why the scenario stopped (status === "error"). */
+  error?: string;
   nodes: Record<AgentId, NodeRuntime>;
   edges: Record<string, EdgeRuntime>;
   /** Top-level transcript (Chairman ↔ Group Super). */

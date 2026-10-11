@@ -11,8 +11,8 @@ interface ActivityCardProps {
 }
 
 const DEFAULT_TITLE: Record<CommunicationType, string> = {
-  a2a: "A2A Request",
-  delegation: "Agent Delegation",
+  a2a: "A2A 요청",
+  delegation: "에이전트 위임",
 };
 
 /**
