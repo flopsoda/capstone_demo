@@ -59,12 +59,13 @@ INVOCATION_CONTEXT: dict[Invocation, str] = {
 SUPER_INVOCATION_CONTEXT: dict[Invocation, str] = {
     "a2a": (
         "호출 맥락: 이 요청은 다른 Agent System의 슈퍼에이전트가 A2A로 보낸 업무 요청이다. 응답은 그 시스템에 "
-        "돌아가는 회신이므로 반드시 위임 Tool로 전문 에이전트에게 맡긴 결과에 근거해 작성한다. 인사말이나 되묻기 없이 결과만 회신한다."
+        "돌아가는 회신이므로 반드시 등록된 Tool(전문 에이전트 위임, 다른 Agent System에 대한 A2A 요청)로 받은 결과에 근거해 작성한다. "
+        "인사말이나 되묻기 없이 결과만 회신한다."
     ),
     "direct": (
         "호출 맥락: 이 요청은 사용자와의 직접 대화다. 인사, 일반적인 개념 설명, 네 역할에 대한 질문에는 "
-        "Tool 없이 자연스럽게 답한다. 데이터나 기록에 근거해야 하는 검토 요청이면 등록된 위임 Tool로 담당 전문 에이전트에게 "
-        "맡긴 뒤 그 결과에 근거해 답한다."
+        "Tool 없이 자연스럽게 답한다. 데이터나 기록에 근거해야 하는 검토 요청이면 등록된 Tool로 담당 에이전트(전문 에이전트, "
+        "또는 다른 Agent System의 슈퍼에이전트)에게 맡긴 뒤 그 결과에 근거해 답한다."
     ),
 }
 
@@ -286,7 +287,7 @@ def run_super(spec: SuperAgent, graph: CompiledStateGraph, request: str, *, invo
         raise AgentError(spec.agent_id, f"{type(e).__name__}: {e}") from e
     messages = state["messages"]
     if invocation == "a2a" and not tool_call_names(messages):
-        raise AgentError(spec.agent_id, f"{spec.display_name}가 전문 에이전트에게 업무를 위임하지 않고 응답했습니다.")
+        raise AgentError(spec.agent_id, f"{spec.display_name}가 어떤 에이전트에게도 업무를 맡기지 않고 응답했습니다.")
     response = final_response(messages)
     if not response:
         raise AgentError(spec.agent_id, f"{spec.display_name}가 최종 검토 결과를 생성하지 않았습니다.")

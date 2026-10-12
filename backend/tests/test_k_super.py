@@ -108,7 +108,7 @@ def test_model_keeps_delegating_until_it_answers(scripted):
 
 def test_answer_without_any_delegation_is_an_error(scripted):
     scripted([AIMessage("제가 보기엔 진행해도 됩니다.")], {})
-    with pytest.raises(AgentError, match="위임하지 않고"):
+    with pytest.raises(AgentError, match="맡기지 않고"):
         collect_events(lambda: run_k_super("검토해줘"))
 
 

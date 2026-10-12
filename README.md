@@ -24,11 +24,14 @@ Sidebar **미팅** · **뉴스** · **경영자문** 탭의 직접 채팅도 같
 ## 실행
 
 ```bash
-# 1) Python backend (별도 터미널)
+# 1) Python backend — K Electronics system (별도 터미널)
 cd backend
 python3.13 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env            # OLLAMA_API_KEY 입력 (https://ollama.com/settings/keys)
 .venv/bin/uvicorn app.main:app --port 8000 --reload
+
+# 1b) Python backend — Group system (별도 터미널, 같은 venv/.env). Group Super가 K에 A2A로 요청한다
+.venv/bin/uvicorn app.systems.group.app:app --port 8001 --reload
 
 # 2) React frontend
 npm install
@@ -119,6 +122,7 @@ backend/
       llm.py                         ChatOllama (Ollama Cloud, OLLAMA_* 환경변수)
       schemas.py                     요청 스키마
       api.py                         NDJSON 스트리밍 helper · SSE 관찰 채널 helper
+      a2a.py                         A2A client 메커니즘: 상대 system의 A2A 표면에 요청을 보내고 최종 응답을 받음 (lifecycle은 observe 콜백으로)
     library/                         공용 Capability 라이브러리 (system을 import하지 않음)
       skills/                        specialist_delegation, meeting_context_analysis, external_risk_analysis, mna_feasibility_review (Skill 본문)
       tools/                         run_meeting_context_retrieval, run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory
@@ -128,6 +132,12 @@ backend/
         company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(path) 조회
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
     systems/
+      group/                         Group agent system (SYSTEM = "group") — `uvicorn app.systems.group.app:app --port 8001`
+        app.py                       FastAPI: /api/health, /api/agents/group-super/run (NDJSON), /api/events (SSE)
+        registry.py                  Group의 CAPABILITIES: subsidiary_review(Skill) · request_k_electronics_review(Tool)
+        agents/group_super.py        그룹 슈퍼에이전트: AGENT_ID · IDENTITY + Registry (Super core)
+        skills/subsidiary_review.py  계열사 검토 요청(A2A)과 그룹 판단 지침
+        tools/request_k_electronics_review.py  A2A client Tool: a2a_start → K /api/a2a/run (HTTP) → K lifecycle relay(관찰용) → 최종 응답만 반환 → a2a_end
       k_electronics/                 K Electronics agent system (SYSTEM = "k_electronics", DATA_DIR)
         app.py                       FastAPI: /api/health, /api/a2a/run (= /api/k-super/run, A2A 수신), /api/agents/{k-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE 관찰 채널)
         registry.py                  이 system의 CAPABILITIES와 allowed_agents (권한의 source of truth), skills_for / tools_for
@@ -207,7 +217,7 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
   어떤 항목을 먼저 보고 어떤 우려와 조건을 앞세우는지가 달라집니다.
 - 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 자기 system의 `registry.py`에서
   `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
-- Step 7 이후: K Super의 실제 Step 6 응답을 A2A 응답으로 Group Super에게 넘기는 부분은 아직 mock입니다 (`scenarioEvents.ts`의 `session_close` 고정 문장).
+- Step 1·2·7·8의 backend(Group Super가 A2A로 K에 요청하고 그룹 판단을 씀)는 Group system(:8001)에 구현되어 있지만, 현재 frontend scenario는 아직 K의 `/api/k-super/run`에 상수 요청문을 직접 보내고 Step 7·8을 mock으로 재생합니다 (Phase 7에서 교체).
 
 ### 시나리오 로직과 그래프 렌더링 분리
 

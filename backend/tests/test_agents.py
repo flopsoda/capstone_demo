@@ -275,3 +275,46 @@ def test_k_super_direct_chat_delegates_for_a_real_review():
         events = [json.loads(line) for line in res.iter_lines() if line.strip()]
     assert [e["to"] for e in events if e["type"] == "delegation_start"] == ["meeting"], events
     assert events[-1]["type"] == "done"
+
+
+def test_group_super_asks_k_electronics_over_a2a_and_writes_the_group_judgment(monkeypatch):
+    """Both systems with the real LLM; the Group tool reaches the K app in-process through its A2A surface."""
+    from fastapi.testclient import TestClient
+
+    from app.systems.group.app import app as group_app
+    from app.systems.group.tools import request_k_electronics_review as a2a_tool
+    from app.systems.k_electronics.app import app as k_app
+
+    monkeypatch.setattr(a2a_tool, "make_client", lambda: TestClient(k_app))
+    request = (
+        "K전자가 검토 중인 뉴로엣지 인수안을 확인해줘. 최근 리스크와 지난 내부 검토 내용을 반영해서 "
+        "그룹 투자심의에서 본실사 진입을 승인할지 판단해."
+    )
+    with TestClient(group_app).stream("POST", "/api/agents/group-super/run", json={"request": request}) as res:
+        assert res.status_code == 200, res.text
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    types = [e["type"] for e in events]
+    assert "error" not in types, events
+    assert types[-1] == "done"
+    a2a = [e for e in events if e["type"] == "a2a_start"]
+    assert len(a2a) == 1 and "뉴로엣지" in a2a[0]["request"], a2a
+    # K's own delegations are visible as relayed observation events, in K's order.
+    assert [e["to"] for e in events if e["type"] == "delegation_start"] == ["meeting", "news", "advisory"], events
+    assert all(e.get("relayed") for e in events if e["system"] == "k_electronics")
+    a2a_end = next(e for e in events if e["type"] == "a2a_end")
+    final = next(e for e in events if e["type"] == "agent_end" and e["agent"] == "group_super")
+    assert a2a_end["response"] and final["response"]
+    assert "본실사" in final["response"] or "승인" in final["response"], final["response"]
+
+
+def test_group_super_direct_small_talk_does_not_call_a2a():
+    from fastapi.testclient import TestClient
+
+    from app.systems.group.app import app as group_app
+
+    with TestClient(group_app).stream("POST", "/api/agents/group-super/run", json={"request": "안녕? 너는 무슨 일을 해?"}) as res:
+        assert res.status_code == 200, res.text
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    types = [e["type"] for e in events]
+    assert "error" not in types and "a2a_start" not in types, events
+    assert types[-1] == "done"

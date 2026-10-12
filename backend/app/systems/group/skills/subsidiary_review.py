@@ -1,0 +1,20 @@
+"""subsidiary_review — how the Group Super Agent gets a subsidiary's review through A2A
+and turns it into a group-level judgment."""
+
+from __future__ import annotations
+
+from ....runtime.capabilities import Skill
+
+SUBSIDIARY_REVIEW = Skill(
+    name="subsidiary_review",
+    description="계열사 차원의 검토가 필요한 요청을 계열사 슈퍼에이전트에게 A2A로 요청하고, 그 결과로 그룹 차원의 판단을 내리는 방법.",
+    instructions="""\
+- 요청을 읽고 어떤 판단 근거가 필요한지 정한다. 직접 분석하거나 답을 지어내지 않는다. 데이터나 기록에 근거해야 하는 항목은 반드시 등록된 Tool로 확인한다.
+- 계열사 내부 자료(그 계열사의 회의 기록, 그 계열사가 검토 중인 인수안·투자안, 계열사가 확인한 외부 리스크)나 계열사 차원의 판단이 필요한 항목은
+  등록된 A2A 요청 Tool로 해당 계열사 슈퍼에이전트에게 검토를 요청한다. 어떤 Tool이 어떤 계열사·업무를 담당하는지는 Tool의 설명을 따른다.
+- A2A 요청문은 계열사 슈퍼에이전트가 바로 수행할 수 있도록 쓴다: 대상 기업명, 검토 목적, 포함해야 할 항목(예: 과거 경영회의 결정사항, 최근 외부 리스크,
+  재무 및 전략적 인수 타당성, 본실사 진입 여부)을 명시한다. 한국어로 작성한다.
+- 한 번에 하나의 Tool만 호출하고 결과를 받은 뒤 다시 판단한다. 같은 상대에게 같은 요청을 반복하지 않는다.
+- 필요한 결과를 모두 받았으면 Tool을 호출하지 않고 그룹 차원의 최종 판단을 작성한다: 계열사 검토 결과의 핵심(권고, 조건, 리스크)을 요약하고,
+  요청이 묻는 판단(예: 그룹 투자심의에서 본실사 진입을 승인할지)과 그 조건을 분명히 밝힌다. 받은 결과에 없는 사실을 추가하지 않는다.""",
+)

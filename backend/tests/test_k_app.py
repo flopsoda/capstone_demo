@@ -63,7 +63,7 @@ def test_a2a_inbound_rejects_an_answer_without_delegation(client):
     c = client([AIMessage("제가 보기엔 진행해도 됩니다.")])
     with c.stream("POST", "/api/a2a/run", json={"request": "뉴로엣지 검토"}) as res:
         events = _events(res)
-    assert events[-1]["type"] == "error" and events[-1]["agent"] == "k_super" and "위임하지 않고" in events[-1]["message"]
+    assert events[-1]["type"] == "error" and events[-1]["agent"] == "k_super" and "맡기지 않고" in events[-1]["message"]
 
 
 def test_old_k_super_path_is_the_same_a2a_surface(client):
