@@ -12,10 +12,16 @@
  *   delegation_end           → session closes, delegator status text
  *   agent_end (super)        → the Super Agent's own final answer as a message (its node stays
  *                              active: handing the answer back is the next scenario step)
+ *   a2a_start                → A2A session opens (Group Super → peer Super), peer node active, A2A edge active
+ *   a2a_end                  → A2A session closes with the peer's answer as its result, peer node completed
  *   error                    → thrown by the client as LiveRunError → scenario_error
  *
- * One K Super run contains as many delegations as the model decides it needs
- * (the same mapping repeats for each one) and ends with K Super's final answer.
+ * One Super Agent run contains as many handoffs as the model decides it needs
+ * (the same mapping repeats for each one) and ends with its final answer.
+ *
+ * Backend agent ids are per system (`meeting` exists in both the Group and the
+ * K Electronics system); `resolveAgent` maps `(system, agent)` to the AgentId a
+ * surface shows them under. The default keeps ids as they are.
  */
 
 import { AGENTS, type AgentId } from "../types/agent";
@@ -189,7 +195,18 @@ const RESULT_TITLE: Partial<Record<AgentId, string>> = {
   news: "뉴스 리스크 분석",
   advisory: "M&A 예비 검토",
   k_super: "K전자 검토 결과",
+  group_meeting: "그룹 회의 맥락",
+  group_news: "그룹 뉴스 리스크 분석",
+  group_advisory: "그룹 M&A 예비 검토",
+  group_super: "그룹 최종 판단",
 };
+
+/** Maps a backend `(system, agent)` pair to the AgentId a surface shows it under. */
+export type AgentResolver = (system: string | undefined, agent: string) => string;
+
+/** The Group system's specialists get their own ids; every other id is kept. */
+export const resolveForFullGraph: AgentResolver = (system, agent) =>
+  system === "group" && (agent === "meeting" || agent === "news" || agent === "advisory") ? `group_${agent}` : agent;
 
 /** Time the final answer stays readable before its delegation session collapses (UI only). */
 const READ_MS = 4000;
@@ -204,71 +221,98 @@ const COLLAPSE_SETTLE_MS = 2600;
  * Returns a mapper that remembers who delegated to whom (needed to complete
  * the right edge when a specialist finishes). One mapper per run.
  */
-export function createAgentEventMapper() {
+export function createAgentEventMapper(resolveAgent: AgentResolver = (_system, agent) => agent) {
   const delegatorOf = new Map<AgentId, AgentId>();
   const toolArgs = new Map<string, Record<string, unknown>>();
+  const id = (ev: AgentEvent, raw: string) => resolveAgent(ev.system, raw);
 
   return function mapAgentEvent(ev: AgentEvent): ScenarioEvent[] {
     switch (ev.type) {
       case "agent_start": {
-        if (!isAgentId(ev.agent)) return [];
+        const agent = id(ev, ev.agent);
+        if (!isAgentId(agent)) return [];
         // Specialists were already lit by delegation_start (or runDirectLive); this is the model starting work.
-        return [{ type: "agent_status", agent: ev.agent, status: "요청 분석 중..." }];
+        return [{ type: "agent_status", agent, status: "요청 분석 중..." }];
       }
 
       case "delegation_start": {
-        if (!isAgentId(ev.from) || !isAgentId(ev.to)) return [];
-        delegatorOf.set(ev.to, ev.from);
+        const from = id(ev, ev.from);
+        const to = id(ev, ev.to);
+        if (!isAgentId(from) || !isAgentId(to)) return [];
+        delegatorOf.set(to, from);
         return [
-          {
-            type: "session_open",
-            communication: "delegation",
-            from: ev.from,
-            to: ev.to,
-            content: `"${ev.task}"`,
-          },
-          { type: "agent_start", agent: ev.to, from: ev.from, communication: "delegation", status: "요청 수신" },
-          { type: "agent_status", agent: ev.from, status: `${AGENTS[ev.to].shortName} 위임 중...` },
+          { type: "session_open", communication: "delegation", from, to, content: `"${ev.task}"` },
+          { type: "agent_start", agent: to, from, communication: "delegation", status: "요청 수신" },
+          { type: "agent_status", agent: from, status: `${AGENTS[to].shortName} 위임 중...` },
+        ];
+      }
+
+      case "a2a_start": {
+        // The Group's A2A Tool asks a peer system's Super Agent. The peer keeps its own id.
+        const from = id(ev, ev.from);
+        const to = ev.to;
+        if (!isAgentId(from) || !isAgentId(to)) return [];
+        delegatorOf.set(to, from);
+        return [
+          { type: "session_open", communication: "a2a", title: "A2A 요청", from, to, content: ev.request },
+          { type: "agent_start", agent: to, from, communication: "a2a", status: "A2A 요청 수신" },
+          { type: "agent_status", agent: from, status: `${AGENTS[to].shortName} A2A 요청 · 응답 대기 중` },
         ];
       }
 
       case "tool_start": {
-        if (!isAgentId(ev.agent)) return [];
-        toolArgs.set(`${ev.agent}:${ev.tool}`, ev.args);
-        return [{ type: "agent_status", agent: ev.agent, status: `${ev.tool} 실행 중`, workflow: ev.tool }];
+        const agent = id(ev, ev.agent);
+        if (!isAgentId(agent)) return [];
+        toolArgs.set(`${agent}:${ev.tool}`, ev.args);
+        return [{ type: "agent_status", agent, status: `${ev.tool} 실행 중`, workflow: ev.tool }];
       }
 
       case "tool_end": {
-        if (!isAgentId(ev.agent)) return [];
-        const args = toolArgs.get(`${ev.agent}:${ev.tool}`) ?? {};
+        const agent = id(ev, ev.agent);
+        if (!isAgentId(agent)) return [];
+        const args = toolArgs.get(`${agent}:${ev.tool}`) ?? {};
         return [
-          { type: "message", sender: ev.agent, title: ev.tool, content: toolResultBlocks(ev.tool, args, ev.result) },
-          { type: "agent_status", agent: ev.agent, status: "결과 정리 중..." },
+          { type: "message", sender: agent, title: ev.tool, content: toolResultBlocks(ev.tool, args, ev.result) },
+          { type: "agent_status", agent, status: "결과 정리 중..." },
         ];
       }
 
       case "agent_end": {
-        if (!isAgentId(ev.agent)) return [];
+        const agent = id(ev, ev.agent);
+        if (!isAgentId(agent)) return [];
         const message: ScenarioEvent = {
           type: "message",
-          sender: ev.agent,
-          title: RESULT_TITLE[ev.agent] ?? "결과",
+          sender: agent,
+          title: RESULT_TITLE[agent] ?? "결과",
           content: ev.response,
         };
-        if (AGENTS[ev.agent].kind === "super") {
-          // The Super Agent answered without another delegation: this is its final
-          // review. The node is not completed here — returning the answer to the
-          // requester (A2A response) is what completes it.
-          return [message, { type: "agent_status", agent: ev.agent, status: "검토 결과 작성 완료", delay: READ_MS }];
+        if (AGENTS[agent].kind === "super") {
+          // The Super Agent answered without another handoff: this is its final
+          // answer. The node is not completed here — returning the answer to the
+          // requester (A2A response, or the run's `done`) is what completes it.
+          return [message, { type: "agent_status", agent, status: "최종 응답 작성 완료", delay: READ_MS }];
         }
-        return [message, { type: "agent_complete", agent: ev.agent, from: delegatorOf.get(ev.agent), delay: READ_MS }];
+        return [message, { type: "agent_complete", agent, from: delegatorOf.get(agent), delay: READ_MS }];
       }
 
       case "delegation_end": {
-        if (!isAgentId(ev.from) || !isAgentId(ev.to)) return [];
+        const from = id(ev, ev.from);
+        const to = id(ev, ev.to);
+        if (!isAgentId(from) || !isAgentId(to)) return [];
         return [
           { type: "session_close", delay: COLLAPSE_SETTLE_MS },
-          { type: "agent_status", agent: ev.from, status: `${AGENTS[ev.to].shortName} 결과 수신` },
+          { type: "agent_status", agent: from, status: `${AGENTS[to].shortName} 결과 수신` },
+        ];
+      }
+
+      case "a2a_end": {
+        const from = id(ev, ev.from);
+        const to = ev.to;
+        if (!isAgentId(from) || !isAgentId(to)) return [];
+        return [
+          { type: "session_close", resultTitle: "A2A 응답", result: ev.response, delay: COLLAPSE_SETTLE_MS },
+          { type: "agent_complete", agent: to, from },
+          { type: "agent_status", agent: from, status: `${AGENTS[to].shortName} 응답 수신 · 최종 판단 중` },
         ];
       }
 

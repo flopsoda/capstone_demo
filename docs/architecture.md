@@ -406,8 +406,8 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 - `src/scenario/scenarioEvents.ts` — Step 3·4·5·6은 `live` 이벤트 하나다. Step 번호는 UI 개념으로만 남기되, backend `delegation_start`의 대상 Agent에 따라
   `LIVE_DELEGATION_STEPS`(meeting → 3, news → 4, advisory → 5)로, K Super의 `agent_end`에 `LIVE_SYNTHESIS_STEP`(6)으로 Step 표시를 올린다. backend는 Step을 모른다.
   `done`이 오면 `live` 이벤트가 끝나고 Step 7 mock(A2A 응답)이 이어진다.
-- `src/hooks/useScenarioRunner.ts` — reducer가 `nodes / edges / messages / sessions` 상태를 만든다.
-  `live` 이벤트는 실행 중 도착하는 이벤트를 **도착 순서대로 즉시 적용**한다. 이벤트의 `delay`는 상태 변경을 늦추지 않고 다음 이벤트만 보류한다.
+- `src/hooks/useScenarioRunner.ts` — reducer가 `nodes / edges / messages / sessions` 상태를 만든다 (`reducer` · `createEventQueue` export, Demo Monitor도 쓴다).
+  `live` 이벤트는 실행 중 도착하는 이벤트를 **도착 순서대로 즉시 적용**한다 (`createEventQueue`). 이벤트의 `delay`는 상태 변경을 늦추지 않고 다음 이벤트만 보류한다.
 - 실패 시 backend가 지목한 Agent 노드를 error로 표시하고 scenario를 **중단**한다. mock으로 대체하지 않는다.
 
 | backend 이벤트 | UI |
@@ -423,6 +423,20 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 
 직접 대화(Sidebar "미팅" · "뉴스" · "경영자문" 탭)는 `App.tsx`가 `LIVE_AGENT_PATHS` + `runDirectLive` + 같은 mapper로 처리한다. 전문 Agent 탭에 mock 응답 경로는 없다.
 직접 대화에서 Tool 없이 답하면 `tool_start`가 없으므로 노드에 Workflow 이름이 표시되지 않고 응답 메시지만 붙는다.
+
+### Current implementation — Demo Monitor (Phase 6, `/monitor`)
+
+테스트 · 발표용 관찰 화면이며 제품 UI의 navigation에 없다. `src/main.tsx`가 URL 경로로 화면을 고른다 (`/monitor` → `DemoMonitor`, 그 외 → 기존 `App`). 라우터 의존성은 없다.
+
+- `src/live/api.ts` `subscribeAgentEvents(url)`: backend `GET /api/events`(SSE)를 브라우저 `EventSource`로 구독한다. Vite dev proxy는 `/api` → :8000(K), `/group-api` → :8001(Group, `/api`로 rewrite).
+- `src/hooks/useDemoObserver.ts`: Group backend의 관찰 채널 하나를 구독한다. relay 덕분에 K의 lifecycle도 같은 채널에 흐른다.
+  그 system에서 시작된 run(relay되지 않은 첫 `agent_start`)이 오면 새 화면을 시작하고(요청문을 사용자 메시지로), 그 run과 `trace_id`가 같은 relayed 이벤트를 포함해 모든 이벤트를 도착 순서대로 같은 mapper · reducer에 적용한다.
+  `done`이면 root Agent completed + `scenario_complete`, `error`면 backend가 지목한 Agent로 `scenario_error`(relay된 K의 오류가 먼저 오면 그것을 쓴다). 아무것도 시작하지 않는다.
+- `src/monitor/steps.ts`: Step 1~8 해석(11장 8번 표). backend에는 Step이 없다.
+- `src/live/agentEvents.ts`의 mapper는 `a2a_start`(A2A 세션 열림 · 상대 Super 노드 active · A2A edge) / `a2a_end`(세션 닫힘, result = 상대의 최종 응답, 상대 노드 completed)를 알고,
+  `resolveAgent(system, agent)` 옵션으로 backend id를 화면의 `AgentId`로 바꾼다. 전체 그래프에서는 Group system의 `meeting` / `news` / `advisory`가 `group_meeting` / `group_news` / `group_advisory`가 된다 (`resolveForFullGraph`).
+- `src/types/agent.ts`: `AgentId`에 `group_meeting` · `group_news` · `group_advisory` 추가. 그래프는 `GraphUniverse`(노드 · 좌표 · pool)를 받으며 `DEFAULT_UNIVERSE`(기존 6노드, `App`)와 `FULL_UNIVERSE`(9노드 · pool 둘, Monitor)가 있다.
+- 검증: headless Chromium으로 `/monitor`를 열고 curl로 Group에 요청을 보내면 Step 1 → 8이 실제 이벤트로만 전진하고, Group 회장 · Group Super · K Super · K Specialist 3개가 completed, 호출되지 않은 Group Specialist는 idle로 남는다. 기존 `/` 데모도 그대로 Step 8까지 재생된다.
 
 ---
 
@@ -632,7 +646,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | 4 | K Super의 두 표면: A2A 수신(`a2a`) · 직접 채팅(`direct`) | 완료 |
 | 5a | Group system: Group Super + A2A client Tool + Group app | 완료 |
 | 5b | Group Specialist 3개 + Group 데이터 + Group Super의 `delegate_to_*` | 완료 |
-| 6 | Demo Monitor | 예정 |
+| 6 | Demo Monitor | 완료 |
 | 7 | 제품 UI(Group · K), mock scenario 제거 | 예정 |
 | 8 | 정리 · 문서 · (선택) K UI 외부 실행 표시 | 예정 |
 

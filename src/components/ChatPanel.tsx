@@ -5,7 +5,7 @@ import { ActivityCard } from "./ActivityCard";
 import { AssistantMessage, UserMessage } from "./ChatMessage";
 import { ComparisonCard } from "./ComparisonCard";
 import { SessionCard } from "./SessionCard";
-import { CHAT_HEADERS } from "./chatHeaders";
+import { CHAT_HEADERS, type ChatHeaderInfo } from "./chatHeaders";
 
 interface ChatPanelProps {
   tab: ChatTabId;
@@ -13,6 +13,10 @@ interface ChatPanelProps {
   /** True while a scenario or mock reply is in progress. */
   busy: boolean;
   onSend: (text: string) => void;
+  /** Replaces the tab's header text (e.g. an observer view). */
+  header?: ChatHeaderInfo;
+  /** Transcript only: no input box (observer views). */
+  readOnly?: boolean;
   /** Optional one-click example request shown when the chat is empty. */
   samplePrompt?: string;
   /** Sub-sessions referenced by `session` items. */
@@ -26,11 +30,13 @@ export function ChatPanel({
   items,
   busy,
   onSend,
+  header: headerOverride,
+  readOnly = false,
   samplePrompt,
   sessions = {},
   onOpenSessions,
 }: ChatPanelProps) {
-  const header = CHAT_HEADERS[tab];
+  const header = headerOverride ?? CHAT_HEADERS[tab];
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -128,6 +134,7 @@ export function ChatPanel({
         )}
       </div>
 
+      {!readOnly && (
       <div className="chat__input">
         <textarea
           value={draft}
@@ -146,6 +153,7 @@ export function ChatPanel({
           전송
         </button>
       </div>
+      )}
     </section>
   );
 }

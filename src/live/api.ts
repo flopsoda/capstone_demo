@@ -7,16 +7,34 @@
 import { AGENTS, type AgentId } from "../types/agent";
 import { LiveRunError } from "../types/scenario";
 
-/** Lifecycle events emitted by the backend (backend/app/events.py). */
-export type AgentEvent =
-  | { type: "agent_start"; agent: string; request: string }
-  | { type: "delegation_start"; from: string; to: string; task: string }
-  | { type: "tool_start"; agent: string; tool: string; args: Record<string, unknown> }
-  | { type: "tool_end"; agent: string; tool: string; result: unknown }
-  | { type: "agent_end"; agent: string; response: string }
-  | { type: "delegation_end"; from: string; to: string; response: string }
-  | { type: "error"; agent: string; message: string }
-  | { type: "done" };
+/**
+ * Run identity the backend stamps on every event (backend/app/runtime/events.py).
+ * `system` is the agent system that emitted it; `relayed` marks a peer
+ * system's event that the Group's A2A Tool re-emitted for observation.
+ */
+export interface EventStamp {
+  run_id?: string;
+  system?: string;
+  origin?: "direct" | "a2a" | string;
+  trace_id?: string;
+  caller?: string;
+  relayed?: boolean;
+}
+
+/** Lifecycle events emitted by the backend (backend/app/runtime/events.py). */
+export type AgentEvent = EventStamp &
+  (
+    | { type: "agent_start"; agent: string; request: string }
+    | { type: "delegation_start"; from: string; to: string; task: string }
+    | { type: "a2a_start"; from: string; to: string; request: string }
+    | { type: "tool_start"; agent: string; tool: string; args: Record<string, unknown> }
+    | { type: "tool_end"; agent: string; tool: string; result: unknown }
+    | { type: "agent_end"; agent: string; response: string }
+    | { type: "delegation_end"; from: string; to: string; response: string }
+    | { type: "a2a_end"; from: string; to: string; response: string }
+    | { type: "error"; agent: string; message: string }
+    | { type: "done" }
+  );
 
 export function isAgentId(id: string): id is AgentId {
   return id in AGENTS;
@@ -86,7 +104,37 @@ export async function streamAgentRun(
   if (!finished) throw new Error("Agent backend 스트림이 완료 신호 없이 종료되었습니다.");
 }
 
+/**
+ * Subscribes to a backend's observer channel (GET /api/events, Server-Sent
+ * Events). Every event the process emits arrives here, whoever started the
+ * run — including runs started by another system's A2A request. Returns the
+ * unsubscribe function. The browser's EventSource reconnects by itself.
+ */
+export function subscribeAgentEvents(
+  url: string,
+  onEvent: (event: AgentEvent) => void,
+  onStatus?: (connected: boolean) => void,
+): () => void {
+  const source = new EventSource(url);
+  source.onopen = () => onStatus?.(true);
+  source.onerror = () => onStatus?.(false);
+  source.onmessage = (message) => {
+    try {
+      onEvent(JSON.parse(message.data) as AgentEvent);
+    } catch {
+      // keep-alive comments never reach onmessage; a malformed line is ignored
+    }
+  };
+  return () => source.close();
+}
+
+/* K Electronics backend (Vite proxy: /api → :8000) */
 export const K_SUPER_RUN_PATH = "/api/k-super/run";
 export const MEETING_AGENT_RUN_PATH = "/api/agents/meeting/run";
 export const NEWS_AGENT_RUN_PATH = "/api/agents/news/run";
 export const ADVISORY_AGENT_RUN_PATH = "/api/agents/advisory/run";
+export const K_EVENTS_PATH = "/api/events";
+
+/* Group backend (Vite proxy: /group-api → :8001/api) */
+export const GROUP_SUPER_RUN_PATH = "/group-api/agents/group-super/run";
+export const GROUP_EVENTS_PATH = "/group-api/events";

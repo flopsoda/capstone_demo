@@ -1,6 +1,15 @@
+/**
+ * Agent ids as the UI knows them. Each backend system names its own
+ * specialists `meeting` / `news` / `advisory`; the Group system's ones are
+ * shown here under `group_*` so both systems' agents fit one graph (the
+ * mapper resolves backend `(system, agent)` → AgentId per surface).
+ */
 export type AgentId =
   | "chairman"
   | "group_super"
+  | "group_meeting"
+  | "group_news"
+  | "group_advisory"
   | "k_super"
   | "advisory"
   | "news"
@@ -44,6 +53,27 @@ export const AGENTS: Record<AgentId, AgentMeta> = {
     shortName: "그룹 슈퍼에이전트",
     role: "슈퍼에이전트 · 그룹",
     kind: "super",
+  },
+  group_meeting: {
+    id: "group_meeting",
+    name: "그룹 미팅 에이전트",
+    shortName: "그룹 미팅",
+    role: "그룹 회의 기록",
+    kind: "shared",
+  },
+  group_news: {
+    id: "group_news",
+    name: "그룹 뉴스 에이전트",
+    shortName: "그룹 뉴스",
+    role: "그룹 뉴스 · 리스크",
+    kind: "shared",
+  },
+  group_advisory: {
+    id: "group_advisory",
+    name: "그룹 경영자문 에이전트",
+    shortName: "그룹 경영자문",
+    role: "그룹 경영 · 전략",
+    kind: "shared",
   },
   k_super: {
     id: "k_super",
@@ -91,6 +121,11 @@ export const TOPOLOGY: TopologyEdge[] = [
   // User request / final report (rendered neutral, no label)
   { id: "chairman-group", from: "chairman", to: "group_super", communication: "delegation" },
 
+  // Internal agent delegation inside the Group
+  { id: "group-meeting", from: "group_super", to: "group_meeting", communication: "delegation" },
+  { id: "group-news", from: "group_super", to: "group_news", communication: "delegation" },
+  { id: "group-advisory", from: "group_super", to: "group_advisory", communication: "delegation" },
+
   // Super Agent ↔ Super Agent
   { id: "group-k", from: "group_super", to: "k_super", communication: "a2a" },
 
@@ -100,14 +135,53 @@ export const TOPOLOGY: TopologyEdge[] = [
   { id: "k-advisory", from: "k_super", to: "advisory", communication: "delegation" },
 ];
 
-/** Fixed layout positions for the pipeline graph. */
-export const NODE_POSITIONS: Record<AgentId, { x: number; y: number }> = {
-  chairman: { x: 314, y: 10 },
-  group_super: { x: 314, y: 140 },
-  k_super: { x: 314, y: 290 },
-  meeting: { x: 40, y: 460 },
-  news: { x: 314, y: 460 },
-  advisory: { x: 588, y: 460 },
+export interface GraphPool {
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Which agents a graph shows, where, and the backdrops behind specialist rows. */
+export interface GraphUniverse {
+  agents: AgentId[];
+  positions: Partial<Record<AgentId, { x: number; y: number }>>;
+  pools: GraphPool[];
+}
+
+/** The K Electronics-centred graph of the original demo (Chairman → Group Super → K Super → K specialists). */
+export const DEFAULT_UNIVERSE: GraphUniverse = {
+  agents: ["chairman", "group_super", "k_super", "meeting", "news", "advisory"],
+  positions: {
+    chairman: { x: 314, y: 10 },
+    group_super: { x: 314, y: 140 },
+    k_super: { x: 314, y: 290 },
+    meeting: { x: 40, y: 460 },
+    news: { x: 314, y: 460 },
+    advisory: { x: 588, y: 460 },
+  },
+  pools: [{ label: "K전자 · 전문가 에이전트", x: 20, y: 428, width: 800, height: 150 }],
+};
+
+/** Both agent systems side by side: the Group (left pool) and K Electronics (right pool). Used by the Demo Monitor. */
+export const FULL_UNIVERSE: GraphUniverse = {
+  agents: ["chairman", "group_super", "group_meeting", "group_news", "group_advisory", "k_super", "meeting", "news", "advisory"],
+  positions: {
+    chairman: { x: 588, y: 10 },
+    group_super: { x: 588, y: 150 },
+    k_super: { x: 862, y: 300 },
+    group_meeting: { x: 40, y: 460 },
+    group_news: { x: 314, y: 460 },
+    group_advisory: { x: 588, y: 460 },
+    meeting: { x: 880, y: 460 },
+    news: { x: 1154, y: 460 },
+    advisory: { x: 1428, y: 460 },
+  },
+  pools: [
+    { label: "그룹 · 전문가 에이전트", x: 20, y: 428, width: 800, height: 150 },
+    { label: "K전자 · 전문가 에이전트", x: 860, y: 428, width: 800, height: 150 },
+  ],
 };
 
 /** Returns the topology edge connecting two agents and the direction of travel. */

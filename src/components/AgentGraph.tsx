@@ -13,11 +13,12 @@ import "@xyflow/react/dist/style.css";
 
 import {
   AGENTS,
-  NODE_POSITIONS,
+  DEFAULT_UNIVERSE,
   TOPOLOGY,
   type AgentId,
   type CommunicationType,
   type EdgeState,
+  type GraphUniverse,
 } from "../types/agent";
 import type { EdgeRuntime, NodeRuntime } from "../types/scenario";
 import { AgentNode, type AgentFlowNode } from "./AgentNode";
@@ -87,32 +88,34 @@ interface AgentGraphProps {
   edges: Record<string, EdgeRuntime>;
   /** Agent currently selected in the sidebar (shown as selected, not active). */
   selectedAgent?: AgentId;
+  /** Which agents to draw and where. Defaults to the original K Electronics-centred graph. */
+  universe?: GraphUniverse;
 }
 
-export function AgentGraph({ nodes, edges, selectedAgent }: AgentGraphProps) {
+export function AgentGraph({ nodes, edges, selectedAgent, universe = DEFAULT_UNIVERSE }: AgentGraphProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   const flowNodes = useMemo<Node[]>(() => {
-    const pool: PoolNode = {
-      id: "pool",
+    const pools: PoolNode[] = universe.pools.map((p, i) => ({
+      id: `pool-${i}`,
       type: "pool",
-      position: { x: 20, y: 428 },
-      data: { label: "K전자 · 전문가 에이전트" },
+      position: { x: p.x, y: p.y },
+      data: { label: p.label },
       draggable: false,
       selectable: false,
       connectable: false,
       focusable: false,
       zIndex: -1,
-      style: { width: 800, height: 150 },
-    };
+      style: { width: p.width, height: p.height },
+    }));
 
-    const agentNodes: AgentFlowNode[] = (Object.keys(AGENTS) as AgentId[]).map((id) => {
+    const agentNodes: AgentFlowNode[] = universe.agents.map((id) => {
       const meta = AGENTS[id];
       const rt = nodes[id];
       return {
         id,
         type: "agent",
-        position: NODE_POSITIONS[id],
+        position: universe.positions[id] ?? { x: 0, y: 0 },
         draggable: false,
         selectable: false,
         connectable: false,
@@ -131,12 +134,12 @@ export function AgentGraph({ nodes, edges, selectedAgent }: AgentGraphProps) {
       };
     });
 
-    return [pool, ...agentNodes];
-  }, [nodes, selectedAgent]);
+    return [...pools, ...agentNodes];
+  }, [nodes, selectedAgent, universe]);
 
   const flowEdges = useMemo<Edge[]>(
     () =>
-      TOPOLOGY.map((t) => {
+      TOPOLOGY.filter((t) => universe.agents.includes(t.from) && universe.agents.includes(t.to)).map((t) => {
         const rt = edges[t.id] ?? { state: "idle", direction: "forward" };
         const forward = rt.direction === "forward";
         // Chairman ↔ CEO is the user's request/response, not an agent task.
@@ -184,7 +187,7 @@ export function AgentGraph({ nodes, edges, selectedAgent }: AgentGraphProps) {
           data: { communication: t.communication, state: rt.state },
         } satisfies Edge;
       }),
-    [edges],
+    [edges, universe],
   );
 
   return (

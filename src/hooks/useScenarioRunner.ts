@@ -269,7 +269,9 @@ function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
   }
 }
 
-function reducer(state: RunnerState, action: Action): RunnerState {
+export type RunnerAction = Action;
+
+export function reducer(state: RunnerState, action: Action): RunnerState {
   switch (action.type) {
     case "reset":
       return createInitialRunnerState();
@@ -318,6 +320,38 @@ function errorMessage(err: unknown): string {
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
+/**
+ * Applies events in arrival order. An event's `delay` holds back only the
+ * *next* one (e.g. keep a result readable before its session collapses);
+ * state itself changes the moment an event arrives. `isCurrent` lets a
+ * reset/restart drop whatever is still queued.
+ */
+export function createEventQueue(apply: (event: ScenarioEvent) => void, isCurrent: () => boolean) {
+  const pending: ScenarioEvent[] = [];
+  let draining = false;
+  let drained: Promise<void> = Promise.resolve();
+  const drain = async () => {
+    draining = true;
+    try {
+      while (pending.length > 0 && isCurrent()) {
+        const next = pending.shift()!;
+        apply(next);
+        if (next.delay) await sleep(next.delay);
+      }
+    } finally {
+      draining = false;
+    }
+  };
+  return {
+    push(event: ScenarioEvent) {
+      pending.push(event);
+      if (!draining) drained = drain();
+    },
+    /** Resolves once everything queued so far has been applied. */
+    settled: () => drained,
+  };
+}
 
 /**
  * Replays a scenario's event list on a timer. The hook is intentionally
@@ -369,28 +403,9 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
           return;
         }
 
-        // Live events are applied in arrival order. An event's `delay` only
-        // holds back the *next* one (e.g. keep a result readable before its
-        // session collapses); state itself changes when the backend says so.
-        const pending: ScenarioEvent[] = [];
-        let draining = false;
-        let drained: Promise<void> = Promise.resolve();
-        const drain = async () => {
-          draining = true;
-          try {
-            while (pending.length > 0 && isCurrent()) {
-              const next = pending.shift()!;
-              dispatch({ type: "apply", event: next });
-              if (next.delay) await sleep(next.delay);
-            }
-          } finally {
-            draining = false;
-          }
-        };
-        const emit = (event: ScenarioEvent) => {
-          pending.push(event);
-          if (!draining) drained = drain();
-        };
+        // Live events are applied in arrival order (see createEventQueue).
+        const live = createEventQueue((event) => dispatch({ type: "apply", event }), isCurrent);
+        const emit = live.push;
 
         try {
           await ev.run({ emit });
@@ -400,10 +415,10 @@ export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
           if (!isCurrent()) return;
           const agent = err instanceof LiveRunError ? err.agent : ev.agent;
           emit({ type: "scenario_error", agent, message: errorMessage(err) });
-          await drained;
+          await live.settled();
           return;
         }
-        await drained;
+        await live.settled();
         if (!isCurrent()) return;
         schedule(ev.delay ?? 0);
       };

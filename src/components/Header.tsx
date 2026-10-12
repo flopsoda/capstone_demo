@@ -1,4 +1,14 @@
-export function Header() {
+interface HeaderProps {
+  title?: string;
+  subtitle?: string;
+  badge?: string;
+}
+
+export function Header({
+  title = "경영진 AI",
+  subtitle = "멀티 에이전트 의사결정 지원 데모",
+  badge = "M&A 시나리오 데모",
+}: HeaderProps) {
   return (
     <header className="app-header">
       <div className="app-header__brand">
@@ -6,11 +16,11 @@ export function Header() {
           EA
         </div>
         <div>
-          <div className="app-header__title">경영진 AI</div>
-          <div className="app-header__subtitle">멀티 에이전트 의사결정 지원 데모</div>
+          <div className="app-header__title">{title}</div>
+          <div className="app-header__subtitle">{subtitle}</div>
         </div>
       </div>
-      <span className="badge badge--outline">M&amp;A 시나리오 데모</span>
+      <span className="badge badge--outline">{badge}</span>
     </header>
   );
 }

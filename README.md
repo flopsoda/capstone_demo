@@ -35,8 +35,13 @@ cp .env.example .env            # OLLAMA_API_KEY 입력 (https://ollama.com/sett
 
 # 2) React frontend
 npm install
-npm run dev      # http://localhost:5173  (/api → localhost:8000 proxy)
+npm run dev      # http://localhost:5173  (/api → :8000 K, /group-api → :8001 Group proxy)
 npm run build    # tsc + vite build
+
+# 3) Demo Monitor (테스트 · 발표용 관찰 창, 제품 UI 아님): http://localhost:5173/monitor
+#    Group backend의 /api/events(SSE)를 구독해 전체 Agent Graph · Step 1~8 · 협업 세션을 실제 이벤트로만 보여준다.
+#    현재 Group 실행은 curl로 띄울 수 있다 (Phase 7에서 Group UI가 담당):
+#    curl -X POST localhost:8001/api/agents/group-super/run -H 'Content-Type: application/json' -d '{"request":"K전자가 검토 중인 뉴로엣지 인수안을 확인해줘. ... 본실사 진입을 승인할지 판단해."}'
 ```
 
 backend 테스트:
@@ -90,7 +95,7 @@ Meeting Agent, News Agent, Management Advisory. K Electronics Super는 Sidebar�
 ```text
 src/
   types/
-    agent.ts           AgentId · 상태 · CommunicationType(a2a | delegation) · 토폴로지 · 좌표
+    agent.ts           AgentId(group_* 포함) · 상태 · CommunicationType(a2a | delegation) · 토폴로지 · GraphUniverse(DEFAULT 6노드 / FULL 9노드)
     scenario.ts        ScenarioEvent(live 포함) · ChatItem · MessageBlock · RunnerState
   scenario/
     mockData.ts        남은 mock Step(1–2, 7–8)용 고정 데이터 (기업명)
@@ -98,18 +103,23 @@ src/
     mnaScenario.ts     시나리오 메타 + 트리거 조건 + 예시 문장
     mockResponses.ts   Group Super 탭의 비시나리오 입력 안내문
   live/
-    api.ts             backend NDJSON 스트림 클라이언트 (POST /api/k-super/run, /api/agents/{meeting,news,advisory}/run)
-    agentEvents.ts     backend lifecycle 이벤트 → ScenarioEvent 변환 (Workflow 결과 블록: meeting / news / mna_review, K Super 최종 응답 메시지)
+    api.ts             backend NDJSON 스트림 클라이언트(POST .../run) · SSE 관찰 구독(subscribeAgentEvents, GET /api/events) · K/Group 경로 상수 · 이벤트 stamp 타입
+    agentEvents.ts     backend lifecycle 이벤트 → ScenarioEvent 변환 (delegation·a2a 세션, Workflow 결과 블록, Super 최종 응답 메시지; resolveAgent로 system별 id 해석)
+  monitor/
+    DemoMonitor.tsx    /monitor — 테스트·발표용 관찰 화면 (Group 관찰 채널 구독, 9노드 전체 그래프, Step 1~8, 협업 세션)
+    steps.ts           실제 lifecycle 이벤트 → Step 1~8 해석 (backend는 Step을 모름)
   hooks/
-    useScenarioRunner.ts  이벤트 재생 → 노드/엣지/채팅 상태. `live` 이벤트 실행 중 도착하는 이벤트를 즉시 적용.
+    useScenarioRunner.ts  이벤트 재생 → 노드/엣지/채팅 상태 (reducer · createEventQueue export). `live` 이벤트 실행 중 도착하는 이벤트를 즉시 적용.
                           runDirectLive()로 전문 Agent 단독 실행(실제 backend), apply()로 단일 이벤트 적용
+    useDemoObserver.ts    SSE 관찰 채널 → 같은 mapper·reducer (run 시작 감지, done/error 처리). 아무것도 시작하지 않음
     useCollapsePhase.ts   open → collapsing → closed 전환 (창/카드 접힘 애니메이션용)
   components/
     Header, Sidebar, ChatPanel, ChatMessage, ActivityCard, ComparisonCard(미사용),
     AgentGraph (React Flow), AgentNode, ScenarioStatus, PanelSwitch,
     SessionCard (세션을 연 요청 카드 + 결과/재생), SessionWindow (세션별 채팅창),
     SessionWindows (열린 세션 창 목록)
-  App.tsx
+  App.tsx              플랫폼 UI (현재: 단일 앱, Phase 7에서 Group / K로 분리)
+  main.tsx             URL 경로로 화면 선택 (/monitor → DemoMonitor, 그 외 → App)
 
 backend/
   app/
