@@ -27,7 +27,7 @@ export function ScenarioStatus({
         {status === "idle" ? "에이전트 파이프라인" : title}
       </span>
       <span className="scenario-status__step">
-        {status === "idle" && "그룹 슈퍼에이전트에 요청을 보내면 시나리오가 시작됩니다."}
+        {status === "idle" && "Group UI에서 그룹 슈퍼에이전트에 요청을 보내면 실행이 여기에 나타납니다."}
         {(status === "running" || status === "error") && (
           <>
             {currentStep} / {totalSteps} 단계

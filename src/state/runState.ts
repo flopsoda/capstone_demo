@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useReducer, useRef } from "react";
+/**
+ * Agent run state: the reducer that turns lifecycle-derived events
+ * (src/types/scenario.ts ScenarioEvent) into nodes / edges / transcript /
+ * sessions, and the ordered queue that applies them as they arrive. Used by
+ * the platform UIs (per chat tab) and the Demo Monitor. Nothing here is
+ * scheduled or invented: every change is an event the backend emitted.
+ */
+
 import { AGENTS, TOPOLOGY, findTopologyEdge, type AgentId } from "../types/agent";
 import {
-  LiveRunError,
   type ChatItem,
   type EdgeRuntime,
   type NodeRuntime,
   type RunnerState,
-  type Scenario,
   type ScenarioEvent,
   type Session,
 } from "../types/scenario";
-
-const DEFAULT_DELAY = 800;
 
 /* ------------------------------------------------------------------ */
 /* Initial state                                                       */
@@ -48,6 +51,7 @@ export function createInitialRunnerState(): RunnerState {
 
 type Action =
   | { type: "reset" }
+  /** Fresh state with the user's request as the first transcript item (observer views). */
   | { type: "start"; userText: string }
   | { type: "apply"; event: ScenarioEvent }
   | { type: "append_message"; item: ChatItem };
@@ -207,9 +211,6 @@ function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
         content: ev.content,
       });
 
-    case "comparison":
-      return pushItem(state, { id: nextId(), kind: "comparison", data: ev.data });
-
     case "session_open": {
       const sessionId = `session-${nextId()}`;
       const parentId = state.sessionStack[state.sessionStack.length - 1];
@@ -294,33 +295,8 @@ export function reducer(state: RunnerState, action: Action): RunnerState {
 }
 
 /* ------------------------------------------------------------------ */
-/* Hook                                                                */
+/* Ordered application of arriving events                              */
 /* ------------------------------------------------------------------ */
-
-export interface ScenarioRunner extends RunnerState {
-  totalSteps: number;
-  title: string;
-  /** Starts (or restarts) the scenario with the given user message. */
-  start: (userText: string) => void;
-  /** Stops any in-flight playback and clears graph + chat state. */
-  reset: () => void;
-  /** Adds a plain chat item without touching graph state (non-scenario replies). */
-  appendMessage: (item: ChatItem) => void;
-  /** Applies one event to graph/chat state (live backend events outside the scenario). */
-  apply: (event: ScenarioEvent) => void;
-  /**
-   * Runs a specialist agent on its own, outside the orchestrated scenario
-   * (a user talking to the agent directly). The node stays active until
-   * `task` settles; the Workflow Tool it runs arrives through backend events.
-   * Resolves after the node completes; rejects (after marking the node as
-   * failed) with the task's error. No edge is involved.
-   */
-  runDirectLive: (agent: AgentId, task: () => Promise<void>) => Promise<void>;
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
@@ -353,116 +329,5 @@ export function createEventQueue(apply: (event: ScenarioEvent) => void, isCurren
     },
     /** Resolves once everything queued so far has been applied. */
     settled: () => drained,
-  };
-}
-
-/**
- * Replays a scenario's event list on a timer. The hook is intentionally
- * agnostic of the UI: it only produces node/edge runtime state and chat items.
- * A `live` event pauses mock playback and applies the events a real agent run
- * emits as they arrive; once the run resolves the rest of the scenario
- * continues as mock.
- */
-export function useScenarioRunner(scenario: Scenario): ScenarioRunner {
-  const [state, dispatch] = useReducer(reducer, undefined, createInitialRunnerState);
-  const timerRef = useRef<number | null>(null);
-  const runIdRef = useRef(0);
-
-  const clearTimer = () => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
-  const reset = useCallback(() => {
-    runIdRef.current += 1;
-    clearTimer();
-    dispatch({ type: "reset" });
-  }, []);
-
-  const start = useCallback(
-    (userText: string) => {
-      runIdRef.current += 1;
-      const runId = runIdRef.current;
-      clearTimer();
-      dispatch({ type: "start", userText });
-
-      // Local queue: live events insert their output right after themselves.
-      const queue = [...scenario.events];
-      let index = 0;
-      const isCurrent = () => runId === runIdRef.current;
-      const schedule = (delay: number) => {
-        timerRef.current = window.setTimeout(tick, delay);
-      };
-
-      const tick = async () => {
-        if (!isCurrent() || index >= queue.length) return;
-        const ev = queue[index++];
-
-        if (ev.type !== "live") {
-          dispatch({ type: "apply", event: ev });
-          schedule(ev.delay ?? DEFAULT_DELAY);
-          return;
-        }
-
-        // Live events are applied in arrival order (see createEventQueue).
-        const live = createEventQueue((event) => dispatch({ type: "apply", event }), isCurrent);
-        const emit = live.push;
-
-        try {
-          await ev.run({ emit });
-        } catch (err) {
-          // A reset/restart during the call wins; otherwise stop the scenario
-          // at the agent the backend blamed (or the live step's own agent).
-          if (!isCurrent()) return;
-          const agent = err instanceof LiveRunError ? err.agent : ev.agent;
-          emit({ type: "scenario_error", agent, message: errorMessage(err) });
-          await live.settled();
-          return;
-        }
-        await live.settled();
-        if (!isCurrent()) return;
-        schedule(ev.delay ?? 0);
-      };
-
-      schedule(400);
-    },
-    [scenario],
-  );
-
-  const appendMessage = useCallback((item: ChatItem) => {
-    dispatch({ type: "append_message", item });
-  }, []);
-
-  const apply = useCallback((event: ScenarioEvent) => {
-    dispatch({ type: "apply", event });
-  }, []);
-
-  const runDirectLive = useCallback(
-    async (agent: AgentId, task: () => Promise<void>) => {
-      dispatch({ type: "apply", event: { type: "agent_start", agent, status: "분석 중..." } });
-      try {
-        await task();
-      } catch (err) {
-        dispatch({ type: "apply", event: { type: "agent_error", agent } });
-        throw err;
-      }
-      dispatch({ type: "apply", event: { type: "agent_complete", agent } });
-    },
-    [],
-  );
-
-  useEffect(() => () => clearTimer(), []);
-
-  return {
-    ...state,
-    totalSteps: scenario.totalSteps,
-    title: scenario.title,
-    start,
-    reset,
-    appendMessage,
-    apply,
-    runDirectLive,
   };
 }

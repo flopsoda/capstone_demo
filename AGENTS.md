@@ -9,20 +9,20 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 ## 한 줄 요약
 
 대기업 경영진용 **Multi-Agent Decision Support System prototype**이다.
-`Group Super ⇅(A2A) K Electronics Super →(delegation) Meeting / News / Advisory Agent → Workflow Tool` 구조를,
-고정된 8-step NeuroEdge M&A demo에서 **한 Step씩 mock → real로 교체**하며 만들고 있다.
-현재 Step 3·4·5·6이 real이다 (한 번의 K Super 실행이 필요한 전문 Agent에게 순차 위임한 뒤 스스로 최종 검토 결과를 쓴다). 상태 표는 `docs/architecture.md` 8장.
+같은 플랫폼 runtime 위의 독립된 Agent System 둘(Group `:8001`, K Electronics `:8000`)이 A2A(HTTP)로만 통신한다:
+`User → Group Super →(delegation) 그룹 Specialist | →(A2A) K Super →(delegation) Meeting / News / Advisory → Workflow Tool`.
+제품 UI는 `/group` · `/k`(탭 4개 직접 채팅 + 협업 세션창), 테스트·발표용 Demo Monitor는 `/monitor`(그래프 · Step 1~8). NeuroEdge M&A demo의 Step 1~8은 전부 real이다. 상태 표는 `docs/architecture.md` 8장·11장.
 
 ## 작업 전
 
 - 작업 범위를 먼저 확인한다. "사용자가 요청한 Step / 기능"이 범위다.
-- 기존 코드를 먼저 읽는다. 특히 `backend/app/runtime/`, `backend/app/library/`, `backend/app/systems/<system>/`, `src/live/`, `src/scenario/scenarioEvents.ts`, `src/hooks/useScenarioRunner.ts`.
+- 기존 코드를 먼저 읽는다. 특히 `backend/app/runtime/`, `backend/app/library/`, `backend/app/systems/<system>/`, `src/live/`, `src/state/runState.ts`, `src/platform/`, `src/monitor/`.
 - `docs/architecture.md`의 "Current implementation"과 "Target architecture"를 구분해서 이해한다. 목표 구조를 이미 구현된 것처럼 가정하지 않는다.
 
 ## 범위 관리
 
-- **요청받은 Step만 구현한다.** 미래 Step(News, Advisory, 종합, A2A 등)을 임의로 선행 구현하지 않는다.
-- 한 Step을 real로 바꿀 때 나머지 mock Step과 기존 UI / scenario shell은 그대로 둔다. mock을 한꺼번에 지우지 않는다.
+- **요청받은 기능만 구현한다.** 다음 단계에 필요할 것 같은 기능을 임의로 선행 구현하지 않는다.
+- 한 기능을 바꿀 때 나머지 system · UI는 그대로 둔다. 동작 변화 없는 정비와 기능 추가를 한 커밋에 섞지 않는다.
 - 요청받지 않은 기능, 리팩터링, dependency 추가, 새 framework 도입을 같이 하지 않는다.
 - architecture 변경이 필요하다고 판단되면 **조용히 바꾸지 말고 명확히 알린다.** `docs/architecture.md` 12장(열린 결정 사항)에 해당하는 문제라면 결정을 요청한다.
 
@@ -36,17 +36,18 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
   - Workflow Tool은 Agent가 아니다. 내부의 결정적 절차를 Agent-visible Tool 여러 개로 쪼개지 않는다.
   - K Super → Specialist는 **delegation**(`delegation_start/end`), Group Super ⇅ K Super는 **A2A**다. Specialist 호출을 A2A라고 부르지 않는다.
 - **Agent state는 message history 중심이다.** `MessagesState`를 쓰고, `meeting_result` 같은 Agent별 결과 field를 추가하지 않는다. 공유 구조가 꼭 필요하면 범용 구조를 제안하고 결정을 받는다.
-- **Agent 경계를 유지한다.** 하위 Agent의 내부 메시지 / tool call을 상위 Agent history에 병합하지 않는다. 최종 결과만 전달한다.
+- **Agent 경계를 유지한다.** 하위 Agent의 내부 메시지 / tool call을 상위 Agent history에 병합하지 않는다. 최종 결과만 전달한다. A2A도 같다: 상대 system의 lifecycle은 관찰용으로 relay(`relayed: true`)만 하고 Agent에게는 최종 응답 텍스트만 준다.
 - **Workflow Tool이 데이터 경계다.** Agent가 fixture / DB를 직접 읽지 않는다.
 - **Agent system 경계를 지킨다.** `runtime/`은 `library/`·`systems/`를, `library/`는 `systems/`를, 한 system은 다른 system을 import하지 않는다 (`tests/test_boundaries.py`). system 간 업무는 A2A(HTTP)로만 오간다. 같은 모양의 Workflow / Data가 필요하면 라이브러리 factory에 자기 데이터를 바인딩한다.
 
 ## Backend ↔ Frontend
 
-- **Backend 실행이 source of truth다.** Agent 코드는 실제 lifecycle 시점에 `emit()`한다.
-- Frontend는 받은 이벤트만 상태로 바꾼다. Tool 이름, 위임 문장, 결과, 응답을 frontend에서 추측하거나 꾸며내지 않는다.
-- 실패 시 mock으로 대체하지 않는다. backend가 지목한 Agent를 error로 표시하고 scenario를 멈춘다.
-- 새 Agent / Tool을 추가할 때 **기존 이벤트 종류와 변환 경로**(`events.py` → `src/live/api.ts` → `src/live/agentEvents.ts` → reducer)를 재사용한다. 새 이벤트 타입이나 별도 채널을 만들기 전에 기존 것으로 표현할 수 없는지 확인한다.
-- backend `AGENT_ID`와 frontend `AgentId` 문자열은 같아야 한다.
+- **Backend 실행이 source of truth다.** Agent 코드는 실제 lifecycle 시점에 `emit()`한다. 요청자는 NDJSON 스트림으로, 관찰자(Demo Monitor 등)는 `GET /api/events`(SSE)로 같은 이벤트를 받는다.
+- Frontend는 받은 이벤트만 상태로 바꾼다. Tool 이름, 위임 · A2A 문장, 결과, 응답을 frontend에서 추측하거나 꾸며내지 않는다. Step 번호는 Demo Monitor가 이벤트에서 해석할 뿐 backend · 제품 UI에는 없다.
+- 실패 시 mock으로 대체하지 않는다. backend가 지목한 Agent를 error로 표시하고 실행을 멈춘다.
+- 제품 UI(`src/platform/`)와 Demo Monitor(`src/monitor/`)의 책임을 섞지 않는다. 그래프 · Step은 Monitor에만 둔다.
+- 새 Agent / Tool을 추가할 때 **기존 이벤트 종류와 변환 경로**(`runtime/events.py` → `src/live/api.ts` → `src/live/agentEvents.ts` → `src/state/runState.ts`)를 재사용한다. 새 이벤트 타입이나 별도 채널을 만들기 전에 기존 것으로 표현할 수 없는지 확인한다.
+- backend `AGENT_ID`와 frontend `AgentId` 문자열은 같아야 한다. 두 system이 같은 Specialist id를 쓰므로 화면용 id는 `resolveAgent(system, agent)`로 정한다 (Group의 Specialist는 `group_*`).
 
 ## Capability 추가 시
 
@@ -65,12 +66,12 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 ## 구현 후
 
 - 관련 테스트를 실행한다.
-  - backend: `cd backend && .venv/bin/python -m pytest` (`tests/test_agents.py`는 `OLLAMA_API_KEY`가 있어야 실행된다)
+  - backend: `cd backend && .venv/bin/python -m pytest` (`tests/test_agents.py`는 `OLLAMA_API_KEY`가 있어야 실행된다). import 경계는 `tests/test_boundaries.py`가 지킨다.
   - frontend: `npm run build` (tsc 포함), `npm run lint`
-- 실제 실행 경로를 바꿨다면 backend + frontend를 띄워 scenario를 한 번 돌려 본다.
+- 실제 실행 경로를 바꿨다면 backend 둘(`:8000`, `:8001`) + frontend를 띄워 `/group`에서 예시 요청을 한 번 돌리고 `/monitor`가 8/8까지 가는지 본다.
 - 문서는 **적힌 사실이 틀려졌을 때** 코드와 같은 커밋에서 갱신한다. "의미있는 변화"가 아니라 "문서가 거짓이 되었는가"가 기준이다.
-  - `docs/architecture.md`: Step이 real로 바뀜 (8장·10장 표) / Agent·Workflow Tool·endpoint·이벤트 타입 추가 (3장·6장) / 12장의 열린 결정이 내려짐 (항목 제거, 본문 반영) / 새 구조적 문제·미결정 사항 발견 (12장 추가).
-  - `README.md`: Step 표, 실행 방법, 파일 구조가 바뀜.
+  - `docs/architecture.md`: 구현 상태가 바뀜 (8장·10장·11장 표) / Agent·Workflow Tool·endpoint·이벤트 타입 추가 (3장·6장) / 12장의 열린 결정이 내려짐 (항목 제거, 본문 반영) / 새 구조적 문제·미결정 사항 발견 (12장 추가).
+  - `README.md`: 구현 상태, 실행 방법, 파일 구조가 바뀜.
   - `AGENTS.md`: 규칙이 깨졌거나 현실과 맞지 않음 / 테스트·실행 명령이 바뀜. 그 외에는 손대지 않는다.
   - `CLAUDE.md`: 작업 방식 자체가 바뀔 때만. 코드 변화로는 갱신하지 않는다.
 - 결과를 사실대로 보고한다. 실패한 테스트, 건너뛴 검증, 범위에서 뺀 부분을 명시한다.

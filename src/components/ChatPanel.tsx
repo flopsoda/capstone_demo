@@ -3,7 +3,6 @@ import type { ChatTabId } from "../types/agent";
 import type { ChatItem, Session } from "../types/scenario";
 import { ActivityCard } from "./ActivityCard";
 import { AssistantMessage, UserMessage } from "./ChatMessage";
-import { ComparisonCard } from "./ComparisonCard";
 import { SessionCard } from "./SessionCard";
 import { CHAT_HEADERS, type ChatHeaderInfo } from "./chatHeaders";
 
@@ -108,8 +107,6 @@ export function ChatPanel({
                   content={item.content}
                 />
               );
-            case "comparison":
-              return <ComparisonCard key={item.id} data={item.data} />;
             case "session": {
               const session = sessions[item.sessionId];
               if (!session) return null;

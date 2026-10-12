@@ -6,7 +6,7 @@ import type { AgentId, AgentState, CommunicationType, EdgeState } from "./agent"
 
 export type BadgeTone = "high" | "medium" | "info" | "ok" | "warn";
 
-/** Lightweight structured content so mock responses render consistently. */
+/** Lightweight structured content so backend results render consistently. */
 export type MessageBlock =
   | { kind: "text"; text: string }
   | { kind: "label"; text: string }
@@ -19,21 +19,6 @@ export type MessageContent = string | MessageBlock[];
 /* ------------------------------------------------------------------ */
 /* Chat items                                                          */
 /* ------------------------------------------------------------------ */
-
-export interface ComparisonSide {
-  agent: AgentId;
-  stance: string;
-  tone: "warn" | "ok";
-  items: { k: string; v: string }[];
-  risksLabel: string;
-  risks: string[];
-}
-
-export interface ComparisonData {
-  title: string;
-  left: ComparisonSide;
-  right: ComparisonSide;
-}
 
 export type ChatItem =
   | { id: string; kind: "user"; content: string }
@@ -54,7 +39,6 @@ export type ChatItem =
       title?: string;
       content: MessageContent;
     }
-  | { id: string; kind: "comparison"; data: ComparisonData }
   /** Placeholder in the parent transcript for a sub-session (A2A / delegation). */
   | { id: string; kind: "session"; sessionId: string };
 
@@ -83,17 +67,12 @@ export interface Session {
 }
 
 /* ------------------------------------------------------------------ */
-/* Scenario events                                                     */
+/* UI events (derived from backend lifecycle events, see src/live)     */
 /* ------------------------------------------------------------------ */
 
 interface BaseEvent {
-  /** Milliseconds to wait after applying this event before the next one. */
+  /** Milliseconds to hold back the *next* event after applying this one (readability only). */
   delay?: number;
-}
-
-/** Handed to a `live` event while it runs: every real backend event is pushed through `emit`. */
-export interface LiveContext {
-  emit: (event: ScenarioEvent) => void;
 }
 
 /** Failure attributed to a specific agent by the backend (see src/live/api.ts). */
@@ -112,18 +91,7 @@ export class LiveRunError extends Error {
 }
 
 export type ScenarioEvent =
-  /**
-   * A real agent execution instead of mock playback. `run` pushes events via
-   * `ctx.emit` as the backend reports them; the runner applies each one as it
-   * arrives and continues with the next scenario event once `run` resolves.
-   * If `run` throws, the runner marks the failing agent (`LiveRunError.agent`,
-   * else `agent`) and the scenario as failed and stops.
-   */
-  | (BaseEvent & {
-      type: "live";
-      agent: AgentId;
-      run: (ctx: LiveContext) => Promise<void>;
-    })
+  /** Demo Step label (Demo Monitor only; the backends know no Steps). */
   | (BaseEvent & { type: "step"; step: number; title: string })
   | (BaseEvent & {
       type: "agent_start";
@@ -136,7 +104,7 @@ export type ScenarioEvent =
     })
   | (BaseEvent & { type: "agent_complete"; agent: AgentId; from?: AgentId })
   | (BaseEvent & { type: "agent_error"; agent: AgentId })
-  /** Stops the scenario: `agent` goes to error and `message` lands in the current transcript. */
+  /** Stops the run: `agent` goes to error, `message` lands in the current transcript, open sessions close. */
   | (BaseEvent & { type: "scenario_error"; agent: AgentId; message: string })
   | (BaseEvent & {
       type: "agent_status";
@@ -166,7 +134,6 @@ export type ScenarioEvent =
       title?: string;
       content: MessageContent;
     })
-  | (BaseEvent & { type: "comparison"; data: ComparisonData })
   /**
    * Opens a sub-session: posts the request card into the current transcript
    * and routes subsequent message/activity events into the new session.
@@ -187,17 +154,8 @@ export type ScenarioEvent =
     })
   | (BaseEvent & { type: "scenario_complete" });
 
-export interface Scenario {
-  id: string;
-  title: string;
-  totalSteps: number;
-  /** Returns true when a user message should trigger this scenario. */
-  matches: (text: string) => boolean;
-  events: ScenarioEvent[];
-}
-
 /* ------------------------------------------------------------------ */
-/* Runtime state produced by the scenario runner                       */
+/* Runtime state produced by the run reducer (src/state/runState.ts)   */
 /* ------------------------------------------------------------------ */
 
 export type ScenarioStatus = "idle" | "running" | "completed" | "error";
@@ -219,11 +177,11 @@ export interface RunnerState {
   status: ScenarioStatus;
   currentStep: number;
   stepTitle: string;
-  /** Why the scenario stopped (status === "error"). */
+  /** Why the run stopped (status === "error"). */
   error?: string;
   nodes: Record<AgentId, NodeRuntime>;
   edges: Record<string, EdgeRuntime>;
-  /** Top-level transcript (Chairman ↔ Group Super). */
+  /** Top-level transcript (user ↔ the agent being talked to). */
   messages: ChatItem[];
   sessions: Record<string, Session>;
   /** Ids of currently open sessions, innermost last. */

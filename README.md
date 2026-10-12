@@ -95,25 +95,20 @@ backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Wo
 src/
   types/
     agent.ts           AgentId(group_* 포함) · 상태 · CommunicationType(a2a | delegation) · 토폴로지 · GraphUniverse(DEFAULT 6노드 / FULL 9노드)
-    scenario.ts        ScenarioEvent(live 포함) · ChatItem · MessageBlock · RunnerState
-  scenario/
-    mockData.ts        남은 mock Step(1–2, 7–8)용 고정 데이터 (기업명)
-    scenarioEvents.ts  8 Step M&A 시나리오 이벤트 배열 (Step 3·4·5·6은 `live` 이벤트 하나, 나머지는 mock)
-    mnaScenario.ts     시나리오 메타 + 트리거 조건 + 예시 문장
-    mockResponses.ts   Group Super 탭의 비시나리오 입력 안내문
+    scenario.ts        ScenarioEvent(UI 이벤트 어휘) · ChatItem · MessageBlock · Session · RunnerState
   live/
     api.ts             backend NDJSON 스트림 클라이언트(POST .../run) · SSE 관찰 구독(subscribeAgentEvents, GET /api/events) · K/Group 경로 상수 · 이벤트 stamp 타입
     agentEvents.ts     backend lifecycle 이벤트 → ScenarioEvent 변환 (delegation·a2a 세션, Workflow 결과 블록, Super 최종 응답 메시지; resolveAgent로 system별 id 해석)
   monitor/
     DemoMonitor.tsx    /monitor — 테스트·발표용 관찰 화면 (Group 관찰 채널 구독, 9노드 전체 그래프, Step 1~8, 협업 세션)
     steps.ts           실제 lifecycle 이벤트 → Step 1~8 해석 (backend는 Step을 모름)
+  state/
+    runState.ts        reducer: 이벤트 → nodes / edges / messages / sessions 상태; createEventQueue: 도착 순서대로 즉시 적용 (delay는 다음 이벤트만 보류)
   hooks/
-    useScenarioRunner.ts  이벤트 재생 → 노드/엣지/채팅 상태 (reducer · createEventQueue export). `live` 이벤트 실행 중 도착하는 이벤트를 즉시 적용.
-                          runDirectLive()로 전문 Agent 단독 실행(실제 backend), apply()로 단일 이벤트 적용
     useDemoObserver.ts    SSE 관찰 채널 → 같은 mapper·reducer (run 시작 감지, done/error 처리). 아무것도 시작하지 않음
     useCollapsePhase.ts   open → collapsing → closed 전환 (창/카드 접힘 애니메이션용)
   components/
-    Header, Sidebar, ChatPanel, ChatMessage, ActivityCard, ComparisonCard(미사용),
+    Header, Sidebar, ChatPanel, ChatMessage, ActivityCard,
     AgentGraph (React Flow), AgentNode, ScenarioStatus, PanelSwitch,
     SessionCard (세션을 연 요청 카드 + 결과/재생), SessionWindow (세션별 채팅창),
     SessionWindows (열린 세션 창 목록)
@@ -121,8 +116,7 @@ src/
     config.ts          플랫폼별 설정: GROUP_PLATFORM / K_PLATFORM (탭 4개의 id · 라벨 · backend 경로 · 헤더 · 예시 요청, resolveAgent)
     usePlatformChats.ts  탭별 전사·세션 상태. send()가 해당 backend에 NDJSON 요청 → 같은 mapper·reducer로 적용
     PlatformApp.tsx    제품 UI: Header · Sidebar · ChatPanel · SessionWindows (그래프 · Step 없음)
-  App.tsx              옛 단일 앱 (/legacy, Phase 8에서 제거)
-  main.tsx             URL 경로로 화면 선택 (/group 기본 · /k · /monitor · /legacy)
+  main.tsx             URL 경로로 화면 선택 (/group 기본 · /k · /monitor)
 
 backend/
   app/
@@ -158,7 +152,7 @@ backend/
         tools/request_k_electronics_review.py  A2A client Tool: a2a_start → K /api/a2a/run (HTTP) → K lifecycle relay(관찰용) → 최종 응답만 반환 → a2a_end
         data/                        그룹 fixture: 그룹 투자심의·경영전략 회의, 계열사·그룹 투자 대상 뉴스, 그룹 차원 인수 후보(브라이트셀)
       k_electronics/                 K Electronics agent system (SYSTEM = "k_electronics", DATA_DIR)
-        app.py                       FastAPI: /api/health, /api/a2a/run (= /api/k-super/run, A2A 수신), /api/agents/{k-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE 관찰 채널)
+        app.py                       FastAPI: /api/health, /api/a2a/run (A2A 수신), /api/agents/{k-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE 관찰 채널)
         registry.py                  이 system의 CAPABILITIES와 allowed_agents (권한의 source of truth), skills_for / tools_for
         agents/
           k_super.py                 K전자 슈퍼에이전트: AGENT_ID · IDENTITY + Registry 위임 Tool (Super core)
@@ -237,36 +231,33 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
   어떤 항목을 먼저 보고 어떤 우려와 조건을 앞세우는지가 달라집니다.
 - 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 자기 system의 `registry.py`에서
   `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
-- Step 1·2·7·8의 backend(Group Super가 A2A로 K에 요청하고 그룹 판단을 씀)는 Group system(:8001)에 구현되어 있지만, 현재 frontend scenario는 아직 K의 `/api/k-super/run`에 상수 요청문을 직접 보내고 Step 7·8을 mock으로 재생합니다 (Phase 7에서 교체).
+- Group Super(:8001)는 요청을 보고 자기 전문 Agent 위임과 K전자 A2A 요청(`request_k_electronics_review` → K `/api/a2a/run`) 중에서 스스로 고릅니다. K의 lifecycle은 관찰용으로 Group 스트림에 relay되고, Group Super Agent 자체는 K의 최종 응답 텍스트만 받습니다.
 
-### 시나리오 로직과 그래프 렌더링 분리
+### 이벤트 처리와 렌더링 분리
 
-- `scenarioEvents.ts`에는 UI 코드가 없고, `AgentGraph.tsx`에는 시나리오 내용이 없습니다.
-- `useScenarioRunner`가 이벤트를 reducer로 `nodes` / `edges` / `messages` 상태로 변환하고,
-  그래프와 채팅은 그 상태만 읽습니다.
-- `live` 이벤트는 실행 중 `emit`으로 들어오는 ScenarioEvent를 도착 순서대로 바로 적용합니다.
-  이벤트의 `delay`는 상태 변경을 늦추지 않고 다음 이벤트만 잠시 보류합니다(결과 읽을 시간 후 세션 닫힘).
+- `src/live/agentEvents.ts`가 backend 이벤트를 UI 이벤트(아래 표)로 바꾸고, `src/state/runState.ts`의 reducer가 그것을 `nodes` / `edges` / `messages` / `sessions` 상태로 만듭니다.
+  채팅 · 세션창 · (Monitor의) 그래프는 그 상태만 읽습니다. 시나리오 내용이 UI 코드에 없고, UI 코드에 시나리오가 없습니다.
+- 이벤트는 도착 순서대로 바로 적용됩니다. 이벤트의 `delay`는 상태 변경을 늦추지 않고 다음 이벤트만 잠시 보류합니다(결과 읽을 시간 후 세션 닫힘).
   실패하면 backend가 지목한 Agent로 `scenario_error`를 적용하고 중단합니다.
 
-### 이벤트 타입
+### UI 이벤트 타입
 
 | type                | 역할                                                       |
 | ------------------- | ---------------------------------------------------------- |
-| `step`              | 진행 Step 번호 / 제목 갱신                                 |
-| `live`              | 실제 Agent 실행. 실행 중 emit되는 이벤트를 즉시 적용, 실패 시 중단 |
+| `step`              | 진행 Step 번호 / 제목 갱신 (Demo Monitor만)                |
 | `agent_start`       | 노드 active (+ `workflow` 표시) + from이 있으면 edge active |
 | `agent_complete`    | 노드 completed + edge completed                            |
 | `agent_error`       | 노드 error                                                 |
-| `scenario_error`    | 노드 error + 오류 메시지 + 시나리오 상태 `error` (중단)     |
+| `scenario_error`    | 노드 error + 오류 메시지 + 열린 세션 닫힘 + 상태 `error` (중단) |
 | `agent_status`      | 노드 status 텍스트 / 강조 변경, `workflow`로 실행 중인 Tool 표시 |
 | `edge`              | edge 상태 직접 제어 (A2A 응답 등 역방향)                   |
 | `message`           | Assistant 메시지 추가                                      |
 | `activity`          | 단발성 Activity 카드 추가                                  |
 | `session_open`      | A2A / Delegation 세션 시작. 이후 message는 이 세션으로 라우팅 |
 | `session_close`     | 가장 안쪽 세션 종료, 결과(result)를 요청 카드에 부착        |
-| `scenario_complete` | 사용된 노드 전체 completed, 완료 배지 표시                 |
+| `scenario_complete` | 사용된 노드 전체 completed, 완료 배지 표시 (Demo Monitor)  |
 
 ## 범위 밖
 
-Group Super의 실구현, A2A 프로토콜, 실제 뉴스/공시 API, RAG, Vector DB,
-실제 Meeting DB, 실제 valuation 모델, 다중 persona 토론, token streaming, 인증, 배포는 포함하지 않습니다.
+표준 A2A 프로토콜(이 레포의 A2A는 두 system 사이의 자체 약속: NDJSON lifecycle + 최종 응답), 실제 뉴스/공시 API, RAG, Vector DB,
+실제 Meeting DB, 실제 valuation 모델, 다중 persona 토론, token streaming, 인증, 배포, K UI에서 외부 A2A 실행 표시(미확정)는 포함하지 않습니다.

@@ -159,7 +159,7 @@ def test_api_streams_ndjson_events():
     from app.main import app
 
     client = TestClient(app)
-    with client.stream("POST", "/api/k-super/run", json={"request": A2A_REQUEST}) as res:
+    with client.stream("POST", "/api/a2a/run", json={"request": A2A_REQUEST, "caller": "test"}) as res:
         assert res.status_code == 200, res.text
         assert res.headers["content-type"].startswith("application/x-ndjson")
         events = [json.loads(line) for line in res.iter_lines() if line.strip()]

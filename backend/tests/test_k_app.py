@@ -66,13 +66,6 @@ def test_a2a_inbound_rejects_an_answer_without_delegation(client):
     assert events[-1]["type"] == "error" and events[-1]["agent"] == "k_super" and "맡기지 않고" in events[-1]["message"]
 
 
-def test_old_k_super_path_is_the_same_a2a_surface(client):
-    c = client([AIMessage("답")])
-    with c.stream("POST", "/api/k-super/run", json={"request": "뉴로엣지 검토"}) as res:
-        events = _events(res)
-    assert events[0]["origin"] == "a2a" and events[-1]["type"] == "error"
-
-
 def test_direct_k_super_chat_may_answer_without_delegation(client):
     c = client([AIMessage("안녕하세요, K전자 슈퍼에이전트입니다.")])
     with c.stream("POST", "/api/agents/k-super/run", json={"request": "안녕?"}) as res:

@@ -34,7 +34,6 @@ def events() -> StreamingResponse:
 
 
 @app.post("/api/a2a/run")
-@app.post("/api/k-super/run")  # older path, same A2A surface; the current frontend scenario still posts here
 def a2a_run(body: A2ARequest) -> StreamingResponse:
     """A2A inbound surface: another agent system's Super Agent hands K Super a request.
     K Super delegates to its specialists and answers; the answer is agent_end(k_super).response.

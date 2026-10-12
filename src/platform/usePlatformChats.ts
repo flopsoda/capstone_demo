@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { createEventQueue, createInitialRunnerState, reducer, type RunnerAction } from "../hooks/useScenarioRunner";
+import { createEventQueue, createInitialRunnerState, reducer, type RunnerAction } from "../state/runState";
 import { createAgentEventMapper } from "../live/agentEvents";
 import { isAgentId, streamAgentRun } from "../live/api";
 import type { ChatTabId } from "../types/agent";

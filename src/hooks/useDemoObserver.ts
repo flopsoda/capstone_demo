@@ -4,7 +4,7 @@ import { isAgentId, subscribeAgentEvents, type AgentEvent } from "../live/api";
 import { stepFor } from "../monitor/steps";
 import type { AgentId } from "../types/agent";
 import type { RunnerState } from "../types/scenario";
-import { createEventQueue, createInitialRunnerState, reducer } from "./useScenarioRunner";
+import { createEventQueue, createInitialRunnerState, reducer } from "../state/runState";
 
 export interface DemoObserver extends RunnerState {
   /** Whether the observer channel is currently open. */

@@ -231,7 +231,7 @@ export function createAgentEventMapper(resolveAgent: AgentResolver = (_system, a
       case "agent_start": {
         const agent = id(ev, ev.agent);
         if (!isAgentId(agent)) return [];
-        // Specialists were already lit by delegation_start (or runDirectLive); this is the model starting work.
+        // Specialists were already lit by delegation_start (or the chat's own root start); this is the model starting work.
         return [{ type: "agent_status", agent, status: "요청 분석 중..." }];
       }
 
