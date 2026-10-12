@@ -25,6 +25,7 @@ export interface EventStamp {
 export type AgentEvent = EventStamp &
   (
     | { type: "agent_start"; agent: string; request: string }
+    | { type: "agent_token"; agent: string; text: string }
     | { type: "delegation_start"; from: string; to: string; task: string }
     | { type: "a2a_start"; from: string; to: string; request: string }
     | { type: "tool_start"; agent: string; tool: string; args: Record<string, unknown> }

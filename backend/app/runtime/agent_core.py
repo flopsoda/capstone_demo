@@ -27,7 +27,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages.utils import message_chunk_to_message
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -99,18 +100,42 @@ def execute_tool_calls(agent: str, message: AIMessage, tools: dict[str, BaseTool
     return out
 
 
-def message_text(message: BaseMessage) -> str:
-    """Plain text of a message (models may return a list of content blocks)."""
-    content = message.content
+def _text_blocks(content: str | list) -> list[str]:
     if isinstance(content, str):
-        return content.strip()
-    parts: list[str] = []
+        return [content]
+    out: list[str] = []
     for block in content:
         if isinstance(block, str):
-            parts.append(block)
+            out.append(block)
         elif isinstance(block, dict) and block.get("type") == "text":
-            parts.append(str(block.get("text", "")))
-    return "\n".join(p for p in parts if p).strip()
+            out.append(str(block.get("text", "")))
+    return out
+
+
+def message_text(message: BaseMessage) -> str:
+    """Plain text of a message (models may return a list of content blocks)."""
+    return "\n".join(p for p in _text_blocks(message.content) if p).strip()
+
+
+def invoke_model(agent: str, model: Any, messages: Sequence[BaseMessage]) -> AIMessage:
+    """One model turn. The model's text is streamed out as `agent_token` events while
+    it is generated (so the UI can show the answer growing) and the merged message is
+    returned to the graph exactly as `invoke` would have — tool calls included.
+    A model that yields a complete AIMessage instead of chunks (test stubs) is used as is.
+    """
+    merged: AIMessageChunk | None = None
+    for chunk in model.stream(messages):
+        if not isinstance(chunk, AIMessageChunk):
+            return chunk
+        text = "".join(_text_blocks(chunk.content))
+        if text:
+            emit({"type": "agent_token", "agent": agent, "text": text})
+        merged = chunk if merged is None else merged + chunk
+    if merged is None:
+        return AIMessage(content="")
+    message = message_chunk_to_message(merged)
+    assert isinstance(message, AIMessage)
+    return message
 
 
 def tool_call_names(messages: list[BaseMessage]) -> list[str]:
@@ -156,7 +181,7 @@ def build_specialist_graph(spec: Specialist) -> CompiledStateGraph:
     def call_model(state: MessagesState, config: RunnableConfig) -> dict:
         system = f"{spec.system_prompt}\n\n{INVOCATION_CONTEXT[_invocation(config)]}"
         model = get_chat_model().bind_tools(tools)
-        response = model.invoke([SystemMessage(system), *state["messages"]])
+        response = invoke_model(spec.agent_id, model, [SystemMessage(system), *state["messages"]])
         return {"messages": [response]}
 
     def run_tools(state: MessagesState) -> dict:
@@ -244,7 +269,7 @@ def build_super_graph(spec: SuperAgent) -> CompiledStateGraph:
     def call_model(state: MessagesState, config: RunnableConfig) -> dict:
         system = f"{spec.system_prompt}\n\n{SUPER_INVOCATION_CONTEXT[_invocation(config, 'a2a')]}"
         model = get_chat_model().bind_tools(tools)
-        response = model.invoke([SystemMessage(system), *state["messages"]])
+        response = invoke_model(spec.agent_id, model, [SystemMessage(system), *state["messages"]])
         return {"messages": [response]}
 
     def run_tools(state: MessagesState) -> dict:

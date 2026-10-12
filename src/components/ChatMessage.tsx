@@ -23,12 +23,14 @@ interface AssistantMessageProps {
   sender: AgentId;
   title?: string;
   content: MessageContentType;
+  /** Still being written (token stream). */
+  streaming?: boolean;
 }
 
-export function AssistantMessage({ sender, title, content }: AssistantMessageProps) {
+export function AssistantMessage({ sender, title, content, streaming = false }: AssistantMessageProps) {
   const meta = AGENTS[sender];
   return (
-    <div className="msg msg--assistant">
+    <div className={`msg msg--assistant${streaming ? " msg--streaming" : ""}`}>
       <div className={`msg__avatar msg__avatar--${meta.kind}`} aria-hidden="true">
         {meta.shortName.slice(0, 2).toUpperCase()}
       </div>

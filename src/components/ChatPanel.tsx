@@ -94,6 +94,7 @@ export function ChatPanel({
                   sender={item.sender}
                   title={item.title}
                   content={item.content}
+                  streaming={item.streaming}
                 />
               );
             case "activity":

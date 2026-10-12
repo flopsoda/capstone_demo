@@ -35,6 +35,7 @@ export function SessionTranscript({ session, sessions, onOpenSessions }: Transcr
                 sender={item.sender}
                 title={item.title}
                 content={item.content}
+                streaming={item.streaming}
               />
             );
           case "activity":

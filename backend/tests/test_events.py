@@ -114,3 +114,38 @@ def test_llm_reads_the_backend_dotenv():
     from app.runtime import llm
 
     assert llm.ENV_PATH == Path(__file__).resolve().parent.parent / ".env"
+
+
+def test_observer_stream_ends_when_the_app_shuts_down():
+    import threading
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.runtime.api import sse_events, shutdown_signal
+    from app.runtime.events import EventHub
+
+    hub = EventHub()
+    app = FastAPI()
+    stop = shutdown_signal(app)
+
+    @app.get("/events")
+    def events():
+        return sse_events(hub, stop=stop)
+
+    received: list[str] = []
+    with TestClient(app) as client:  # runs the lifespan: shutdown sets `stop`
+        def read():
+            with client.stream("GET", "/events") as res:
+                for line in res.iter_lines():
+                    received.append(line)
+        t = threading.Thread(target=read, daemon=True)
+        t.start()
+        while hub.subscriber_count == 0:
+            pass
+        hub.publish({"type": "done"})
+        stop.set()  # what the lifespan does on shutdown
+        t.join(timeout=10)
+    assert not t.is_alive(), "stream did not end after shutdown"
+    assert any(line.startswith("data: ") and '"done"' in line for line in received)
+    assert hub.subscriber_count == 0

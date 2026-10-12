@@ -57,6 +57,7 @@ cd backend
 ```
 
 세션창 · 메시지 · (Monitor의) 그래프와 Step은 backend가 실행 중 보내는 lifecycle 이벤트(요청자에게는 NDJSON 스트림, 관찰자에게는 SSE)를 받는 즉시 바뀝니다.
+각 Agent의 응답은 토큰 단위로 스트리밍되어 글자가 자라는 초안으로 보이다가 최종 응답으로 확정됩니다.
 Group Super가 자기 전문 Agent에게 위임할지 K전자에 A2A로 요청할지, K Super가 어떤 전문 Agent에게 위임할지, 언제 멈추고 최종 응답을 쓸지는
 요청과 누적된 결과를 보고 매 턴 스스로 판단합니다 (등록된 Tool을 모두 호출해야 하는 규칙은 없습니다). 모든 메시지는 backend 응답 문자열 그대로입니다.
 backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Workflow Tool을 호출하지 않음, A2A 상대에 연결 불가 등) 그 시점에
@@ -215,6 +216,7 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 | backend 이벤트 (실행 시점)          | UI 상태 변화                                                   |
 | ----------------------------------- | -------------------------------------------------------------- |
 | `agent_start` (k_super)             | K전자 노드 status "요청 분석 중..."                             |
+| `agent_token`                       | 응답이 글자 단위로 자라는 초안 메시지 (caret). 최종 `agent_end` 메시지가 대체       |
 | `delegation_start` (k_super→전문)   | Step 3/4/5 표시 · 위임 세션 열림(실제 위임 문장) · 전문 노드 active · 위임 edge active |
 | `agent_start` (전문 Agent)          | 전문 노드 status "요청 분석 중..."                              |
 | `tool_start`                        | 전문 노드/세션 헤더에 실제 호출된 Workflow 이름, status "실행 중" |
@@ -251,7 +253,9 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 | `scenario_error`    | 노드 error + 오류 메시지 + 열린 세션 닫힘 + 상태 `error` (중단) |
 | `agent_status`      | 노드 status 텍스트 / 강조 변경, `workflow`로 실행 중인 Tool 표시 |
 | `edge`              | edge 상태 직접 제어 (A2A 응답 등 역방향)                   |
-| `message`           | Assistant 메시지 추가                                      |
+| `message`           | Assistant 메시지 추가 (`final`이면 같은 발신자의 스트리밍 초안을 대체) |
+| `message_delta`     | 토큰 조각: 발신자의 초안 메시지를 제자리에서 키움 (없으면 생성)  |
+| `message_commit`    | 발신자가 Tool/위임/A2A로 넘어감: 초안을 그대로 확정           |
 | `activity`          | 단발성 Activity 카드 추가                                  |
 | `session_open`      | A2A / Delegation 세션 시작. 이후 message는 이 세션으로 라우팅 |
 | `session_close`     | 가장 안쪽 세션 종료, 결과(result)를 요청 카드에 부착        |
@@ -260,4 +264,4 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 ## 범위 밖
 
 표준 A2A 프로토콜(이 레포의 A2A는 두 system 사이의 자체 약속: NDJSON lifecycle + 최종 응답), 실제 뉴스/공시 API, RAG, Vector DB,
-실제 Meeting DB, 실제 valuation 모델, 다중 persona 토론, token streaming, 인증, 배포, K UI에서 외부 A2A 실행 표시(미확정)는 포함하지 않습니다.
+실제 Meeting DB, 실제 valuation 모델, 다중 persona 토론, 인증, 배포, K UI에서 외부 A2A 실행 표시(미확정)는 포함하지 않습니다.

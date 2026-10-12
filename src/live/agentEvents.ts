@@ -6,6 +6,8 @@
  *   agent_start (super)      → node status text
  *   delegation_start         → delegation session opens, specialist node active, edge active
  *   agent_start (specialist) → node status text
+ *   agent_token              → the agent's answer grows in place (message_delta); the final
+ *                              agent_end message replaces that draft
  *   tool_start               → node shows the Workflow Tool it is running (session too)
  *   tool_end                 → Workflow result message in the session
  *   agent_end (specialist)   → final answer message, node completed
@@ -235,12 +237,21 @@ export function createAgentEventMapper(resolveAgent: AgentResolver = (_system, a
         return [{ type: "agent_status", agent, status: "요청 분석 중..." }];
       }
 
+      case "agent_token": {
+        const agent = id(ev, ev.agent);
+        if (!isAgentId(agent)) return [];
+        // No title while it is being written: text the model writes before a tool call is only a
+        // progress note and stays untitled; the final agent_end message brings the result title.
+        return [{ type: "message_delta", sender: agent, text: ev.text }];
+      }
+
       case "delegation_start": {
         const from = id(ev, ev.from);
         const to = id(ev, ev.to);
         if (!isAgentId(from) || !isAgentId(to)) return [];
         delegatorOf.set(to, from);
         return [
+          { type: "message_commit", sender: from },
           { type: "session_open", communication: "delegation", from, to, content: `"${ev.task}"` },
           { type: "agent_start", agent: to, from, communication: "delegation", status: "요청 수신" },
           { type: "agent_status", agent: from, status: `${AGENTS[to].shortName} 위임 중...` },
@@ -254,6 +265,7 @@ export function createAgentEventMapper(resolveAgent: AgentResolver = (_system, a
         if (!isAgentId(from) || !isAgentId(to)) return [];
         delegatorOf.set(to, from);
         return [
+          { type: "message_commit", sender: from },
           { type: "session_open", communication: "a2a", title: "A2A 요청", from, to, content: ev.request },
           { type: "agent_start", agent: to, from, communication: "a2a", status: "A2A 요청 수신" },
           { type: "agent_status", agent: from, status: `${AGENTS[to].shortName} A2A 요청 · 응답 대기 중` },
@@ -264,7 +276,10 @@ export function createAgentEventMapper(resolveAgent: AgentResolver = (_system, a
         const agent = id(ev, ev.agent);
         if (!isAgentId(agent)) return [];
         toolArgs.set(`${agent}:${ev.tool}`, ev.args);
-        return [{ type: "agent_status", agent, status: `${ev.tool} 실행 중`, workflow: ev.tool }];
+        return [
+          { type: "message_commit", sender: agent },
+          { type: "agent_status", agent, status: `${ev.tool} 실행 중`, workflow: ev.tool },
+        ];
       }
 
       case "tool_end": {
@@ -285,6 +300,7 @@ export function createAgentEventMapper(resolveAgent: AgentResolver = (_system, a
           sender: agent,
           title: RESULT_TITLE[agent] ?? "결과",
           content: ev.response,
+          final: true,
         };
         if (AGENTS[agent].kind === "super") {
           // The Super Agent answered without another handoff: this is its final

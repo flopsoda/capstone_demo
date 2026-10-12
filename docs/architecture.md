@@ -350,6 +350,7 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 | 이벤트 | payload | 발생 위치 |
 | --- | --- | --- |
 | `agent_start` | `agent, request` | `agent_core.run_super`(K Super / Group Super), `agent_core.run_specialist`(Meeting / News / Advisory) 시작 |
+| `agent_token` | `agent, text` | `agent_core.invoke_model`: 모델이 텍스트를 쓰는 동안 조각마다 (tool call 인자는 텍스트가 아니므로 흐르지 않음). 조각을 합친 메시지가 그래프에 들어가므로 판단 로직은 `invoke`와 같다 |
 | `a2a_start` | `from, to, request` | Group의 A2A client Tool 진입 (Phase 5a) |
 | `a2a_end` | `from, to, response` | 위 Tool 반환 직전. 그 사이의 K 이벤트는 `relayed: true`로 relay된다 |
 | `delegation_start` | `from, to, task` | `delegate_to_*` 진입 |
@@ -410,6 +411,7 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 | --- | --- |
 | `agent_start`(super) | 노드 status "요청 분석 중..." |
 | `delegation_start` | delegation 세션 열림(실제 위임 문장) · 대상 노드 active · edge active |
+| `agent_token` | 세션(또는 전사)에서 그 Agent의 응답 초안이 제목 없이 제자리에서 자란다(`message_delta`, 깜빡이는 caret). `agent_end`의 최종 메시지(제목 있음)가 초안을 대체하고, tool call · 위임 · A2A로 넘어가면 초안은 제목 없는 진행 메모로 확정된다(`message_commit`) |
 | `tool_start` | 노드/세션에 실제 Workflow 이름, status "실행 중" |
 | `tool_end` | 세션에 Workflow 인자·결과 메시지 |
 | `agent_end`(specialist) | 세션에 최종 응답, 노드 completed, edge completed |

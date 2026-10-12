@@ -35,6 +35,10 @@ def test_meeting_agent_emits_tool_lifecycle():
     assert tool_end["tool"] == MEETING_WORKFLOW
     assert tool_end["result"]["matched"] == 1
     assert "2026-09-15" in response and "2.5조" in response
+    # The answer was streamed: the tokens after the Tool result add up to the final response.
+    tokens = [e["text"] for e in events if e["type"] == "agent_token"]
+    assert len(tokens) > 1, tokens
+    assert "".join(tokens).strip().endswith(response[-20:]), ("".join(tokens)[-80:], response[-80:])
 
 
 def test_news_agent_emits_tool_lifecycle():
@@ -85,7 +89,7 @@ def _delegation_blocks(events: list[dict]) -> list[tuple[str, list[str]]]:
     while i < len(events):
         if events[i]["type"] == "delegation_start":
             j = next(k for k in range(i + 1, len(events)) if events[k]["type"] == "delegation_end")
-            blocks.append((events[i]["to"], [e["type"] for e in events[i + 1 : j]]))
+            blocks.append((events[i]["to"], [e["type"] for e in events[i + 1 : j] if e["type"] != "agent_token"]))
             i = j
         i += 1
     return blocks

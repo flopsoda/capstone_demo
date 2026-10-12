@@ -21,6 +21,9 @@ class _ScriptedModel:
     def invoke(self, _messages):
         return self.turns.pop(0)
 
+    def stream(self, messages):
+        yield self.invoke(messages)  # a whole message, not chunks: used as is
+
 
 def _call(name, idx, **args):
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"c{idx}"}])

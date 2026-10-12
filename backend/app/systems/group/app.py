@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
-from ...runtime.api import ndjson_run, sse_events
+from ...runtime.api import ndjson_run, shutdown_signal, sse_events
 from ...runtime.events import new_run
 from ...runtime.schemas import RunRequest
 from . import SYSTEM
@@ -19,6 +19,7 @@ from .agents.meeting import run_meeting_agent
 from .agents.news import run_news_agent
 
 app = FastAPI(title="Group agent system", version="0.5.0")
+STOP = shutdown_signal(app)  # observer streams end on shutdown so uvicorn --reload can restart
 
 
 @app.get("/api/health")
@@ -29,7 +30,7 @@ def health() -> dict[str, str]:
 @app.get("/api/events")
 def events() -> StreamingResponse:
     """Observer channel: every lifecycle event this system emits (incl. events relayed from a peer), as SSE."""
-    return sse_events()
+    return sse_events(stop=STOP)
 
 
 @app.post("/api/agents/group-super/run")

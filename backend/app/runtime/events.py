@@ -6,6 +6,7 @@ events as they happen, so an HTTP handler can stream them to the UI.
 
 Event shapes (all have "type"):
   agent_start      {agent, request}
+  agent_token      {agent, text}        a piece of the agent's answer as the model writes it
   delegation_start {from, to, task}
   tool_start       {agent, tool, args}
   tool_end         {agent, tool, result}

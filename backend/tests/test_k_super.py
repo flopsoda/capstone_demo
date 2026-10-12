@@ -52,6 +52,9 @@ class _ScriptedModel:
     def invoke(self, _messages):
         return self.turns.pop(0)
 
+    def stream(self, messages):
+        yield self.invoke(messages)  # a whole message, not chunks: used as is
+
 
 class _StubDelegation:
     def __init__(self, response: str, name: str = "stub"):
@@ -137,3 +140,32 @@ def test_direct_chat_may_answer_without_delegating(scripted):
     response, events = collect_events(lambda: run_k_super("안녕?", invocation="direct"))
     assert response == "안녕하세요, K전자 슈퍼에이전트입니다."
     assert [e["type"] for e in events] == ["agent_start", "agent_end"]
+
+
+def test_model_turn_streams_text_as_tokens_and_reassembles_tool_calls():
+    from langchain_core.messages import AIMessageChunk
+
+    from app.runtime.agent_core import invoke_model
+
+    class _StreamingModel:
+        def stream(self, _messages):
+            yield AIMessageChunk(content="회의 ", id="m1")
+            yield AIMessageChunk(content="결정사항 정리")
+            yield AIMessageChunk(
+                content="",
+                tool_call_chunks=[{"name": "delegate_to_meeting_agent", "args": '{"task": "뉴로', "id": "c1", "index": 0}],
+            )
+            yield AIMessageChunk(content="", tool_call_chunks=[{"name": None, "args": '엣지 회의"}', "id": None, "index": 0}])
+
+    message, events = collect_events(lambda: invoke_model("k_super", _StreamingModel(), []))
+    assert [e["text"] for e in events] == ["회의 ", "결정사항 정리"]
+    assert all(e["type"] == "agent_token" and e["agent"] == "k_super" for e in events)
+    assert isinstance(message, AIMessage) and not isinstance(message, AIMessageChunk)
+    assert message.content == "회의 결정사항 정리"
+    assert message.tool_calls == [{"name": "delegate_to_meeting_agent", "args": {"task": "뉴로엣지 회의"}, "id": "c1", "type": "tool_call"}]
+
+
+def test_model_turn_accepts_a_whole_message_from_a_non_streaming_model(scripted):
+    scripted([AIMessage("안녕하세요")], {})
+    response, events = collect_events(lambda: run_k_super("안녕?", invocation="direct"))
+    assert response == "안녕하세요" and "agent_token" not in [e["type"] for e in events]

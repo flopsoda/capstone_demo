@@ -28,6 +28,8 @@ export type ChatItem =
       sender: AgentId;
       title?: string;
       content: MessageContent;
+      /** Still being written by the agent (token stream); replaced by the final message. */
+      streaming?: boolean;
     }
   | {
       id: string;
@@ -125,7 +127,13 @@ export type ScenarioEvent =
       sender: AgentId;
       title?: string;
       content: MessageContent;
+      /** Replaces the sender's streaming draft in the same transcript, if one is open. */
+      final?: boolean;
     })
+  /** A piece of an agent's answer as it is written; grows the sender's draft (or opens one). */
+  | (BaseEvent & { type: "message_delta"; sender: AgentId; title?: string; text: string })
+  /** The sender moved on (tool call / handoff): whatever draft it had stays as a plain message. */
+  | (BaseEvent & { type: "message_commit"; sender: AgentId })
   | (BaseEvent & {
       type: "activity";
       communication: CommunicationType;

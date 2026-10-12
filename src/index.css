@@ -1506,3 +1506,16 @@ button {
   font-weight: 700;
   color: var(--a2a);
 }
+
+/* Token streaming: the answer grows in place with a caret until the final message replaces it. */
+.msg--streaming .msg__bubble .msg-text:last-child::after {
+  content: "▍";
+  margin-left: 1px;
+  color: var(--accent, #4f46e5);
+  animation: caret-blink 1s steps(2, start) infinite;
+}
+@keyframes caret-blink {
+  to {
+    visibility: hidden;
+  }
+}

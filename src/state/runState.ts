@@ -87,21 +87,28 @@ function withSessionWorkflow(state: RunnerState, agent: AgentId, workflow?: stri
   };
 }
 
+/** Rewrites the item list of the innermost open session, or of the top-level transcript. */
+function mapContainer(state: RunnerState, fn: (items: ChatItem[]) => ChatItem[]): RunnerState {
+  const top = state.sessionStack[state.sessionStack.length - 1];
+  if (!top) return { ...state, messages: fn(state.messages) };
+  const session = state.sessions[top];
+  return { ...state, sessions: { ...state.sessions, [top]: { ...session, items: fn(session.items) } } };
+}
+
 /**
  * Appends a chat item to the innermost open session, or to the top-level
  * transcript when no session is open.
  */
 function pushItem(state: RunnerState, item: ChatItem): RunnerState {
-  const top = state.sessionStack[state.sessionStack.length - 1];
-  if (!top) return { ...state, messages: [...state.messages, item] };
-  const session = state.sessions[top];
-  return {
-    ...state,
-    sessions: {
-      ...state.sessions,
-      [top]: { ...session, items: [...session.items, item] },
-    },
-  };
+  return mapContainer(state, (items) => [...items, item]);
+}
+
+type Draft = Extract<ChatItem, { kind: "assistant" }>;
+
+/** Index of the sender's open streaming draft in `items`, or -1. Only the last item can be one. */
+function draftIndex(items: ChatItem[], sender: AgentId): number {
+  const last = items[items.length - 1];
+  return last && last.kind === "assistant" && last.streaming && last.sender === sender ? items.length - 1 : -1;
 }
 
 function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
@@ -192,12 +199,29 @@ function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
       return { ...state, edges: setEdge(state.edges, ev.from, ev.to, ev.state) };
 
     case "message":
-      return pushItem(state, {
-        id: nextId(),
-        kind: "assistant",
-        sender: ev.sender,
-        title: ev.title,
-        content: ev.content,
+      return mapContainer(state, (items) => {
+        const i = ev.final ? draftIndex(items, ev.sender) : -1;
+        const item: ChatItem = { id: nextId(), kind: "assistant", sender: ev.sender, title: ev.title, content: ev.content };
+        // The final answer replaces the draft that was growing in its place.
+        return i >= 0 ? [...items.slice(0, i), { ...item, id: items[i].id }] : [...items, item];
+      });
+
+    case "message_delta":
+      return mapContainer(state, (items) => {
+        const i = draftIndex(items, ev.sender);
+        if (i >= 0) {
+          const draft = items[i] as Draft;
+          const text = typeof draft.content === "string" ? draft.content : "";
+          return [...items.slice(0, i), { ...draft, content: text + ev.text }];
+        }
+        const draft: Draft = { id: nextId(), kind: "assistant", sender: ev.sender, title: ev.title, content: ev.text, streaming: true };
+        return [...items, draft];
+      });
+
+    case "message_commit":
+      return mapContainer(state, (items) => {
+        const i = draftIndex(items, ev.sender);
+        return i >= 0 ? [...items.slice(0, i), { ...(items[i] as Draft), streaming: false }] : items;
       });
 
     case "activity":
