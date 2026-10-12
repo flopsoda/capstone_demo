@@ -3,7 +3,8 @@ agents really take their subset from it (no LLM needed)."""
 
 from langchain_core.tools import BaseTool
 
-from app.capabilities import CAPABILITIES, Skill, capabilities_for, get_capability, skills_for, tools_for
+from app.runtime.capabilities import Skill
+from app.systems.k_electronics.registry import CAPABILITIES, capabilities_for, get_capability, skills_for, tools_for
 
 
 def test_registry_lists_capabilities_with_permissions():
@@ -60,7 +61,7 @@ def test_each_agent_gets_only_its_subset():
 
 
 def test_agents_bind_registry_subset_and_skills_enter_system_prompt():
-    from app.agents import advisory, k_super, meeting, news
+    from app.systems.k_electronics.agents import advisory, k_super, meeting, news
 
     for agent in (k_super, meeting, news, advisory):
         assert [t.name for t in agent.TOOLS] == [t.name for t in tools_for(agent.AGENT_ID)]
@@ -73,7 +74,7 @@ def test_agents_bind_registry_subset_and_skills_enter_system_prompt():
 
 
 def test_delegation_tools_point_at_registered_agents():
-    from app.capabilities.tools import delegate_to_advisory_agent as da, delegate_to_meeting_agent as dm, delegate_to_news_agent as dn
+    from app.systems.k_electronics.tools import delegate_to_advisory_agent as da, delegate_to_meeting_agent as dm, delegate_to_news_agent as dn
 
     assert (dm.FROM_AGENT, dm.TO_AGENT) == ("k_super", "meeting")
     assert (dn.FROM_AGENT, dn.TO_AGENT) == ("k_super", "news")

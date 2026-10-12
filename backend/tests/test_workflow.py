@@ -1,4 +1,10 @@
-from app.workflows.meeting_context_retrieval import retrieve_meeting_context
+from functools import partial
+
+from app.library.workflows.meeting_context_retrieval import retrieve_meeting_context as _retrieve_meeting_context
+from app.systems.k_electronics import DATA_DIR
+
+# The workflow is system-neutral; these tests run it over K Electronics' meeting store.
+retrieve_meeting_context = partial(_retrieve_meeting_context, path=DATA_DIR / "meetings.json")
 
 
 def test_finds_neuroedge_strategy_meeting_only():

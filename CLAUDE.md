@@ -14,7 +14,7 @@ Claude 기반 coding agent가 이 repository에서 작업할 때의 지침이다
 ## 작업 원칙
 
 - **범위를 먼저 확정한다.** 요청이 어느 Step / 어느 파일에 해당하는지 파악하고, 그 범위 밖은 건드리지 않는다. 범위가 불분명하면 작업 전에 묻는다.
-- **기존 구현을 읽고 변경 지점을 찾는다.** 새로 쓰기 전에 같은 역할을 하는 코드(`agents/common.py`, `events.py`, `src/live/agentEvents.ts`, `useScenarioRunner.ts`)를 재사용한다.
+- **기존 구현을 읽고 변경 지점을 찾는다.** 새로 쓰기 전에 같은 역할을 하는 코드(`runtime/agent_core.py`, `runtime/events.py`, `src/live/agentEvents.ts`, `useScenarioRunner.ts`)를 재사용한다.
 - **최소 변경을 선호한다.** 요청을 만족하는 가장 작은 diff를 만든다. 지나가는 김에 정리하지 않는다.
 - **추상화 / framework를 새로 들이지 않는다.** 현재 stack은 LangGraph + FastAPI + React(Vite)다. dependency 추가는 요청이 있을 때만 한다.
 - **architecture decision을 임의로 확정하지 않는다.** `docs/architecture.md` 12장의 열린 결정(다중 위임과 Step 경계, K Super 루프, Capability Registry, 결과 렌더링, 공유 구조, A2A 경계 등)이 작업에 걸리면 한 가지로 가정하고 진행하지 말고 선택지와 추천을 제시한 뒤 결정을 받는다.

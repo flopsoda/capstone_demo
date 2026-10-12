@@ -22,8 +22,8 @@ ADVISORY_WORKFLOW = "run_mna_review"
 
 
 def test_meeting_agent_emits_tool_lifecycle():
-    from app.agents.meeting import run_meeting_agent
-    from app.events import collect_events
+    from app.systems.k_electronics.agents.meeting import run_meeting_agent
+    from app.runtime.events import collect_events
 
     response, events = collect_events(
         lambda: run_meeting_agent("뉴로엣지 인수와 관련해 지난 전략회의에서 결정한 기준과 미완료 Action Item을 찾아줘.")
@@ -38,8 +38,8 @@ def test_meeting_agent_emits_tool_lifecycle():
 
 
 def test_news_agent_emits_tool_lifecycle():
-    from app.agents.news import run_news_agent
-    from app.events import collect_events
+    from app.systems.k_electronics.agents.news import run_news_agent
+    from app.runtime.events import collect_events
 
     response, events = collect_events(
         lambda: run_news_agent(
@@ -58,8 +58,8 @@ def test_news_agent_emits_tool_lifecycle():
 
 
 def test_advisory_agent_emits_tool_lifecycle():
-    from app.agents.advisory import run_advisory_agent
-    from app.events import collect_events
+    from app.systems.k_electronics.agents.advisory import run_advisory_agent
+    from app.runtime.events import collect_events
 
     response, events = collect_events(
         lambda: run_advisory_agent(
@@ -92,8 +92,8 @@ def _delegation_blocks(events: list[dict]) -> list[tuple[str, list[str]]]:
 
 
 def test_k_super_delegates_to_each_specialist_in_sequence_then_answers():
-    from app.agents.k_super import run_k_super
-    from app.events import collect_events
+    from app.systems.k_electronics.agents.k_super import run_k_super
+    from app.runtime.events import collect_events
 
     response, events = collect_events(lambda: run_k_super(A2A_REQUEST))
     types = [e["type"] for e in events]
@@ -123,9 +123,9 @@ def test_k_super_delegates_to_each_specialist_in_sequence_then_answers():
 def test_k_super_decides_each_delegation_in_its_own_model_turn():
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from app.agents.common import RECURSION_LIMIT
-    from app.agents.k_super import build_k_super
-    from app.events import collect_events
+    from app.runtime.agent_core import RECURSION_LIMIT
+    from app.systems.k_electronics.agents.k_super import build_k_super
+    from app.runtime.events import collect_events
 
     state, _ = collect_events(
         lambda: build_k_super().invoke({"messages": [HumanMessage(A2A_REQUEST)]}, config={"recursion_limit": RECURSION_LIMIT})
@@ -142,8 +142,8 @@ def test_k_super_decides_each_delegation_in_its_own_model_turn():
 def test_k_super_consults_only_the_specialist_the_request_needs():
     """No 'call every registered tool' rule: a request that only asks for past
     meeting decisions is answered after the Meeting Agent alone."""
-    from app.agents.k_super import run_k_super
-    from app.events import collect_events
+    from app.systems.k_electronics.agents.k_super import run_k_super
+    from app.runtime.events import collect_events
 
     response, events = collect_events(
         lambda: run_k_super("뉴로엣지 인수와 관련해 과거 경영회의에서 정해진 결정사항과 기준만 정리해서 회신해주세요.")
@@ -233,8 +233,8 @@ def test_advisory_direct_chat_uses_tool_for_real_review():
 def test_delegation_path_still_requires_tool(monkeypatch):
     from langchain_core.messages import AIMessage
 
-    from app.agents import news
-    from app.events import AgentError, collect_events
+    from app.systems.k_electronics.agents import news
+    from app.runtime.events import AgentError, collect_events
 
     class _NoToolGraph:
         def invoke(self, state, config=None):

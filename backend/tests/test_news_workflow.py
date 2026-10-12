@@ -1,4 +1,10 @@
-from app.workflows.company_risk_news_analysis import analyze_company_risk_news, requested_categories
+from functools import partial
+
+from app.library.workflows.company_risk_news_analysis import analyze_company_risk_news as _analyze_company_risk_news, requested_categories
+from app.systems.k_electronics import DATA_DIR
+
+# The workflow is system-neutral; these tests run it over K Electronics' article store.
+analyze_company_risk_news = partial(_analyze_company_risk_news, path=DATA_DIR / "news.json")
 
 
 def test_returns_three_neuroedge_risks_high_first():

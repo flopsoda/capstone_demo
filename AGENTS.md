@@ -16,7 +16,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 ## 작업 전
 
 - 작업 범위를 먼저 확인한다. "사용자가 요청한 Step / 기능"이 범위다.
-- 기존 코드를 먼저 읽는다. 특히 `backend/app/agents/`, `backend/app/capabilities/`, `backend/app/events.py`, `src/live/`, `src/scenario/scenarioEvents.ts`, `src/hooks/useScenarioRunner.ts`.
+- 기존 코드를 먼저 읽는다. 특히 `backend/app/runtime/`, `backend/app/library/`, `backend/app/systems/<system>/`, `src/live/`, `src/scenario/scenarioEvents.ts`, `src/hooks/useScenarioRunner.ts`.
 - `docs/architecture.md`의 "Current implementation"과 "Target architecture"를 구분해서 이해한다. 목표 구조를 이미 구현된 것처럼 가정하지 않는다.
 
 ## 범위 관리
@@ -31,13 +31,14 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 - **Agent / Workflow Tool / Delegation / A2A를 섞지 않는다.**
   - Super Agent는 LLM tool calling으로 전문 Agent에게 자연어로 위임한다. 중앙 Router / Planner 노드를 추가하지 않는다.
   - Specialist Agent는 독립 LangGraph Agent다. 함수 호출로 대체하지 않는다. Super Agent 경로와 사용자 직접 대화 경로가 같은 core를 쓴다.
-    새 Specialist는 `agents/common.py`의 `Specialist` / `build_specialist_graph` / `run_specialist`를 쓰고, Agent 파일에는 `AGENT_ID` · `IDENTITY` · Registry 조회만 둔다.
+    새 Specialist는 `runtime/agent_core.py`의 `Specialist` / `build_specialist_graph` / `run_specialist`를, 새 Super Agent는 `SuperAgent` / `build_super_graph` / `run_super`를 쓰고, Agent 파일에는 `AGENT_ID` · `IDENTITY` · Registry 조회만 둔다.
   - Specialist에게 Tool 호출을 모든 응답에 강제하지 않는다. Workflow Tool 근거 검사는 delegation 경로(`invocation="delegation"`)에만 있고, 직접 대화(`"direct"`)에서는 모델이 Skill 지침에 따라 결정한다.
   - Workflow Tool은 Agent가 아니다. 내부의 결정적 절차를 Agent-visible Tool 여러 개로 쪼개지 않는다.
   - K Super → Specialist는 **delegation**(`delegation_start/end`), Group Super ⇅ K Super는 **A2A**다. Specialist 호출을 A2A라고 부르지 않는다.
 - **Agent state는 message history 중심이다.** `MessagesState`를 쓰고, `meeting_result` 같은 Agent별 결과 field를 추가하지 않는다. 공유 구조가 꼭 필요하면 범용 구조를 제안하고 결정을 받는다.
 - **Agent 경계를 유지한다.** 하위 Agent의 내부 메시지 / tool call을 상위 Agent history에 병합하지 않는다. 최종 결과만 전달한다.
 - **Workflow Tool이 데이터 경계다.** Agent가 fixture / DB를 직접 읽지 않는다.
+- **Agent system 경계를 지킨다.** `runtime/`은 `library/`·`systems/`를, `library/`는 `systems/`를, 한 system은 다른 system을 import하지 않는다 (`tests/test_boundaries.py`). system 간 업무는 A2A(HTTP)로만 오간다. 같은 모양의 Workflow / Data가 필요하면 라이브러리 factory에 자기 데이터를 바인딩한다.
 
 ## Backend ↔ Frontend
 
@@ -49,10 +50,10 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 
 ## Capability 추가 시
 
-- Agent-visible Capability(Skill = 업무 지침, Tool = `@tool`)는 `backend/app/capabilities/skills/`, `tools/`에 정의하고 `capabilities/registry.py`의 `CAPABILITIES`에 `allowed_agents`와 함께 등록한다. **권한은 그곳에만** 적는다.
+- Agent-visible Capability(Skill = 업무 지침, Tool = `@tool`)는 system 중립이면 `backend/app/library/skills/`, `library/tools/`(factory `make_<tool>(path)`)에, 한 system 전용이면 `systems/<system>/tools/`에 정의하고, 그 system의 `registry.py` `CAPABILITIES`에 `allowed_agents`와 함께 등록한다. **권한은 그곳에만** 적는다.
 - Agent 파일은 `skills_for(AGENT_ID)` / `tools_for(AGENT_ID)`로 자기 subset만 받는다. Agent 파일에서 Skill / Tool 모듈을 직접 import하거나 `TOOLS`를 하드코딩하지 않는다.
 - Tool의 이름 · description · argument schema는 `@tool` 정의가 source of truth다. Registry나 다른 곳에 중복 정의하지 않는다.
-- Tool 내부의 workflow 단계와 helper는 `backend/app/workflows/`에 두고 Registry에 등록하지 않는다. Agent가 직접 쓰는 것만 Capability다.
+- Tool 내부의 workflow 단계와 helper는 `backend/app/library/workflows/`에 두고 Registry에 등록하지 않는다. workflow는 데이터 store 경로를 `path`로 받는 순수 함수다. Agent가 직접 쓰는 것만 Capability다.
 - Skill은 실제 업무 지침이 있을 때만 만든다. Registry를 채우기 위한 빈 Skill이나 wrapper는 만들지 않는다. Agent의 정체성 · 출력 형식 규칙은 Agent 파일의 `IDENTITY`에 둔다.
 - 위임 Tool(`delegate_to_*`)은 대상 Agent의 `run_*`를 호출 시점에 import한다 (순환 import 방지). 위임 이벤트(`delegation_start/end`)는 Tool 안에서 emit한다.
 

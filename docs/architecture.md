@@ -63,7 +63,7 @@ K전자 슈퍼에이전트 (K Electronics Super)  ← backend REAL (LangGraph)
 
 Agent 식별자는 backend와 frontend가 같은 문자열을 쓴다:
 `chairman`, `group_super`, `k_super`, `meeting`, `news`, `advisory`
-(frontend: `src/types/agent.ts`의 `AgentId`, backend: 각 agent 모듈의 `AGENT_ID`와 `capabilities/registry.py`의 `allowed_agents`).
+(frontend: `src/types/agent.ts`의 `AgentId`, backend: 각 agent 모듈의 `AGENT_ID`와 각 system `registry.py`의 `allowed_agents`).
 
 ---
 
@@ -85,13 +85,13 @@ K Electronics Super
 - 위임은 LLM의 실제 tool calling으로 일어난다. 위임 문장(`task`)은 LLM이 작성하므로 실행마다 달라질 수 있다.
 - Super Agent는 직접 분석하거나 답을 지어내지 않는다 (K Super system prompt 규칙).
 
-**Current implementation** — `backend/app/agents/common.py`(Super core) + `backend/app/agents/k_super.py`(정체성)
-- Phase 1(2026-10-12)에서 Specialist와 같은 방식으로 **공통 super core**를 두었다: `common.SuperAgent(agent_id, display_name, system_prompt, tools)`,
+**Current implementation** — `backend/app/runtime/agent_core.py`(Super core) + `backend/app/systems/k_electronics/agents/k_super.py`(정체성)
+- Phase 1(2026-10-12)에서 Specialist와 같은 방식으로 **공통 super core**를 두었다: `agent_core.SuperAgent(agent_id, display_name, system_prompt, tools)`,
   `build_super_graph(spec)`(LangGraph `StateGraph(MessagesState)`, 노드 `model` / `tools`), `run_super(spec, graph, request, invocation=...)`.
   `k_super.py`에는 `AGENT_ID` · `IDENTITY` · Registry 조회 · `SPEC` · `build_k_super()` · `run_k_super()`만 있다.
-- 호출 맥락(invocation)은 `"a2a"`(다른 Agent System의 Super Agent가 보낸 요청, 기본값) | `"direct"`(사용자 직접 대화)이며 `common.SUPER_INVOCATION_CONTEXT` 한 문단으로 모델에게 알린다.
+- 호출 맥락(invocation)은 `"a2a"`(다른 Agent System의 Super Agent가 보낸 요청, 기본값) | `"direct"`(사용자 직접 대화)이며 `agent_core.SUPER_INVOCATION_CONTEXT` 한 문단으로 모델에게 알린다.
   근거 검사(위임 1회 이상)는 `a2a`에서만 한다. 현재 API는 `a2a`만 쓴다 (direct 엔드포인트는 Phase 4).
-- Registry가 허용한 Capability: Skill `specialist_delegation`(위임 지침), Tool `delegate_to_meeting_agent`, `delegate_to_news_agent`, `delegate_to_advisory_agent`. 모두 `backend/app/capabilities/`에 있다 ([4장](#4-capability-registry)).
+- Registry가 허용한 Capability: Skill `specialist_delegation`(위임 지침), Tool `delegate_to_meeting_agent`, `delegate_to_news_agent`, `delegate_to_advisory_agent`. Skill은 `backend/app/library/skills/`, 위임 Tool은 `backend/app/systems/k_electronics/tools/`에 있다 ([4장](#4-capability-registry)).
 - `tools → model` 루프. 위임 결과(`ToolMessage`)를 받은 모델이 다시 판단해 다음 위임을 결정한다. 위임 순서와 `task` 문장은 모델이 정한다.
   Skill이 "한 번에 하나의 전문 에이전트에게만 위임하고 결과를 받은 뒤 다음을 판단"하도록 지시하므로 현재 scenario에서는 Meeting → News → Advisory가 **순차**로 일어난다 (병렬 위임 없음).
 - **이전 결과의 전달은 모델의 판단이다.** Skill이 "앞서 받은 결과 중 이번 업무에 필요한 사실이 있으면 위임 문장에 담으라"고 지시할 뿐,
@@ -131,9 +131,9 @@ Super Agent → Specialist Agent   (delegation)
 User        → Specialist Agent   (직접 대화)
 ```
 
-**Current implementation** — `backend/app/agents/meeting.py`, `backend/app/agents/news.py`
-**Current implementation** — `backend/app/agents/common.py` + `meeting.py`, `news.py`, `advisory.py`
-- 세 Agent는 `common.py`의 **공통 specialist core** 하나를 쓴다: `Specialist(agent_id, display_name, system_prompt, tools)` 값 객체,
+**Current implementation** — `backend/app/systems/k_electronics/agents/meeting.py`, `news.py`
+**Current implementation** — `backend/app/runtime/agent_core.py` + `backend/app/systems/k_electronics/agents/{meeting,news,advisory}.py`
+- 세 Agent는 `runtime/agent_core.py`의 **공통 specialist core** 하나를 쓴다: `Specialist(agent_id, display_name, system_prompt, tools)` 값 객체,
   `build_specialist_graph(spec)`(LangGraph `StateGraph(MessagesState)`, `model ⇄ tools` 루프), `run_specialist(spec, graph, task, invocation=...)`.
   Agent 파일에는 `AGENT_ID` · `IDENTITY` · Registry 조회(`SYSTEM_PROMPT`, `TOOLS`) · `build_*_agent()` · `run_*_agent()`만 있다.
 - Registry가 허용한 Capability:
@@ -141,7 +141,7 @@ User        → Specialist Agent   (직접 대화)
   - News: Skill `external_risk_analysis`(외부 리스크 조사·정리 지침, 응답 형식), Tool `run_company_risk_news_analysis`.
   - Advisory: Skill `mna_feasibility_review`(인수 검토 지침 — 관점 선택, 맥락 전달, 응답 형식), Tool `run_mna_review`.
 - **호출 맥락(invocation)** 은 `"delegation" | "direct"` 두 가지다. 같은 그래프가 쓰이고, 호출 맥락은 LangGraph `config["configurable"]`로 실행마다 전달된다 (state에 넣지 않는다).
-  - 모델에게는 system context 끝에 한 문단(`common.INVOCATION_CONTEXT`)으로 알려 준다: delegation이면 "슈퍼에이전트에게 돌아가는 보고이므로 Tool 결과에 근거하라", direct면 "인사·개념 질문에는 Tool 없이 답하고 데이터가 필요한 업무면 Tool을 쓰라".
+  - 모델에게는 system context 끝에 한 문단(`agent_core.INVOCATION_CONTEXT`)으로 알려 준다: delegation이면 "슈퍼에이전트에게 돌아가는 보고이므로 Tool 결과에 근거하라", direct면 "인사·개념 질문에는 Tool 없이 답하고 데이터가 필요한 업무면 Tool을 쓰라".
   - delegation(`delegate_to_*` Tool 안, 기본값)에서 Workflow Tool 없이 답하면 `AgentError(agent_id, ...)`. 데이터에 근거하지 않은 보고서가 K Super에 올라가면 안 되기 때문이다.
   - direct(`POST /api/agents/{meeting,news,advisory}/run`)에서는 이 검사를 하지 않는다. Tool 호출 여부는 모델이 Skill 지침에 따라 결정한다.
     예: 경영자문 탭에서 "earn-out이 뭐야?"는 Tool 없이, "뉴로엣지 인수를 CTO 관점에서 검토해줘"는 `run_mna_review`로 답한다 (`tests/test_agents.py`).
@@ -164,15 +164,15 @@ Advisory Agent  → run_mna_review
 - Workflow Tool은 데이터 경계이기도 하다. Agent는 fixture / DB를 직접 만지지 않는다.
 
 **Current implementation** — Agent-visible Tool과 내부 workflow를 분리한다.
-- `backend/app/capabilities/tools/run_meeting_context_retrieval.py`: `@tool("run_meeting_context_retrieval")`, 인자 `query: str, topics: list[str] | None`. Agent에게 보이는 표면(이름·설명·schema)만 가진다.
-- `backend/app/workflows/meeting_context_retrieval.py`: 내부 구현 workflow. 순수 함수 `retrieve_meeting_context()`가 `backend/app/data/meetings.json`을 키워드 점수(topic 3점, title 2점, decision 1점, 절대/상대 threshold)로 조회한다. LLM 없이 테스트한다.
+- `backend/app/library/tools/run_meeting_context_retrieval.py`: `make_run_meeting_context_retrieval(path)`가 `@tool("run_meeting_context_retrieval")`(인자 `query: str, topics: list[str] | None`)을 돌려준다. Agent에게 보이는 표면(이름·설명·schema)만 가지며, 어느 데이터를 읽는지는 호출한 system이 `path`로 정한다 (`systems/k_electronics/tools/run_meeting_context_retrieval.py`가 `data/meetings.json`에 바인딩).
+- `backend/app/library/workflows/meeting_context_retrieval.py`: 내부 구현 workflow. 순수 함수 `retrieve_meeting_context(query, topics, path=...)`가 주어진 회의 store(K: `systems/k_electronics/data/meetings.json`)를 키워드 점수(topic 3점, title 2점, decision 1점, 절대/상대 threshold)로 조회한다. LLM 없이 테스트한다.
 - 반환은 dict (`matched`, `meetings[]`에 `decisions`, `open_action_items`).
-- `backend/app/capabilities/tools/run_company_risk_news_analysis.py`: `@tool("run_company_risk_news_analysis")`, 인자 `query: str, company: str, topics: list[str] | None`.
-- `backend/app/workflows/company_risk_news_analysis.py`: 순수 함수 `analyze_company_risk_news()`가 `backend/app/data/news.json`(가상 기사 5건)을 조회한다.
+- `backend/app/library/tools/run_company_risk_news_analysis.py`: `make_run_company_risk_news_analysis(path)` → `@tool("run_company_risk_news_analysis")`, 인자 `query: str, company: str, topics: list[str] | None`.
+- `backend/app/library/workflows/company_risk_news_analysis.py`: 순수 함수 `analyze_company_risk_news(..., path=...)`가 주어진 기사 store(K: `data/news.json`, 가상 기사 5건)를 조회한다.
   `company`를 기사 `companies` alias와 대조해 대상 기업 기사만 남기고, `query`/`topics`에서 리스크 category 키워드(`customer_concentration`, `legal_dispute`, `key_personnel`, `labor_dispute`)를 찾아 좁힌 뒤 HIGH → MEDIUM → LOW, 최신순으로 정렬한다. 키워드가 없으면 그 기업의 모든 리스크를 돌려준다.
   반환은 dict (`matched`, `risks[]`에 `category, label, level, headline, summary, key_facts, source{id,date,name}`). 실제 뉴스 API / 검색 / RAG로 바꿀 때는 이 함수 본문만 교체하면 Tool · Agent · K Super 계약은 그대로다.
-- `backend/app/capabilities/tools/run_mna_review.py`: `@tool("run_mna_review")`, 인자 `query: str, company: str, persona: str = "CEO", context: str | None`.
-- `backend/app/workflows/mna_review.py`: 순수 함수 `review_acquisition()`이 `backend/app/data/companies.json`(가상 기업 1건: 재무·가치·고객·기술·전략)을 읽는다.
+- `backend/app/library/tools/run_mna_review.py`: `make_run_mna_review(path)` → `@tool("run_mna_review")`, 인자 `query: str, company: str, persona: str = "CEO", context: str | None`.
+- `backend/app/library/workflows/mna_review.py`: 순수 함수 `review_acquisition(..., path=...)`이 주어진 기업 store(K: `data/companies.json`, 가상 기업 1건: 재무·가치·고객·기술·전략)를 읽는다.
   - **persona는 Agent가 아니라 평가 관점 parameter**다. `PERSONAS` 표가 CEO(전략 적합성 · Time-to-Market · 리스크/기회 균형 · 사업 추진 가치),
     CFO(요구가격 vs 적정가치 · 수익성 · 고객 집중도 · 재무적 downside · 거래 조건), CTO(기술 적합성 · Time-to-Market · 핵심 기술인력 · IP 리스크 · 기술 통합)의 평가 기준을 **순서 있는 목록으로 명시**한다.
   - 13개 평가 항목은 모두 결정적 규칙(가격 프리미엄 임계값, 고객 비중 임계값 등)으로 평가된다. 모든 persona에 대해 전부 평가하되, 보고 순서 · 우려 목록 · 조건 순서는 persona 목록을 따르고 나머지는 `other_considerations`로 압축한다.
@@ -226,39 +226,39 @@ Tools  → get_chat_model().bind_tools(tools)       → LLM tool calling
 Registry가 답하는 질문: 어떤 Capability가 있는가 / Skill인가 Tool인가 / 어떤 Agent가 쓸 수 있는가 / 구현은 무엇인가.
 Registry의 대상은 **Agent가 직접 사용할 수 있는 Capability**뿐이다. Tool 내부의 workflow 단계나 helper는 등록하지 않는다.
 
-### Current implementation — `backend/app/capabilities/`
+### Current implementation — `backend/app/runtime/capabilities.py` + `library/` + `systems/k_electronics/`
 
 ```text
-capabilities/
-  base.py        Skill(name, description, instructions) · Capability(impl, allowed_agents) · Registry(capabilities) — 조회·검증 메커니즘 (system 중립)
-  registry.py    이 system의 CAPABILITIES 튜플 (권한의 source of truth) · REGISTRY = Registry(CAPABILITIES) · get_capability / capabilities_for / skills_for / tools_for
-  skills/        Skill 정의 (specialist_delegation.py, meeting_context_analysis.py, external_risk_analysis.py, mna_feasibility_review.py)
-  tools/         @tool 정의 (delegate_to_meeting_agent.py, delegate_to_news_agent.py, delegate_to_advisory_agent.py,
-                 run_meeting_context_retrieval.py, run_company_risk_news_analysis.py, run_mna_review.py)
-workflows/
-  meeting_context_retrieval.py     Tool 내부 구현 workflow (순수 함수, LangChain 의존 없음). Agent-visible 아님
-  company_risk_news_analysis.py    위와 같음 (news.json 조회)
-  mna_review.py                    위와 같음 (companies.json + persona 평가 기준 + context 신호)
+runtime/capabilities.py   Skill(name, description, instructions) · Capability(impl, allowed_agents) · Registry(capabilities) — 조회·검증 메커니즘 (system 중립)
+library/
+  skills/                 Skill 본문 (specialist_delegation.py, meeting_context_analysis.py, external_risk_analysis.py, mna_feasibility_review.py)
+  tools/                  Tool factory: make_run_meeting_context_retrieval(path) 등 — 이름 · 설명 · schema의 source of truth, 데이터는 path로 바인딩
+  workflows/              Tool 내부 구현 workflow (순수 함수, LangChain 의존 없음, store 경로를 path로 받음). Agent-visible 아님
+systems/k_electronics/
+  registry.py             이 system의 CAPABILITIES 튜플 (권한의 source of truth) · REGISTRY = Registry(CAPABILITIES) · get_capability / capabilities_for / skills_for / tools_for
+  tools/                  delegate_to_*.py (K Super의 위임 Tool) · run_*.py (라이브러리 factory를 data/에 바인딩한 instance)
+  data/                   meetings.json · news.json · companies.json
 ```
 
 | Capability | kind | allowed_agents | 구현 |
 | --- | --- | --- | --- |
-| `specialist_delegation` | skill | `k_super` | `capabilities/skills/specialist_delegation.py` |
-| `delegate_to_meeting_agent` | tool | `k_super` | `capabilities/tools/delegate_to_meeting_agent.py` → `agents/meeting.run_meeting_agent` |
-| `delegate_to_news_agent` | tool | `k_super` | `capabilities/tools/delegate_to_news_agent.py` → `agents/news.run_news_agent` |
-| `delegate_to_advisory_agent` | tool | `k_super` | `capabilities/tools/delegate_to_advisory_agent.py` → `agents/advisory.run_advisory_agent` |
-| `meeting_context_analysis` | skill | `meeting` | `capabilities/skills/meeting_context_analysis.py` |
-| `run_meeting_context_retrieval` | tool | `meeting` | `capabilities/tools/run_meeting_context_retrieval.py` → `workflows/meeting_context_retrieval.retrieve_meeting_context` |
-| `external_risk_analysis` | skill | `news` | `capabilities/skills/external_risk_analysis.py` |
-| `run_company_risk_news_analysis` | tool | `news` | `capabilities/tools/run_company_risk_news_analysis.py` → `workflows/company_risk_news_analysis.analyze_company_risk_news` |
-| `mna_feasibility_review` | skill | `advisory` | `capabilities/skills/mna_feasibility_review.py` |
-| `run_mna_review` | tool | `advisory` | `capabilities/tools/run_mna_review.py` → `workflows/mna_review.review_acquisition` |
+| `specialist_delegation` | skill | `k_super` | `library/skills/specialist_delegation.py` |
+| `delegate_to_meeting_agent` | tool | `k_super` | `systems/k_electronics/tools/delegate_to_meeting_agent.py` → `agents/meeting.run_meeting_agent` |
+| `delegate_to_news_agent` | tool | `k_super` | `systems/k_electronics/tools/delegate_to_news_agent.py` → `agents/news.run_news_agent` |
+| `delegate_to_advisory_agent` | tool | `k_super` | `systems/k_electronics/tools/delegate_to_advisory_agent.py` → `agents/advisory.run_advisory_agent` |
+| `meeting_context_analysis` | skill | `meeting` | `library/skills/meeting_context_analysis.py` |
+| `run_meeting_context_retrieval` | tool | `meeting` | `systems/k_electronics/tools/run_meeting_context_retrieval.py` = `library/tools/...make_run_meeting_context_retrieval(data/meetings.json)` → `library/workflows/meeting_context_retrieval.retrieve_meeting_context` |
+| `external_risk_analysis` | skill | `news` | `library/skills/external_risk_analysis.py` |
+| `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(data/news.json)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
+| `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
+| `run_mna_review` | tool | `advisory` | `systems/k_electronics/tools/run_mna_review.py` = `make_run_mna_review(data/companies.json)` → `library/workflows/mna_review.review_acquisition` |
 
 설계 규칙:
 
 - **Tool은 LangChain `BaseTool` 그 자체**다. 이름 · description · argument schema는 `@tool` 정의가 source of truth이고 Registry는 이를 중복 정의하지 않는다.
 - **Skill은 `Skill` dataclass**(이름, 설명, 지침 텍스트)다. Agent 고유의 정체성 / 출력 형식 규칙은 Agent 파일의 `IDENTITY`에 남고, "이 업무를 어떻게 수행하는가"만 Skill이다.
-- **권한(`allowed_agents`)은 `registry.py`에만** 있다. Skill / Tool 모듈은 자기가 누구에게 허용되는지 모른다.
+- **권한(`allowed_agents`)은 system의 `registry.py`에만** 있다. Skill / Tool 모듈은 자기가 누구에게 허용되는지 모른다.
+- **라이브러리는 system을 모른다.** Skill 본문과 Tool factory는 `library/`에 있고, system이 factory에 자기 데이터 경로를 넘겨 Tool instance를 만든 뒤 자기 Registry에 등록한다 (`tests/test_boundaries.py`).
 - Agent 파일은 `skills_for(AGENT_ID)` / `tools_for(AGENT_ID)`만 호출한다 (`k_super.py`, `meeting.py`, `news.py`, `advisory.py`의 `SYSTEM_PROMPT`, `TOOLS`).
   Skill / Tool 모듈을 Agent 파일에서 직접 import하지 않는다.
 - 위임 Tool은 대상 Agent의 `run_*` 함수를 **호출 시점에 import**한다. 대상 Agent도 Registry를 쓰므로 module-level import는 순환이 된다.
@@ -328,7 +328,7 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 
 ### Current implementation — backend lifecycle 이벤트
 
-`backend/app/events.py`
+`backend/app/runtime/events.py`
 
 - Agent 코드는 실제 lifecycle 시점에 `emit(event)`를 호출한다. emitter는 `contextvars`로 주입되어 실행 밖에서는 no-op이다.
 - `stream_run(fn, run=RunContext)`은 Agent를 worker thread에서 돌리고 이벤트를 발생 즉시 yield한다. 마지막은 `done` 또는 `error`.
@@ -363,7 +363,7 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 
 ### Current implementation — API
 
-`backend/app/main.py` (FastAPI)
+`backend/app/systems/k_electronics/app.py` (FastAPI; `backend/app/main.py`가 `uvicorn app.main:app`용으로 재노출)
 
 | Endpoint | 역할 |
 | --- | --- |
@@ -509,17 +509,17 @@ K Super
 | 단계 | 코드 |
 | --- | --- |
 | frontend가 Step 3 진입 | `scenarioEvents.ts`의 `type: "live"` 이벤트가 `streamAgentRun(K_SUPER_RUN_PATH, A2A_REQUEST_TEXT)` 호출 |
-| API | `main.py` `k_super_run` → `stream_run(lambda: run_k_super(request), run=new_run(system="k_electronics", root_agent="k_super", origin="a2a"))` |
-| K Super LLM 판단 | `common.build_super_graph`의 `call_model`: `SystemMessage(SPEC.system_prompt + 호출 맥락)` + `bind_tools(SPEC.tools)`. 둘 다 `k_super.py`가 Registry에서 `skills_for` / `tools_for("k_super")`로 받은 것 |
-| 위임 | `common.build_super_graph`의 `run_tools` → `capabilities/tools/delegate_to_*.invoke` → `delegation_start` emit → `run_*_agent(task)` |
-| 전문 Agent LLM 판단 | `common.build_specialist_graph`의 `call_model` (각 Agent 모듈이 Registry에서 받은 `SYSTEM_PROMPT`, `TOOLS` + 호출 맥락 문단) |
-| Workflow Tool 실행 | `common.execute_tool_calls` → `tool_start` emit → `capabilities/tools/run_*.invoke` → `workflows/*` → `tool_end` emit |
-| 응답 | `common.run_specialist`: delegation이면 Tool 호출 검사 → `final_response` → `agent_end` emit → 반환 → `delegation_end` emit → `ToolMessage` |
-| 다음 위임 / 종료 | `common.build_super_graph`: `tools → model` 고정 엣지. 다음 `model` 턴이 Tool을 호출하면 `route_on_tool_calls` → `tools`, 아니면 → `END` |
-| 종합 (Step 6) | 마지막 `model` 턴의 AI 응답. `common.run_super`가 근거 검사(`a2a`: 위임 1회 이상, 응답 비어 있지 않음) 후 `agent_end(k_super, response)` emit |
+| API | `systems/k_electronics/app.py` `k_super_run` → `stream_run(lambda: run_k_super(request), run=new_run(system="k_electronics", root_agent="k_super", origin="a2a"))` |
+| K Super LLM 판단 | `agent_core.build_super_graph`의 `call_model`: `SystemMessage(SPEC.system_prompt + 호출 맥락)` + `bind_tools(SPEC.tools)`. 둘 다 `k_super.py`가 Registry에서 `skills_for` / `tools_for("k_super")`로 받은 것 |
+| 위임 | `agent_core.build_super_graph`의 `run_tools` → `systems/k_electronics/tools/delegate_to_*.invoke` → `delegation_start` emit → `run_*_agent(task)` |
+| 전문 Agent LLM 판단 | `agent_core.build_specialist_graph`의 `call_model` (각 Agent 모듈이 Registry에서 받은 `SYSTEM_PROMPT`, `TOOLS` + 호출 맥락 문단) |
+| Workflow Tool 실행 | `agent_core.execute_tool_calls` → `tool_start` emit → `systems/k_electronics/tools/run_*`(library factory instance).invoke → `library/workflows/*` → `tool_end` emit |
+| 응답 | `agent_core.run_specialist`: delegation이면 Tool 호출 검사 → `final_response` → `agent_end` emit → 반환 → `delegation_end` emit → `ToolMessage` |
+| 다음 위임 / 종료 | `agent_core.build_super_graph`: `tools → model` 고정 엣지. 다음 `model` 턴이 Tool을 호출하면 `route_on_tool_calls` → `tools`, 아니면 → `END` |
+| 종합 (Step 6) | 마지막 `model` 턴의 AI 응답. `agent_core.run_super`가 근거 검사(`a2a`: 위임 1회 이상, 응답 비어 있지 않음) 후 `agent_end(k_super, response)` emit |
 | UI 반영 | `agentEvents.ts` mapper → `useScenarioRunner` reducer. `delegation_start`의 대상에 따라 Step 3 / 4 / 5, K Super `agent_end`에 Step 6 표시 |
 
-LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 기본 모델 `deepseek-v4.1-flash`, `OLLAMA_API_KEY` 필요. 키는 `backend/.env`에 두고 Git에 넣지 않는다.
+LLM: `backend/app/runtime/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 기본 모델 `deepseek-v4.1-flash`, `OLLAMA_API_KEY` 필요. 키는 `backend/.env`에 두고 Git에 넣지 않는다.
 
 테스트:
 
@@ -531,6 +531,7 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 | `backend/tests/test_capabilities.py` | 아니오 | Registry 내용(kind, allowed_agents), Tool 정의가 source of truth, Agent가 Registry subset을 쓰는지, Skill이 system prompt에 들어가는지 |
 | `backend/tests/test_k_super.py` | 아니오 | `route_on_tool_calls`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model(`common.get_chat_model` patch) + stub 위임 Tool로 만든 그래프(`k_super.build_k_super` patch)로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
 | `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속(root_agent) / run 식별자 stamp(relay된 stamp 유지) |
+| `backend/tests/test_boundaries.py` | 아니오 | import 경계: runtime은 library·systems를, library는 systems를, system은 다른 system을 import하지 않음. system마다 registry.py와 data/ 존재 |
 | `backend/tests/test_agents.py` | 예 (`OLLAMA_API_KEY` 없으면 skip) | Meeting / News / Advisory Agent 단독 실행, K Super가 NeuroEdge 요청에 Meeting → News → Advisory를 각각 별도 model 턴에서 순차 위임하고 Advisory task에 회의 기준·외부 리스크를 담았는지(`context_signals`), 마지막에 Tool 호출 없는 최종 응답(본실사 판단 포함)으로 끝나는지, 회의 결정사항만 묻는 요청에는 Meeting에게만 위임하고 답하는지, NDJSON API, 경영자문 직접 대화의 개념 질문(Tool 없음) / 실제 검토(Tool 사용), delegation 경로의 Tool 검사 |
 
 ---
@@ -539,7 +540,7 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 
 | 영역 | Current implementation | Target architecture |
 | --- | --- | --- |
-| Capability 정의 | `capabilities/registry.py`에서 Agent별 Skill / Tool subset 제공. frontend에 Workflow 이름 상수 없음 | 같음 |
+| Capability 정의 | 각 system의 `registry.py`에서 Agent별 Skill / Tool subset 제공. frontend에 Workflow 이름 상수 없음 | 같음 |
 | K Super 그래프 | `tools → model` 루프. 모델이 Tool 없이 응답하면 `END`, 그 응답이 종합 결과 | 같음 |
 | Group Super | backend 없음. frontend mock | 독립 Super Agent. K Super와 A2A |
 | A2A | frontend가 A2A 요청 문장을 K Super API에 전달 | 독립 Agent System 간 통신 경계 |
@@ -600,7 +601,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | --- | --- | --- |
 | 0 | 결정 문서화 (이 장) | 완료 |
 | 1 | 동작 변화 없는 runtime 정비: Super core 추출(invocation) · run context · Registry 메커니즘/내용 분리 · workflow 데이터 경로 매개변수 | 완료 |
-| 2 | 디렉터리 경계 이동(runtime / 라이브러리 / K system) + import 경계 테스트 | 예정 |
+| 2 | 디렉터리 경계 이동(runtime / 라이브러리 / K system) + import 경계 테스트 | 완료 |
 | 3 | 관찰 hub + SSE, run 시작 이벤트 | 예정 |
 | 4 | K Super의 두 표면: A2A 수신(`a2a`) · 직접 채팅(`direct`) | 예정 |
 | 5a | Group system: Group Super + A2A client Tool + Group app | 예정 |
@@ -639,7 +640,7 @@ Phase 7 전까지 기존 단일 frontend와 mock Step 1·2·7·8은 그대로 �
 6. **Group Super와 A2A (2026-10-12에 결정).** 별도 프로세스(Group backend)의 Group Super가 Capability Tool로 K backend의 A2A 수신 표면을 HTTP 호출한다. 상세는 [11장](#11-목표-구조와-전환-계획-2026-10-12-결정). 구현 전까지 Current implementation은 그대로(backend에 Group Super 없음).
 7. **오류 귀속.** `stream_run`이 `AgentError` 외 예외를 run의 `root_agent`로 귀속한다 (Phase 1). 실행 중인 하위 Agent까지 정확히 지목하려면 실행 중 Agent 추적이 필요하다 (미해결).
 8. **Agent 식별자 동기화.** backend `AGENT_ID` 문자열과 frontend `AgentId`가 수동으로 일치해야 한다. frontend는 모르는 id의 이벤트를 조용히 버린다. `LIVE_DELEGATION_STEPS`(frontend)도 같은 id를 쓴다.
-   backend 안에서도 `capabilities/registry.py`(`allowed_agents`)와 `capabilities/tools/delegate_to_*.py`(`from` / `to`)가 같은 문자열을 리터럴로 가진다. Registry가 Agent 모듈을 import할 수 없기 때문이며, `tests/test_capabilities.py`가 일치를 검증한다.
+   backend 안에서도 `systems/k_electronics/registry.py`(`allowed_agents`)와 `systems/k_electronics/tools/delegate_to_*.py`(`from` / `to`)가 같은 문자열을 리터럴로 가진다. Registry가 Agent 모듈을 import할 수 없기 때문이며, `tests/test_capabilities.py`가 일치를 검증한다.
    **2026-10-12 결정**: 두 system이 같은 Specialist id를 쓰므로 id는 system 내부 이름으로 두고 runtime이 이벤트에 `system` 태그를 붙인다 ([11장](#11-목표-구조와-전환-계획-2026-10-12-결정) 3번).
 9. **Advisory persona 선택과 다중 관점.** persona는 `run_mna_review`의 인자이고 어떤 관점을 쓸지는 Advisory Agent의 모델 판단이다 (Skill: 한 번의 검토에 관점 하나, 지정 없으면 CEO).
    초기 실행에서 K Super가 "CEO/CFO/CTO 관점"을 모두 요구해 Advisory가 Tool을 세 번 호출한 사례가 있어 Skill과 위임 Tool 설명을 "관점 하나"로 조였다. 여러 관점의 비교 · 토론(CFO vs CTO)은 범위 밖이며, 필요해지면 Tool을 여러 번 호출할지, workflow가 다중 persona를 한 번에 돌려줄지 결정한다.

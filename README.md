@@ -110,32 +110,40 @@ src/
 
 backend/
   app/
-    main.py                          FastAPI: /api/health, /api/k-super/run, /api/agents/{meeting,news,advisory}/run (NDJSON 스트림)
-    events.py                        emit() / stream_run(): Agent lifecycle 이벤트 발행과 스트리밍, AgentError
-    llm.py                           ChatOllama (Ollama Cloud, OLLAMA_* 환경변수)
-    schemas.py                       요청 스키마
-    agents/
-      common.py                      공통 specialist core: Specialist / build_specialist_graph / run_specialist (MessagesState, model ⇄ tools 루프,
-                                     호출 맥락 delegation|direct, tool_start/end 발행), system prompt 조립(identity + Skills), 응답 추출
-      k_super.py                     K전자 슈퍼에이전트 그래프. Registry에서 받은 위임 Tool로 필요한 전문 Agent에 순차 위임, 충분하면 Tool 없이 최종 검토 결과 작성 → 종료
-      meeting.py                     미팅 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_meeting_context_retrieval)
-      news.py                        뉴스 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_company_risk_news_analysis)
-      advisory.py                    경영자문 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_mna_review)
-    capabilities/                    Agent Capability (Skill = 업무 지침, Tool = 호출 가능한 기능)
-      base.py                        Skill / Capability 타입
-      registry.py                    CAPABILITIES: 모든 Capability와 allowed_agents (권한의 source of truth), skills_for / tools_for
-      skills/                        specialist_delegation, meeting_context_analysis, external_risk_analysis, mna_feasibility_review
-      tools/                         delegate_to_meeting_agent, delegate_to_news_agent, delegate_to_advisory_agent,
-                                     run_meeting_context_retrieval, run_company_risk_news_analysis, run_mna_review (@tool 정의)
-    workflows/
-      meeting_context_retrieval.py   run_meeting_context_retrieval 내부 구현: fixture 조회 (키워드 점수 기반, LangChain 의존 없음)
-      company_risk_news_analysis.py  run_company_risk_news_analysis 내부 구현: 기업 alias + 리스크 category 키워드로 fixture 조회
-      mna_review.py                  run_mna_review 내부 구현: 기업 fixture + persona(CEO/CFO/CTO)별 평가 기준 표 + context 신호 추출 → 항목별 평가 · 권고 · 조건
-    data/meetings.json               회의 fixture (NeuroEdge 전략회의 + 무관한 회의 2건)
-    data/news.json                   뉴스 fixture (NeuroEdge 리스크 기사 3건 + 무관한 기업 기사 2건)
-    data/companies.json              인수 대상 기업 fixture (NeuroEdge 재무 · 가치 · 고객 · 기술 · 전략)
-  tests/                             test_workflow.py · test_news_workflow.py · test_mna_review_workflow.py · test_capabilities.py · test_k_super.py · test_events.py (LLM 불필요),
-                                     test_agents.py (Ollama Cloud 필요)
+    main.py                          `uvicorn app.main:app` 진입점. K Electronics system의 app을 재노출
+    runtime/                         공통 runtime (Agent id · Capability 내용 · 데이터를 모름)
+      agent_core.py                  Specialist core(Specialist / build_specialist_graph / run_specialist, 호출 맥락 delegation|direct)
+                                     + Super core(SuperAgent / build_super_graph / run_super, 호출 맥락 a2a|direct), system prompt 조립, 응답 추출
+      capabilities.py                Skill / Capability 타입 + Registry 조회·검증 메커니즘
+      events.py                      emit() / RunContext(run_id · system · origin · trace_id stamp) / stream_run(), AgentError
+      llm.py                         ChatOllama (Ollama Cloud, OLLAMA_* 환경변수)
+      schemas.py                     요청 스키마
+      api.py                         NDJSON 스트리밍 helper
+    library/                         공용 Capability 라이브러리 (system을 import하지 않음)
+      skills/                        specialist_delegation, meeting_context_analysis, external_risk_analysis, mna_feasibility_review (Skill 본문)
+      tools/                         run_meeting_context_retrieval, run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory
+                                     (Tool 이름 · 설명 · schema의 source of truth)
+      workflows/
+        meeting_context_retrieval.py Tool 내부 구현: 회의 store(path) 키워드 점수 조회 (LangChain 의존 없음)
+        company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(path) 조회
+        mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
+    systems/
+      k_electronics/                 K Electronics agent system (SYSTEM = "k_electronics", DATA_DIR)
+        app.py                       FastAPI: /api/health, /api/k-super/run, /api/agents/{meeting,news,advisory}/run (NDJSON 스트림)
+        registry.py                  이 system의 CAPABILITIES와 allowed_agents (권한의 source of truth), skills_for / tools_for
+        agents/
+          k_super.py                 K전자 슈퍼에이전트: AGENT_ID · IDENTITY + Registry 위임 Tool (Super core)
+          meeting.py                 미팅 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_meeting_context_retrieval)
+          news.py                    뉴스 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_company_risk_news_analysis)
+          advisory.py                경영자문 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_mna_review)
+        tools/
+          delegate_to_*.py           K Super → 미팅 / 뉴스 / 경영자문 위임 Tool (delegation_start/end 발행, 최종 응답만 반환)
+          run_*.py                   라이브러리 Tool factory를 이 system의 data/에 바인딩한 instance
+        data/meetings.json           회의 fixture (NeuroEdge 전략회의 + 무관한 회의 2건)
+        data/news.json               뉴스 fixture (NeuroEdge 리스크 기사 3건 + 무관한 기업 기사 2건)
+        data/companies.json          인수 대상 기업 fixture (NeuroEdge 재무 · 가치 · 고객 · 기술 · 전략)
+  tests/                             test_workflow.py · test_news_workflow.py · test_mna_review_workflow.py · test_capabilities.py · test_k_super.py · test_events.py
+                                     · test_boundaries.py(runtime/library/system import 경계) (LLM 불필요), test_agents.py (Ollama Cloud 필요)
 ```
 
 ### Agent 구조 (backend)
@@ -197,7 +205,7 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
   Sidebar 직접 대화(`/api/agents/*/run`)는 호출 맥락이 `direct`라 이 검사를 하지 않고, Tool 사용 여부는 Agent가 Skill 지침에 따라 정합니다.
 - `run_mna_review`의 persona(CEO / CFO / CTO)는 별도 Agent가 아니라 평가 관점 인자입니다. 같은 데이터면 권고와 조건 집합은 같고,
   어떤 항목을 먼저 보고 어떤 우려와 조건을 앞세우는지가 달라집니다.
-- 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 `capabilities/registry.py`에서
+- 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 자기 system의 `registry.py`에서
   `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
 - Step 7 이후: K Super의 실제 Step 6 응답을 A2A 응답으로 Group Super에게 넘기는 부분은 아직 mock입니다 (`scenarioEvents.ts`의 `session_close` 고정 문장).
 

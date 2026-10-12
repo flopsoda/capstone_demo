@@ -11,10 +11,11 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import END
 
-from app.agents import common, k_super
-from app.agents.common import build_super_graph, route_on_tool_calls
-from app.agents.k_super import SPEC, TOOLS_BY_NAME, build_k_super, run_k_super
-from app.events import AgentError, collect_events
+from app.runtime import agent_core as common
+from app.runtime.agent_core import build_super_graph, route_on_tool_calls
+from app.runtime.events import AgentError, collect_events
+from app.systems.k_electronics.agents import k_super
+from app.systems.k_electronics.agents.k_super import SPEC, TOOLS_BY_NAME, build_k_super, run_k_super
 
 
 def _tool_call(name: str, idx: int) -> AIMessage:

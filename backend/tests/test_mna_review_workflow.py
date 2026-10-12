@@ -3,7 +3,13 @@ signals, recommendation and conditions (no LLM needed)."""
 
 import pytest
 
-from app.workflows.mna_review import PERSONAS, extract_context_signals, resolve_persona, review_acquisition
+from functools import partial
+
+from app.library.workflows.mna_review import PERSONAS, extract_context_signals, resolve_persona, review_acquisition as _review_acquisition
+from app.systems.k_electronics import DATA_DIR
+
+# The workflow is system-neutral; these tests run it over K Electronics' company store.
+review_acquisition = partial(_review_acquisition, path=DATA_DIR / "companies.json")
 
 QUERY = "뉴로엣지 인수안의 본실사 진입 여부 검토"
 CONTEXT = (

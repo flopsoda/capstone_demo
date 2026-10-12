@@ -1,4 +1,4 @@
-from app.events import AgentError, collect_events, emit, new_run, stream_run
+from app.runtime.events import AgentError, collect_events, emit, new_run, stream_run
 
 RUN = new_run(system="k_electronics", root_agent="k_super", origin="a2a")
 
