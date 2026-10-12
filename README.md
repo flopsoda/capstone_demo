@@ -126,7 +126,7 @@ backend/
     library/                         공용 Capability 라이브러리 (system을 import하지 않음)
       skills/                        specialist_delegation, meeting_context_analysis, external_risk_analysis, mna_feasibility_review (Skill 본문)
       tools/                         run_meeting_context_retrieval, run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory
-                                     (Tool 이름 · 설명 · schema의 source of truth)
+                                     (Tool 이름 · 설명 · schema의 source of truth); delegation.py — make_delegate_tool(name, description, from, to, run)
       workflows/
         meeting_context_retrieval.py Tool 내부 구현: 회의 store(path) 키워드 점수 조회 (LangChain 의존 없음)
         company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(path) 조회
@@ -134,10 +134,16 @@ backend/
     systems/
       group/                         Group agent system (SYSTEM = "group") — `uvicorn app.systems.group.app:app --port 8001`
         app.py                       FastAPI: /api/health, /api/agents/group-super/run (NDJSON), /api/events (SSE)
-        registry.py                  Group의 CAPABILITIES: subsidiary_review(Skill) · request_k_electronics_review(Tool)
-        agents/group_super.py        그룹 슈퍼에이전트: AGENT_ID · IDENTITY + Registry (Super core)
+        app.py                       + /api/agents/{meeting,news,advisory}/run (Group 전문 Agent 직접 채팅)
+        registry.py                  Group의 CAPABILITIES (12개): group_super ← subsidiary_review · specialist_delegation · request_k_electronics_review · delegate_to_*;
+                                     meeting / news / advisory ← 라이브러리 Skill + Group 데이터에 바인딩한 run_*
+        agents/group_super.py        그룹 슈퍼에이전트: AGENT_ID · IDENTITY + Registry (Super core). 자기 Specialist 위임과 K전자 A2A 중 선택은 모델 판단
+        agents/{meeting,news,advisory}.py  그룹 전문 Agent: 같은 Specialist core · 같은 Skill, Group 데이터
         skills/subsidiary_review.py  계열사 검토 요청(A2A)과 그룹 판단 지침
+        tools/delegate_to_*.py       Group Super → 그룹 전문 Agent 위임 Tool (라이브러리 factory + Group 전용 설명)
+        tools/run_*.py               라이브러리 Tool factory를 Group data/에 바인딩한 instance
         tools/request_k_electronics_review.py  A2A client Tool: a2a_start → K /api/a2a/run (HTTP) → K lifecycle relay(관찰용) → 최종 응답만 반환 → a2a_end
+        data/                        그룹 fixture: 그룹 투자심의·경영전략 회의, 계열사·그룹 투자 대상 뉴스, 그룹 차원 인수 후보(브라이트셀)
       k_electronics/                 K Electronics agent system (SYSTEM = "k_electronics", DATA_DIR)
         app.py                       FastAPI: /api/health, /api/a2a/run (= /api/k-super/run, A2A 수신), /api/agents/{k-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE 관찰 채널)
         registry.py                  이 system의 CAPABILITIES와 allowed_agents (권한의 source of truth), skills_for / tools_for
@@ -147,12 +153,13 @@ backend/
           news.py                    뉴스 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_company_risk_news_analysis)
           advisory.py                경영자문 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_mna_review)
         tools/
-          delegate_to_*.py           K Super → 미팅 / 뉴스 / 경영자문 위임 Tool (delegation_start/end 발행, 최종 응답만 반환)
+          delegate_to_*.py           K Super → 미팅 / 뉴스 / 경영자문 위임 Tool (라이브러리 factory + K 설명; delegation_start/end 발행, 최종 응답만 반환)
           run_*.py                   라이브러리 Tool factory를 이 system의 data/에 바인딩한 instance
         data/meetings.json           회의 fixture (NeuroEdge 전략회의 + 무관한 회의 2건)
         data/news.json               뉴스 fixture (NeuroEdge 리스크 기사 3건 + 무관한 기업 기사 2건)
         data/companies.json          인수 대상 기업 fixture (NeuroEdge 재무 · 가치 · 고객 · 기술 · 전략)
   tests/                             test_workflow.py · test_news_workflow.py · test_mna_review_workflow.py · test_capabilities.py · test_k_super.py · test_k_app.py · test_events.py
+                                     · test_group.py · test_group_workflows.py
                                      · test_boundaries.py(runtime/library/system import 경계) (LLM 불필요), test_agents.py (Ollama Cloud 필요)
 ```
 

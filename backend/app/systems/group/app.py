@@ -13,7 +13,10 @@ from ...runtime.api import ndjson_run, sse_events
 from ...runtime.events import new_run
 from ...runtime.schemas import RunRequest
 from . import SYSTEM
+from .agents.advisory import run_advisory_agent
 from .agents.group_super import run_group_super
+from .agents.meeting import run_meeting_agent
+from .agents.news import run_news_agent
 
 app = FastAPI(title="Group agent system", version="0.5.0")
 
@@ -31,5 +34,23 @@ def events() -> StreamingResponse:
 
 @app.post("/api/agents/group-super/run")
 def group_super_run(body: RunRequest) -> StreamingResponse:
-    """User → Group Super. Asks K Electronics over A2A when its review is needed. Streams events."""
+    """User → Group Super. Delegates to the Group's specialists or asks K Electronics over A2A, as it judges. Streams events."""
     return ndjson_run(lambda: run_group_super(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="group_super"))
+
+
+@app.post("/api/agents/meeting/run")
+def meeting_run(body: RunRequest) -> StreamingResponse:
+    """Direct user → Group Meeting Agent (group-level meeting records). Streams events."""
+    return ndjson_run(lambda: run_meeting_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="meeting"))
+
+
+@app.post("/api/agents/news/run")
+def news_run(body: RunRequest) -> StreamingResponse:
+    """Direct user → Group News Agent. Streams events."""
+    return ndjson_run(lambda: run_news_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="news"))
+
+
+@app.post("/api/agents/advisory/run")
+def advisory_run(body: RunRequest) -> StreamingResponse:
+    """Direct user → Group Advisory Agent (group-level acquisition targets). Streams events."""
+    return ndjson_run(lambda: run_advisory_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="advisory"))

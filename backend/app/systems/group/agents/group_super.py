@@ -1,7 +1,7 @@
 """Group Super Agent — serves the group's executives; asks subsidiaries' Super Agents
 over A2A when their internal review is needed, then writes the group-level judgment.
 
-    request → model → request_k_electronics_review(request) → model → … → model → END
+    request → model → delegate_to_*(task) | request_k_electronics_review(request) → model → … → model → END
 
 The graph and run loop are the shared super-agent core (app/runtime/agent_core.py);
 this module only says who the agent is. Which Skills and Tools it has is decided
@@ -19,8 +19,9 @@ from ..registry import skills_for, tools_for
 
 AGENT_ID = "group_super"
 
-IDENTITY = """당신은 그룹 슈퍼에이전트(Group Super Agent)다.
-그룹 회장과 경영진의 요청을 받아, 계열사 차원의 검토가 필요하면 해당 계열사의 슈퍼에이전트에게 A2A로 검토를 요청하고,
+IDENTITY = """당신은 K그룹(지주회사) 슈퍼에이전트(Group Super Agent)다.
+그룹 회장과 경영진의 요청을 받아, 그룹 차원의 자료가 필요하면 그룹의 전문 에이전트(미팅 · 뉴스 · 경영자문)에게 위임하고,
+계열사 내부 자료나 계열사 차원의 판단이 필요하면 해당 계열사의 슈퍼에이전트에게 A2A로 검토를 요청한 뒤,
 그 결과를 바탕으로 그룹 차원의 최종 판단(예: 그룹 투자심의 의견)을 회신한다.
 
 출력 규칙:

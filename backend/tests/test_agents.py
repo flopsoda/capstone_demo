@@ -298,9 +298,12 @@ def test_group_super_asks_k_electronics_over_a2a_and_writes_the_group_judgment(m
     assert types[-1] == "done"
     a2a = [e for e in events if e["type"] == "a2a_start"]
     assert len(a2a) == 1 and "뉴로엣지" in a2a[0]["request"], a2a
-    # K's own delegations are visible as relayed observation events, in K's order.
-    assert [e["to"] for e in events if e["type"] == "delegation_start"] == ["meeting", "news", "advisory"], events
+    # K's own delegations are visible as relayed observation events, in K's order. Group Super may also
+    # have delegated to its own specialists first (its call); those are not relayed.
+    k_delegations = [e["to"] for e in events if e["type"] == "delegation_start" and e.get("relayed")]
+    assert k_delegations == ["meeting", "news", "advisory"], events
     assert all(e.get("relayed") for e in events if e["system"] == "k_electronics")
+    assert all(not e.get("relayed") for e in events if e["system"] == "group")
     a2a_end = next(e for e in events if e["type"] == "a2a_end")
     final = next(e for e in events if e["type"] == "agent_end" and e["agent"] == "group_super")
     assert a2a_end["response"] and final["response"]
@@ -318,3 +321,19 @@ def test_group_super_direct_small_talk_does_not_call_a2a():
     types = [e["type"] for e in events]
     assert "error" not in types and "a2a_start" not in types, events
     assert types[-1] == "done"
+
+
+def test_group_meeting_agent_direct_chat_uses_group_records():
+    from fastapi.testclient import TestClient
+
+    from app.systems.group.app import app as group_app
+
+    with TestClient(group_app).stream(
+        "POST", "/api/agents/meeting/run", json={"request": "그룹 투자심의 사전회의에서 정한 기준과 미완료 Action Item을 알려줘."}
+    ) as res:
+        assert res.status_code == 200, res.text
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    tool_end = next(e for e in events if e["type"] == "tool_end")
+    assert tool_end["tool"] == MEETING_WORKFLOW and tool_end["result"]["meetings"][0]["title"] == "그룹 투자심의위원회 사전회의"
+    final = next(e for e in events if e["type"] == "agent_end")
+    assert "2026-09-30" in final["response"] or "투자심의" in final["response"], final["response"]

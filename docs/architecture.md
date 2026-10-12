@@ -53,6 +53,7 @@ Subsidiary Super Agent
 그룹 회장 (Chairman)
        ↓
 그룹 슈퍼에이전트 (Group Super)          ← backend REAL (Group system, :8001) · frontend는 아직 mock (Phase 7)
+       ├── delegation → 그룹 미팅 / 뉴스 / 경영자문 에이전트 (Group 데이터)   ← backend REAL (Phase 5b)
        ⇅ A2A (HTTP)                      ← backend REAL (Group Tool → K `/api/a2a/run`) · frontend는 아직 mock
 K전자 슈퍼에이전트 (K Electronics Super)  ← backend REAL (K system, :8000)
        ↓ delegation
@@ -253,6 +254,11 @@ systems/k_electronics/
 | `external_risk_analysis` | skill | `news` | `library/skills/external_risk_analysis.py` |
 | `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(data/news.json)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
+
+Group system의 Registry(`systems/group/registry.py`)는 같은 메커니즘으로 자기 내용을 가진다 (Phase 5a·5b):
+`group_super` ← Skill `subsidiary_review`(Group 전용) · `specialist_delegation`(라이브러리), Tool `request_k_electronics_review`(A2A client) · `delegate_to_{meeting,news,advisory}_agent`(Group 전용 설명, 라이브러리 factory `library/tools/delegation.make_delegate_tool`);
+`meeting` / `news` / `advisory` ← 라이브러리 Skill 3개 + 라이브러리 Tool factory를 `systems/group/data/`에 바인딩한 instance 3개.
+어느 Tool을 쓸지(자기 Specialist 위임 vs K전자 A2A)는 Registry 제한 없이 요청과 Tool 설명에 따른 모델 판단이다.
 | `run_mna_review` | tool | `advisory` | `systems/k_electronics/tools/run_mna_review.py` = `make_run_mna_review(data/companies.json)` → `library/workflows/mna_review.review_acquisition` |
 
 설계 규칙:
@@ -384,7 +390,8 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 | --- | --- |
 | `GET /api/health` | 상태 확인 (`system: group`) |
 | `GET /api/events` | 관찰 채널 (relay된 K 이벤트 포함) |
-| `POST /api/agents/group-super/run` `{request}` | 사용자 → Group Super 직접 대화. 계열사 검토가 필요하면 A2A Tool로 K에 요청하고 그룹 판단을 쓴다. NDJSON 스트림에 `a2a_start` · relayed K 이벤트 · `a2a_end` · `agent_end(group_super)`가 흐른다 |
+| `POST /api/agents/group-super/run` `{request}` | 사용자 → Group Super 직접 대화. 자기 Specialist에게 위임하거나 A2A Tool로 K에 요청하고 그룹 판단을 쓴다. NDJSON 스트림에 `delegation_*`(Group) · `a2a_start` · relayed K 이벤트 · `a2a_end` · `agent_end(group_super)`가 흐른다 |
+| `POST /api/agents/{meeting,news,advisory}/run` `{request}` | 사용자 → Group의 전문 Agent 직접 대화 (Group 데이터) |
 | `POST /api/agents/meeting/run` `{request}` | 사용자 → Meeting Agent 직접 대화 (`invocation="direct"`). 같은 Agent core |
 | `POST /api/agents/news/run` `{request}` | 사용자 → News Agent 직접 대화. 같은 Agent core |
 | `POST /api/agents/advisory/run` `{request}` | 사용자 → Advisory Agent 직접 대화. 같은 Agent core |
@@ -548,9 +555,10 @@ LLM: `backend/app/runtime/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama
 | `backend/tests/test_k_super.py` | 아니오 | `route_on_tool_calls`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model(`common.get_chat_model` patch) + stub 위임 Tool로 만든 그래프(`k_super.build_k_super` patch)로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
 | `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속(root_agent) / run 식별자 stamp(relay된 stamp 유지) / HUB publish·subscribe·keep-alive / SSE 형식 / `.env` 경로 |
 | `backend/tests/test_k_app.py` | 아니오 | K app 표면을 scripted model로 end-to-end: `/api/a2a/run`이 K Super → Meeting → Tool 체인을 돌리고 trace_id · caller · origin을 stamp, 위임 없는 답은 `error`, 옛 경로 동일, `/api/agents/k-super/run`은 위임 없이 답해도 정상 |
-| `backend/tests/test_group.py` | 아니오 | Group Registry 내용, A2A Tool이 K lifecycle을 relay하고 최종 응답만 반환, K 실패·연결 실패를 `k_super`로 귀속, Group app → K app 프로세스 내 end-to-end(stamp · trace · relayed 검증), 직접 인사 |
+| `backend/tests/test_group.py` | 아니오 | Group Registry 내용(12개), Agent가 Registry subset을 쓰는지, 위임 Tool의 from/to, Group Tool instance가 Group 데이터만 읽는지(K와 분리), A2A Tool이 K lifecycle을 relay하고 최종 응답만 반환, K 실패·연결 실패를 `k_super`로 귀속, Group app → K app 프로세스 내 end-to-end, Group Super → 자기 Specialist 위임, Specialist 직접 endpoint |
+| `backend/tests/test_group_workflows.py` | 아니오 | 라이브러리 workflow 3개를 Group 데이터로 실행 |
 | `backend/tests/test_boundaries.py` | 아니오 | import 경계: runtime은 library·systems를, library는 systems를, system은 다른 system을 import하지 않음. system마다 registry.py와 data/ 존재 |
-| `backend/tests/test_agents.py` | 예 (`OLLAMA_API_KEY` 없으면 skip) | Meeting / News / Advisory Agent 단독 실행, K Super 직접 대화(인사에는 위임 없이 · 회의 기준 요청에는 Meeting 위임), Group Super → K A2A 실제 왕복(relay된 위임 세 건, 그룹 판단) · Group 직접 인사, K Super가 NeuroEdge 요청에 Meeting → News → Advisory를 각각 별도 model 턴에서 순차 위임하고 Advisory task에 회의 기준·외부 리스크를 담았는지(`context_signals`), 마지막에 Tool 호출 없는 최종 응답(본실사 판단 포함)으로 끝나는지, 회의 결정사항만 묻는 요청에는 Meeting에게만 위임하고 답하는지, NDJSON API, 경영자문 직접 대화의 개념 질문(Tool 없음) / 실제 검토(Tool 사용), delegation 경로의 Tool 검사 |
+| `backend/tests/test_agents.py` | 예 (`OLLAMA_API_KEY` 없으면 skip) | Meeting / News / Advisory Agent 단독 실행, K Super 직접 대화(인사에는 위임 없이 · 회의 기준 요청에는 Meeting 위임), Group Super → K A2A 실제 왕복(relay된 K 위임 세 건, 그룹 판단; Group 자체 위임은 허용) · Group 직접 인사 · Group 미팅 에이전트 직접 대화(Group 데이터), K Super가 NeuroEdge 요청에 Meeting → News → Advisory를 각각 별도 model 턴에서 순차 위임하고 Advisory task에 회의 기준·외부 리스크를 담았는지(`context_signals`), 마지막에 Tool 호출 없는 최종 응답(본실사 판단 포함)으로 끝나는지, 회의 결정사항만 묻는 요청에는 Meeting에게만 위임하고 답하는지, NDJSON API, 경영자문 직접 대화의 개념 질문(Tool 없음) / 실제 검토(Tool 사용), delegation 경로의 Tool 검사 |
 
 ---
 
@@ -623,7 +631,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | 3 | 관찰 hub + SSE (별도 run 시작 이벤트는 두지 않음: root Agent의 `agent_start`에 `origin` · `caller`가 찍힌다) | 완료 |
 | 4 | K Super의 두 표면: A2A 수신(`a2a`) · 직접 채팅(`direct`) | 완료 |
 | 5a | Group system: Group Super + A2A client Tool + Group app | 완료 |
-| 5b | Group Specialist 3개 + Group 데이터 + Group Super의 `delegate_to_*` | 예정 |
+| 5b | Group Specialist 3개 + Group 데이터 + Group Super의 `delegate_to_*` | 완료 |
 | 6 | Demo Monitor | 예정 |
 | 7 | 제품 UI(Group · K), mock scenario 제거 | 예정 |
 | 8 | 정리 · 문서 · (선택) K UI 외부 실행 표시 | 예정 |
@@ -648,7 +656,7 @@ Phase 7 전까지 기존 단일 frontend와 mock Step 1·2·7·8은 그대로 �
    병렬 위임과 frontend session stack(중첩 전제)의 형제 세션 처리는 여전히 열려 있다.
 3. **위임 Tool ↔ 대상 Agent의 순환 의존 (Step 5에서 내린 결정과 남은 부분).** `delegate_to_*` Tool은 대상 Agent의 `run_*`를 호출 시점에 import해서 순환을 끊는다 ([4장](#4-capability-registry)).
    Step 5에서 **공통 specialist core**, Phase 1에서 **공통 super core**를 도입했다 (`common.SuperAgent` / `build_super_graph` / `run_super`, [3.1](#31-super-agent)). Agent 파일은 정체성과 Registry 조회만 갖는다.
-   위임 Tool 3개는 여전히 같은 모양의 복사본이다. 각 Tool의 docstring이 K Super에게 보이는 담당 설명(Agent-visible 표면)이라 파일을 따로 두는 쪽이 읽기 쉽고, "agent id → runner" 테이블은 아직 도입하지 않았다. 네 번째 전문 Agent가 생기면 다시 본다.
+   Phase 5b에서 위임 Tool이 6개(K 3 + Group 3)가 되면서 `library/tools/delegation.make_delegate_tool(name, description, from_agent, to_agent, run)` factory를 두었다. 각 system의 `delegate_to_*.py`는 Agent-visible 설명(`DESCRIPTION`)과 `FROM_AGENT` / `TO_AGENT`, runner 조회만 갖는다.
    `tests/test_agents.py`의 `_NoToolGraph`처럼 `build_*_agent`를 monkeypatch하는 테스트가 있으므로 `run_*_agent`는 그래프를 모듈 전역 이름으로 조회한다.
 4. **Workflow 결과의 frontend 렌더링.** Tool별 `switch`를 계속 늘릴지, backend가 표시 힌트를 함께 보낼지, 범용 렌더로 갈지.
 5. **상위 Agent로 전달할 구조화 결과 (Step 5에서 내린 결정과 남은 부분).** Step 5에서는 공유 구조를 만들지 않았다. Advisory가 필요로 하는 Meeting / News 결과는 K Super가 자기 history를 보고 **자연어 위임 문장에 직접 담는다** (Skill `specialist_delegation`의 지침, 코드 template 없음).
