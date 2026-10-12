@@ -1,9 +1,10 @@
-"""Capability Registry — the single place that answers:
+"""Capability Registry of the K Electronics agent system — the single place that answers:
 
     which capabilities exist?  skill or tool?  which agents may use each?  what implements it?
 
 Implementations live in ./skills and ./tools; this module only lists them and
-attaches permissions. Agents ask for their own subset with skills_for() /
+attaches permissions (the registry *content*; the lookup mechanism is
+base.Registry). Agents ask for their own subset with skills_for() /
 tools_for() and never import skill or tool modules directly.
 
 Internal helpers and the steps inside a tool's workflow (app/workflows/) are
@@ -12,9 +13,7 @@ not capabilities and are not registered.
 
 from __future__ import annotations
 
-from langchain_core.tools import BaseTool
-
-from .base import Capability, Skill
+from .base import Capability, Registry
 from .skills.external_risk_analysis import EXTERNAL_RISK_ANALYSIS
 from .skills.meeting_context_analysis import MEETING_CONTEXT_ANALYSIS
 from .skills.mna_feasibility_review import MNA_FEASIBILITY_REVIEW
@@ -49,26 +48,9 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(run_mna_review, frozenset({ADVISORY})),
 )
 
-_BY_NAME: dict[str, Capability] = {}
-for _c in CAPABILITIES:
-    if _c.name in _BY_NAME:
-        raise ValueError(f"duplicate capability name: {_c.name}")
-    if not _c.allowed_agents:
-        raise ValueError(f"capability {_c.name} has no allowed agents")
-    _BY_NAME[_c.name] = _c
+REGISTRY = Registry(CAPABILITIES)
 
-
-def get_capability(name: str) -> Capability:
-    return _BY_NAME[name]
-
-
-def capabilities_for(agent_id: str) -> list[Capability]:
-    return [c for c in CAPABILITIES if c.allows(agent_id)]
-
-
-def skills_for(agent_id: str) -> list[Skill]:
-    return [c.impl for c in capabilities_for(agent_id) if isinstance(c.impl, Skill)]
-
-
-def tools_for(agent_id: str) -> list[BaseTool]:
-    return [c.impl for c in capabilities_for(agent_id) if isinstance(c.impl, BaseTool)]
+get_capability = REGISTRY.get
+capabilities_for = REGISTRY.capabilities_for
+skills_for = REGISTRY.skills_for
+tools_for = REGISTRY.tools_for

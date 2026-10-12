@@ -79,11 +79,13 @@ def retrieve_meeting_context(
     topics: list[str] | None = None,
     *,
     limit: int = 3,
+    path: Path = DATA_PATH,
 ) -> dict[str, Any]:
-    """Pure function so the workflow can be unit-tested without an LLM."""
+    """Pure function so the workflow can be unit-tested without an LLM.
+    `path` is the meeting store this system owns (bound by the system's Tool)."""
     topics = topics or []
     ranked = sorted(
-        ((score_meeting(m, query, topics), m) for m in load_meetings()),
+        ((score_meeting(m, query, topics), m) for m in load_meetings(path)),
         key=lambda pair: (-pair[0], pair[1]["date"]),
     )
     # Absolute floor plus a relative one: a meeting that scores far below the

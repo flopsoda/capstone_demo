@@ -5,12 +5,15 @@ delegation tools and back to the model; a plain answer ends the run. There is
 no rule that every registered specialist must be consulted.
 """
 
+from dataclasses import replace
+
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import END
 
-from app.agents import k_super
-from app.agents.k_super import TOOLS_BY_NAME, _route, build_k_super, run_k_super
+from app.agents import common, k_super
+from app.agents.common import build_super_graph, route_on_tool_calls
+from app.agents.k_super import SPEC, TOOLS_BY_NAME, build_k_super, run_k_super
 from app.events import AgentError, collect_events
 
 
@@ -23,8 +26,8 @@ def test_registry_gives_k_super_one_delegation_tool_per_specialist():
 
 
 def test_route_delegates_on_tool_call_and_ends_on_plain_answer():
-    assert _route({"messages": [HumanMessage("req"), _tool_call("delegate_to_meeting_agent", 1)]}) == "tools"
-    assert _route({"messages": [HumanMessage("req"), AIMessage("최종 검토 결과")]}) == END
+    assert route_on_tool_calls({"messages": [HumanMessage("req"), _tool_call("delegate_to_meeting_agent", 1)]}) == "tools"
+    assert route_on_tool_calls({"messages": [HumanMessage("req"), AIMessage("최종 검토 결과")]}) == END
 
 
 def test_tools_always_return_to_model():
@@ -50,7 +53,8 @@ class _ScriptedModel:
 
 
 class _StubDelegation:
-    def __init__(self, response: str):
+    def __init__(self, response: str, name: str = "stub"):
+        self.name = name
         self.response = response
         self.calls: list[dict] = []
 
@@ -63,8 +67,11 @@ class _StubDelegation:
 def scripted(monkeypatch):
     def install(turns: list[AIMessage], stubs: dict[str, _StubDelegation]):
         model = _ScriptedModel(turns)  # one instance: each model turn consumes the next scripted message
-        monkeypatch.setattr(k_super, "get_chat_model", lambda: model)
-        monkeypatch.setattr(k_super, "TOOLS_BY_NAME", stubs)
+        monkeypatch.setattr(common, "get_chat_model", lambda: model)
+        for name, stub in stubs.items():
+            stub.name = name
+        graph = build_super_graph(replace(SPEC, tools=tuple(stubs.values())))
+        monkeypatch.setattr(k_super, "build_k_super", lambda: graph)
 
     return install
 
@@ -118,7 +125,7 @@ def test_tool_message_shape_after_delegation(scripted):
         [_tool_call("delegate_to_meeting_agent", 1), AIMessage("끝")],
         {"delegate_to_meeting_agent": _StubDelegation("회의 결과")},
     )
-    state = build_k_super().invoke({"messages": [HumanMessage("req")]})
+    state = k_super.build_k_super().invoke({"messages": [HumanMessage("req")]})  # the patched graph
     tool_msg = state["messages"][2]
     assert isinstance(tool_msg, ToolMessage) and tool_msg.content == "회의 결과" and tool_msg.tool_call_id == "c1"
     assert isinstance(state["messages"][-1], AIMessage) and not state["messages"][-1].tool_calls

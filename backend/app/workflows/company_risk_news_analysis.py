@@ -72,8 +72,10 @@ def analyze_company_risk_news(
     topics: list[str] | None = None,
     *,
     limit: int = 5,
+    path: Path = DATA_PATH,
 ) -> dict[str, Any]:
     """Pure function so the workflow can be unit-tested without an LLM.
+    `path` is the article store this system owns (bound by the system's Tool).
 
     Returns:
         {
@@ -85,7 +87,7 @@ def analyze_company_risk_news(
     """
     topics = topics or []
     categories = requested_categories(query, topics)
-    about = [a for a in load_articles() if _about_company(a, company)]
+    about = [a for a in load_articles(path) if _about_company(a, company)]
     selected = [a for a in about if not categories or a["risk"]["category"] in categories]
     # Highest level first; within a level, newest first (two stable sorts).
     selected.sort(key=lambda a: a["date"], reverse=True)

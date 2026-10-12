@@ -17,15 +17,19 @@ from .agents.advisory import run_advisory_agent
 from .agents.k_super import run_k_super
 from .agents.meeting import run_meeting_agent
 from .agents.news import run_news_agent
-from .events import stream_run
+from .events import new_run, stream_run
 from .schemas import RunRequest
+
+SYSTEM = "k_electronics"  # the agent system this process serves; stamped on every event
 
 app = FastAPI(title="capstone agents backend", version="0.4.0")
 
 
-def _ndjson(fn: Callable[[], Any]) -> StreamingResponse:
+def _ndjson(fn: Callable[[], Any], *, root_agent: str, origin: str = "direct") -> StreamingResponse:
+    run = new_run(system=SYSTEM, root_agent=root_agent, origin=origin)
+
     def lines() -> Iterator[str]:
-        for event in stream_run(fn):
+        for event in stream_run(fn, run=run):
             yield json.dumps(event, ensure_ascii=False) + "\n"
 
     return StreamingResponse(
@@ -43,22 +47,22 @@ def health() -> dict[str, str]:
 @app.post("/api/k-super/run")
 def k_super_run(body: RunRequest) -> StreamingResponse:
     """Scenario Steps 3–5: K Super receives the A2A request and delegates to each specialist. Streams events."""
-    return _ndjson(lambda: run_k_super(body.request))
+    return _ndjson(lambda: run_k_super(body.request), root_agent="k_super", origin="a2a")
 
 
 @app.post("/api/agents/meeting/run")
 def meeting_run(body: RunRequest) -> StreamingResponse:
     """Direct user → Meeting Agent (sidebar chat), same agent core as Step 3. Streams events."""
-    return _ndjson(lambda: run_meeting_agent(body.request, invocation="direct"))
+    return _ndjson(lambda: run_meeting_agent(body.request, invocation="direct"), root_agent="meeting")
 
 
 @app.post("/api/agents/news/run")
 def news_run(body: RunRequest) -> StreamingResponse:
     """Direct user → News Agent (sidebar chat), same agent core as Step 4. Streams events."""
-    return _ndjson(lambda: run_news_agent(body.request, invocation="direct"))
+    return _ndjson(lambda: run_news_agent(body.request, invocation="direct"), root_agent="news")
 
 
 @app.post("/api/agents/advisory/run")
 def advisory_run(body: RunRequest) -> StreamingResponse:
     """Direct user → Advisory Agent (sidebar chat), same agent core as Step 5. Streams events."""
-    return _ndjson(lambda: run_advisory_agent(body.request, invocation="direct"))
+    return _ndjson(lambda: run_advisory_agent(body.request, invocation="direct"), root_agent="advisory")

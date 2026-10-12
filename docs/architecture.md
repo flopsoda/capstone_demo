@@ -85,8 +85,12 @@ K Electronics Super
 - 위임은 LLM의 실제 tool calling으로 일어난다. 위임 문장(`task`)은 LLM이 작성하므로 실행마다 달라질 수 있다.
 - Super Agent는 직접 분석하거나 답을 지어내지 않는다 (K Super system prompt 규칙).
 
-**Current implementation** — `backend/app/agents/k_super.py`
-- LangGraph `StateGraph(MessagesState)`, 노드 `model` / `tools`.
+**Current implementation** — `backend/app/agents/common.py`(Super core) + `backend/app/agents/k_super.py`(정체성)
+- Phase 1(2026-10-12)에서 Specialist와 같은 방식으로 **공통 super core**를 두었다: `common.SuperAgent(agent_id, display_name, system_prompt, tools)`,
+  `build_super_graph(spec)`(LangGraph `StateGraph(MessagesState)`, 노드 `model` / `tools`), `run_super(spec, graph, request, invocation=...)`.
+  `k_super.py`에는 `AGENT_ID` · `IDENTITY` · Registry 조회 · `SPEC` · `build_k_super()` · `run_k_super()`만 있다.
+- 호출 맥락(invocation)은 `"a2a"`(다른 Agent System의 Super Agent가 보낸 요청, 기본값) | `"direct"`(사용자 직접 대화)이며 `common.SUPER_INVOCATION_CONTEXT` 한 문단으로 모델에게 알린다.
+  근거 검사(위임 1회 이상)는 `a2a`에서만 한다. 현재 API는 `a2a`만 쓴다 (direct 엔드포인트는 Phase 4).
 - Registry가 허용한 Capability: Skill `specialist_delegation`(위임 지침), Tool `delegate_to_meeting_agent`, `delegate_to_news_agent`, `delegate_to_advisory_agent`. 모두 `backend/app/capabilities/`에 있다 ([4장](#4-capability-registry)).
 - `tools → model` 루프. 위임 결과(`ToolMessage`)를 받은 모델이 다시 판단해 다음 위임을 결정한다. 위임 순서와 `task` 문장은 모델이 정한다.
   Skill이 "한 번에 하나의 전문 에이전트에게만 위임하고 결과를 받은 뒤 다음을 판단"하도록 지시하므로 현재 scenario에서는 Meeting → News → Advisory가 **순차**로 일어난다 (병렬 위임 없음).
@@ -94,7 +98,7 @@ K Electronics Super
   Meeting / News 결과를 추출해 고정 template에 끼워 넣는 코드는 없다. Advisory 위임 `task`에 회의 기준과 외부 리스크가 어떻게 들어가는지는 실행마다 다를 수 있다.
 - **종료 조건은 모델의 판단이다.** `tools` 노드 뒤에는 무조건 `model`로 돌아가는 엣지만 있다 (`graph.add_edge("tools", "model")`).
   매 `model` 턴에서 모델은 원 요청과 지금까지 받은 전문 Agent 결과를 보고 (a) 위임 Tool을 호출하거나 (b) Tool 호출 없이 최종 응답을 쓴다.
-  (b)이면 `_route`가 `END`로 보내고, 그 응답이 `run_k_super()`의 반환값이자 `agent_end(k_super).response`(Step 6)다.
+  (b)이면 `route_on_tool_calls`가 `END`로 보내고, 그 응답이 `run_k_super()`의 반환값이자 `agent_end(k_super).response`(Step 6)다.
   "등록된 위임 Tool을 모두 호출했는가"를 보는 코드는 없다. Registry의 Tool 목록은 checklist가 아니며, 요청에 따라 일부 전문 Agent만 쓸 수 있다
   (`tests/test_agents.py`: 회의 결정사항만 묻는 요청은 Meeting 위임 한 번 뒤 바로 답한다).
 - 종합은 K Super LLM이 자기 message history(원 요청 + 위임 `ToolMessage`들)를 보고 쓴다. 별도 Synthesis Tool / Agent, 결과 aggregation 구조, 고정 template은 없다.
@@ -226,8 +230,8 @@ Registry의 대상은 **Agent가 직접 사용할 수 있는 Capability**뿐이�
 
 ```text
 capabilities/
-  base.py        Skill(name, description, instructions) · Capability(impl, allowed_agents) — kind는 impl 타입으로 결정
-  registry.py    CAPABILITIES 튜플 (권한의 source of truth) · get_capability / capabilities_for / skills_for / tools_for
+  base.py        Skill(name, description, instructions) · Capability(impl, allowed_agents) · Registry(capabilities) — 조회·검증 메커니즘 (system 중립)
+  registry.py    이 system의 CAPABILITIES 튜플 (권한의 source of truth) · REGISTRY = Registry(CAPABILITIES) · get_capability / capabilities_for / skills_for / tools_for
   skills/        Skill 정의 (specialist_delegation.py, meeting_context_analysis.py, external_risk_analysis.py, mna_feasibility_review.py)
   tools/         @tool 정의 (delegate_to_meeting_agent.py, delegate_to_news_agent.py, delegate_to_advisory_agent.py,
                  run_meeting_context_retrieval.py, run_company_risk_news_analysis.py, run_mna_review.py)
@@ -327,7 +331,9 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 `backend/app/events.py`
 
 - Agent 코드는 실제 lifecycle 시점에 `emit(event)`를 호출한다. emitter는 `contextvars`로 주입되어 실행 밖에서는 no-op이다.
-- `stream_run(fn)`은 Agent를 worker thread에서 돌리고 이벤트를 발생 즉시 yield한다. 마지막은 `done` 또는 `error`.
+- `stream_run(fn, run=RunContext)`은 Agent를 worker thread에서 돌리고 이벤트를 발생 즉시 yield한다. 마지막은 `done` 또는 `error`.
+  `RunContext(run_id, system, root_agent, origin, trace_id)`는 `new_run()`으로 만들고, run 안에서 emit된 모든 이벤트에 `run_id` · `system` · `origin` · (`trace_id`)가 찍힌다.
+  이미 찍혀 있는 필드는 유지한다(다른 system에서 relay된 이벤트). `AgentError`가 아닌 예외는 `root_agent`로 귀속한다.
 - `collect_events(fn)`은 테스트용 동기 수집기다.
 - `AgentError(agent, message)`로 실패한 Agent를 지목한다. 지목되지 않은 예외는 `k_super`로 귀속된다.
 
@@ -503,14 +509,14 @@ K Super
 | 단계 | 코드 |
 | --- | --- |
 | frontend가 Step 3 진입 | `scenarioEvents.ts`의 `type: "live"` 이벤트가 `streamAgentRun(K_SUPER_RUN_PATH, A2A_REQUEST_TEXT)` 호출 |
-| API | `main.py` `k_super_run` → `stream_run(lambda: run_k_super(request))` |
-| K Super LLM 판단 | `k_super.py` `_call_model`: `SystemMessage(SYSTEM_PROMPT)` + `bind_tools(TOOLS)`. 둘 다 Registry에서 `skills_for` / `tools_for("k_super")`로 받은 것 |
-| 위임 | `k_super.py` `_run_tools` → `capabilities/tools/delegate_to_*.invoke` → `delegation_start` emit → `run_*_agent(task)` |
+| API | `main.py` `k_super_run` → `stream_run(lambda: run_k_super(request), run=new_run(system="k_electronics", root_agent="k_super", origin="a2a"))` |
+| K Super LLM 판단 | `common.build_super_graph`의 `call_model`: `SystemMessage(SPEC.system_prompt + 호출 맥락)` + `bind_tools(SPEC.tools)`. 둘 다 `k_super.py`가 Registry에서 `skills_for` / `tools_for("k_super")`로 받은 것 |
+| 위임 | `common.build_super_graph`의 `run_tools` → `capabilities/tools/delegate_to_*.invoke` → `delegation_start` emit → `run_*_agent(task)` |
 | 전문 Agent LLM 판단 | `common.build_specialist_graph`의 `call_model` (각 Agent 모듈이 Registry에서 받은 `SYSTEM_PROMPT`, `TOOLS` + 호출 맥락 문단) |
 | Workflow Tool 실행 | `common.execute_tool_calls` → `tool_start` emit → `capabilities/tools/run_*.invoke` → `workflows/*` → `tool_end` emit |
 | 응답 | `common.run_specialist`: delegation이면 Tool 호출 검사 → `final_response` → `agent_end` emit → 반환 → `delegation_end` emit → `ToolMessage` |
-| 다음 위임 / 종료 | `k_super.py`: `tools → model` 고정 엣지. 다음 `model` 턴이 Tool을 호출하면 `_route` → `tools`, 아니면 `_route` → `END` |
-| 종합 (Step 6) | 마지막 `model` 턴의 AI 응답. `run_k_super`가 근거 검사(위임 1회 이상, 응답 비어 있지 않음) 후 `agent_end(k_super, response)` emit |
+| 다음 위임 / 종료 | `common.build_super_graph`: `tools → model` 고정 엣지. 다음 `model` 턴이 Tool을 호출하면 `route_on_tool_calls` → `tools`, 아니면 → `END` |
+| 종합 (Step 6) | 마지막 `model` 턴의 AI 응답. `common.run_super`가 근거 검사(`a2a`: 위임 1회 이상, 응답 비어 있지 않음) 후 `agent_end(k_super, response)` emit |
 | UI 반영 | `agentEvents.ts` mapper → `useScenarioRunner` reducer. `delegation_start`의 대상에 따라 Step 3 / 4 / 5, K Super `agent_end`에 Step 6 표시 |
 
 LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 기본 모델 `deepseek-v4.1-flash`, `OLLAMA_API_KEY` 필요. 키는 `backend/.env`에 두고 Git에 넣지 않는다.
@@ -523,8 +529,8 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 | `backend/tests/test_news_workflow.py` | 아니오 | 뉴스 리스크 workflow (기업 alias, category 필터, 정렬) |
 | `backend/tests/test_mna_review_workflow.py` | 아니오 | M&A 검토 workflow (persona별 항목 순서 · 우려 · 조건 순서, 같은 권고와 조건 집합, context 신호, 모르는 기업/persona) |
 | `backend/tests/test_capabilities.py` | 아니오 | Registry 내용(kind, allowed_agents), Tool 정의가 source of truth, Agent가 Registry subset을 쓰는지, Skill이 system prompt에 들어가는지 |
-| `backend/tests/test_k_super.py` | 아니오 | `_route`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
-| `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속 |
+| `backend/tests/test_k_super.py` | 아니오 | `route_on_tool_calls`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model(`common.get_chat_model` patch) + stub 위임 Tool로 만든 그래프(`k_super.build_k_super` patch)로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
+| `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속(root_agent) / run 식별자 stamp(relay된 stamp 유지) |
 | `backend/tests/test_agents.py` | 예 (`OLLAMA_API_KEY` 없으면 skip) | Meeting / News / Advisory Agent 단독 실행, K Super가 NeuroEdge 요청에 Meeting → News → Advisory를 각각 별도 model 턴에서 순차 위임하고 Advisory task에 회의 기준·외부 리스크를 담았는지(`context_signals`), 마지막에 Tool 호출 없는 최종 응답(본실사 판단 포함)으로 끝나는지, 회의 결정사항만 묻는 요청에는 Meeting에게만 위임하고 답하는지, NDJSON API, 경영자문 직접 대화의 개념 질문(Tool 없음) / 실제 검토(Tool 사용), delegation 경로의 Tool 검사 |
 
 ---
@@ -542,7 +548,7 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 | Workflow 결과 렌더링 | `toolResultBlocks`가 Tool 이름별 `switch` (meeting, news, advisory 전용 렌더) | Tool이 늘어나도 frontend가 Tool별 지식을 과도하게 갖지 않는 방식 (미결정) |
 | 상위 Agent로의 결과 전달 | 최종 응답 문자열만 `ToolMessage`. Advisory에 필요한 이전 결과는 K Super가 쓴 `task` 문장으로만 전달. 종합도 K Super가 history의 텍스트만 보고 쓴다 | 필요 시 범용 `artifacts` / `context` 구조 (미결정) |
 | K Super 최종 응답의 frontend 표시 | `agent_end.response` 문자열을 그대로 메시지로 표시 (줄바꿈 유지) | 같음 또는 구조화 표시 (미결정, 12장 4·5번) |
-| 오류 귀속 | `AgentError`가 없으면 `k_super`로 귀속 | 실행 중인 Agent에 정확히 귀속 |
+| 오류 귀속 | `AgentError`가 없으면 run의 `root_agent`로 귀속 | 실행 중인 Agent에 정확히 귀속 |
 
 ---
 
@@ -593,7 +599,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | Phase | 내용 | 상태 |
 | --- | --- | --- |
 | 0 | 결정 문서화 (이 장) | 완료 |
-| 1 | 동작 변화 없는 runtime 정비: Super core 추출(invocation) · run context · Registry 메커니즘/내용 분리 · workflow 데이터 경로 매개변수 | 예정 |
+| 1 | 동작 변화 없는 runtime 정비: Super core 추출(invocation) · run context · Registry 메커니즘/내용 분리 · workflow 데이터 경로 매개변수 | 완료 |
 | 2 | 디렉터리 경계 이동(runtime / 라이브러리 / K system) + import 경계 테스트 | 예정 |
 | 3 | 관찰 hub + SSE, run 시작 이벤트 | 예정 |
 | 4 | K Super의 두 표면: A2A 수신(`a2a`) · 직접 채팅(`direct`) | 예정 |
@@ -616,13 +622,13 @@ Phase 7 전까지 기존 단일 frontend와 mock Step 1·2·7·8은 그대로 �
    종합(Step 6)은 위임이 아니므로 K Super의 `agent_end`(`response` 있음)로 올린다 (Step 6에서 내린 결정, `LIVE_SYNTHESIS_STEP`).
    Step 7·8은 여전히 mock 이벤트가 Step을 올린다. **2026-10-12 결정**: Step 표시는 제품 UI에서 빠지고 Demo Monitor로 옮긴다 ([11장](#11-목표-구조와-전환-계획-2026-10-12-결정) 8번).
 2. **K Super 위임 정책 (Step 4에서 내린 결정과 남은 부분).** `tools → model` 루프로 바꿨고, 위임은 **순차**다: Skill이 "한 번에 하나"를 지시하고 `tests/test_agents.py`가 각 위임이 별도 model 턴에서 일어남을 검증한다.
-   모델이 한 턴에 여러 tool call을 보내면 `_run_tools`는 그대로 순차 실행한다 (거부하지 않음). 이벤트 순서는 그래도 순차다.
+   모델이 한 턴에 여러 tool call을 보내면 `run_tools`는 그대로 순차 실행한다 (거부하지 않음). 이벤트 순서는 그래도 순차다.
    **종료 조건 (Step 6에서 내린 결정)**: "허용된 위임 Tool을 모두 호출"하는 임시 규칙(`_after_tools`, `pending_delegations`)을 제거했다.
    매 `model` 턴이 다음 행동을 정하고, Tool 호출 없는 응답이 곧 종료다. 어떤 전문 Agent를 쓸지는 Skill `specialist_delegation`의 지침(요청의 항목 ↔ 위임 Tool 설명)에 따른 모델 판단이며,
    `tests/test_agents.py`가 NeuroEdge 요청(세 Agent 모두)과 회의 결정사항만 묻는 요청(Meeting만)으로 확인한다. 모델이 필요한 Agent를 빠뜨리거나 불필요한 Agent를 부르는 것을 막는 코드는 없다 (의도적).
    병렬 위임과 frontend session stack(중첩 전제)의 형제 세션 처리는 여전히 열려 있다.
 3. **위임 Tool ↔ 대상 Agent의 순환 의존 (Step 5에서 내린 결정과 남은 부분).** `delegate_to_*` Tool은 대상 Agent의 `run_*`를 호출 시점에 import해서 순환을 끊는다 ([4장](#4-capability-registry)).
-   Step 5에서 **공통 specialist core는 도입했다** (`common.Specialist` / `build_specialist_graph` / `run_specialist`, [3.2](#32-specialist-agent)). Agent 파일은 정체성과 Registry 조회만 갖는다.
+   Step 5에서 **공통 specialist core**, Phase 1에서 **공통 super core**를 도입했다 (`common.SuperAgent` / `build_super_graph` / `run_super`, [3.1](#31-super-agent)). Agent 파일은 정체성과 Registry 조회만 갖는다.
    위임 Tool 3개는 여전히 같은 모양의 복사본이다. 각 Tool의 docstring이 K Super에게 보이는 담당 설명(Agent-visible 표면)이라 파일을 따로 두는 쪽이 읽기 쉽고, "agent id → runner" 테이블은 아직 도입하지 않았다. 네 번째 전문 Agent가 생기면 다시 본다.
    `tests/test_agents.py`의 `_NoToolGraph`처럼 `build_*_agent`를 monkeypatch하는 테스트가 있으므로 `run_*_agent`는 그래프를 모듈 전역 이름으로 조회한다.
 4. **Workflow 결과의 frontend 렌더링.** Tool별 `switch`를 계속 늘릴지, backend가 표시 힌트를 함께 보낼지, 범용 렌더로 갈지.
@@ -631,7 +637,7 @@ Phase 7 전까지 기존 단일 frontend와 mock Step 1·2·7·8은 그대로 �
    Step 6 종합은 **텍스트만으로 구현했다**: K Super는 history의 `ToolMessage` 텍스트를 보고 최종 응답을 쓰고, frontend는 그 문자열을 그대로 표시한다.
    Step 7·8(Group Super가 K Super 응답을 받아 판단)에서 구조화된 결과(권고 코드, 조건 목록 등)가 필요해지면 `artifacts` / `context` 같은 공유 구조를 다시 본다.
 6. **Group Super와 A2A (2026-10-12에 결정).** 별도 프로세스(Group backend)의 Group Super가 Capability Tool로 K backend의 A2A 수신 표면을 HTTP 호출한다. 상세는 [11장](#11-목표-구조와-전환-계획-2026-10-12-결정). 구현 전까지 Current implementation은 그대로(backend에 Group Super 없음).
-7. **오류 귀속.** `stream_run`이 `AgentError` 외 예외를 `k_super`로 귀속한다. Agent가 늘면 실행 중인 Agent를 추적하는 방식이 필요하다.
+7. **오류 귀속.** `stream_run`이 `AgentError` 외 예외를 run의 `root_agent`로 귀속한다 (Phase 1). 실행 중인 하위 Agent까지 정확히 지목하려면 실행 중 Agent 추적이 필요하다 (미해결).
 8. **Agent 식별자 동기화.** backend `AGENT_ID` 문자열과 frontend `AgentId`가 수동으로 일치해야 한다. frontend는 모르는 id의 이벤트를 조용히 버린다. `LIVE_DELEGATION_STEPS`(frontend)도 같은 id를 쓴다.
    backend 안에서도 `capabilities/registry.py`(`allowed_agents`)와 `capabilities/tools/delegate_to_*.py`(`from` / `to`)가 같은 문자열을 리터럴로 가진다. Registry가 Agent 모듈을 import할 수 없기 때문이며, `tests/test_capabilities.py`가 일치를 검증한다.
    **2026-10-12 결정**: 두 system이 같은 Specialist id를 쓰므로 id는 system 내부 이름으로 두고 runtime이 이벤트에 `system` 태그를 붙인다 ([11장](#11-목표-구조와-전환-계획-2026-10-12-결정) 3번).

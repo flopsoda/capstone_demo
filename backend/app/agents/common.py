@@ -40,8 +40,9 @@ from ..llm import get_chat_model
 # Upper bound on LangGraph super-steps per agent invocation (model ↔ tools loop).
 RECURSION_LIMIT = 10
 
-Invocation = Literal["delegation", "direct"]
+Invocation = Literal["delegation", "a2a", "direct"]
 
+# Specialist agents: "delegation" (a Super Agent handed over a task) or "direct".
 INVOCATION_CONTEXT: dict[Invocation, str] = {
     "delegation": (
         "호출 맥락: 이 요청은 슈퍼에이전트가 위임한 업무다. 응답은 슈퍼에이전트에게 돌아가는 보고이므로 "
@@ -51,6 +52,19 @@ INVOCATION_CONTEXT: dict[Invocation, str] = {
         "호출 맥락: 이 요청은 사용자와의 직접 대화다. 인사, 일반적인 개념 설명, 네 역할에 대한 질문에는 "
         "Tool 없이 자연스럽게 답한다. 실제 데이터나 기록에 근거해야 하는 업무 요청이면 등록된 Workflow Tool을 "
         "사용한 뒤 그 결과에 근거해 답한다."
+    ),
+}
+
+# Super agents: "a2a" (another agent system's Super Agent sent a request) or "direct".
+SUPER_INVOCATION_CONTEXT: dict[Invocation, str] = {
+    "a2a": (
+        "호출 맥락: 이 요청은 다른 Agent System의 슈퍼에이전트가 A2A로 보낸 업무 요청이다. 응답은 그 시스템에 "
+        "돌아가는 회신이므로 반드시 위임 Tool로 전문 에이전트에게 맡긴 결과에 근거해 작성한다. 인사말이나 되묻기 없이 결과만 회신한다."
+    ),
+    "direct": (
+        "호출 맥락: 이 요청은 사용자와의 직접 대화다. 인사, 일반적인 개념 설명, 네 역할에 대한 질문에는 "
+        "Tool 없이 자연스럽게 답한다. 데이터나 기록에 근거해야 하는 검토 요청이면 등록된 위임 Tool로 담당 전문 에이전트에게 "
+        "맡긴 뒤 그 결과에 근거해 답한다."
     ),
 }
 
@@ -129,8 +143,8 @@ class Specialist:
         return {t.name: t for t in self.tools}
 
 
-def _invocation(config: RunnableConfig) -> Invocation:
-    return config.get("configurable", {}).get("invocation", "delegation")
+def _invocation(config: RunnableConfig, default: Invocation = "delegation") -> Invocation:
+    return config.get("configurable", {}).get("invocation", default)
 
 
 def build_specialist_graph(spec: Specialist) -> CompiledStateGraph:
@@ -149,15 +163,11 @@ def build_specialist_graph(spec: Specialist) -> CompiledStateGraph:
         assert isinstance(last, AIMessage)
         return {"messages": execute_tool_calls(spec.agent_id, last, tools_by_name)}
 
-    def route(state: MessagesState) -> Literal["tools", "__end__"]:
-        last = state["messages"][-1]
-        return "tools" if isinstance(last, AIMessage) and last.tool_calls else END
-
     graph = StateGraph(MessagesState)
     graph.add_node("model", call_model)
     graph.add_node("tools", run_tools)
     graph.add_edge(START, "model")
-    graph.add_conditional_edges("model", route, {"tools": "tools", END: END})
+    graph.add_conditional_edges("model", route_on_tool_calls, {"tools": "tools", END: END})
     graph.add_edge("tools", "model")
     return graph.compile()
 
@@ -186,5 +196,99 @@ def run_specialist(spec: Specialist, graph: CompiledStateGraph, task: str, *, in
     response = final_response(messages)
     if not response:
         raise AgentError(spec.agent_id, f"{spec.display_name}가 최종 응답을 생성하지 않았습니다.")
+    emit({"type": "agent_end", "agent": spec.agent_id, "response": response})
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Super agent core
+# ---------------------------------------------------------------------------
+#
+#     request → model → delegate_to_*(task) → model → … → model → END
+#
+# A Super Agent's Tools are handoffs to other agents (delegation Tools, A2A
+# client Tools). The Tools report the handoff themselves (delegation_start/end,
+# a2a_start/end) and return only the other agent's final answer, so this core
+# emits no tool_start/tool_end. Every model turn decides the next action from
+# the request and the results received so far: another handoff (tool call) or,
+# when nothing more is needed, the final answer (plain AI message). There is no
+# separate termination rule and the registry's tool list is not a checklist.
+
+
+@dataclass(frozen=True)
+class SuperAgent:
+    """What distinguishes one super agent from another."""
+
+    agent_id: str
+    display_name: str  # Korean name used in error messages
+    system_prompt: str  # identity + Skills from the registry
+    tools: tuple[BaseTool, ...]  # handoff Tools from the registry
+
+    @property
+    def tools_by_name(self) -> dict[str, BaseTool]:
+        return {t.name: t for t in self.tools}
+
+
+def route_on_tool_calls(state: MessagesState) -> Literal["tools", "__end__"]:
+    """A tool call means another handoff; a plain answer is the final response and ends the run."""
+    last = state["messages"][-1]
+    return "tools" if isinstance(last, AIMessage) and last.tool_calls else END
+
+
+def build_super_graph(spec: SuperAgent) -> CompiledStateGraph:
+    """model ⇄ tools loop over MessagesState; after every handoff result the model decides again."""
+    tools = list(spec.tools)
+    tools_by_name = spec.tools_by_name
+
+    def call_model(state: MessagesState, config: RunnableConfig) -> dict:
+        system = f"{spec.system_prompt}\n\n{SUPER_INVOCATION_CONTEXT[_invocation(config, 'a2a')]}"
+        model = get_chat_model().bind_tools(tools)
+        response = model.invoke([SystemMessage(system), *state["messages"]])
+        return {"messages": [response]}
+
+    def run_tools(state: MessagesState) -> dict:
+        last = state["messages"][-1]
+        assert isinstance(last, AIMessage)
+        out = []
+        for call in last.tool_calls:
+            tool_ = tools_by_name.get(call["name"])
+            if tool_ is None:
+                raise AgentError(spec.agent_id, f"알 수 없는 위임 Tool: {call['name']}")
+            result = tool_.invoke(call["args"])
+            out.append(ToolMessage(content=str(result), tool_call_id=call["id"], name=call["name"]))
+        return {"messages": out}
+
+    graph = StateGraph(MessagesState)
+    graph.add_node("model", call_model)
+    graph.add_node("tools", run_tools)
+    graph.add_edge(START, "model")
+    graph.add_conditional_edges("model", route_on_tool_calls, {"tools": "tools", END: END})
+    graph.add_edge("tools", "model")
+    return graph.compile()
+
+
+def run_super(spec: SuperAgent, graph: CompiledStateGraph, request: str, *, invocation: Invocation) -> str:
+    """Handles one request and returns the final answer.
+
+    In the a2a context an answer produced without any handoff would be the
+    Super Agent's own invention, which its Skill forbids: AgentError. In the
+    direct context (a user chatting) the model may answer without a Tool.
+    """
+    emit({"type": "agent_start", "agent": spec.agent_id, "request": request})
+    try:
+        state = graph.invoke(
+            {"messages": [HumanMessage(request)]},
+            config={"recursion_limit": RECURSION_LIMIT, "configurable": {"invocation": invocation}},
+        )
+    except AgentError:
+        raise  # a downstream agent already attributed the failure
+    except Exception as e:
+        raise AgentError(spec.agent_id, f"{type(e).__name__}: {e}") from e
+    messages = state["messages"]
+    if invocation == "a2a" and not tool_call_names(messages):
+        raise AgentError(spec.agent_id, f"{spec.display_name}가 전문 에이전트에게 업무를 위임하지 않고 응답했습니다.")
+    response = final_response(messages)
+    if not response:
+        raise AgentError(spec.agent_id, f"{spec.display_name}가 최종 검토 결과를 생성하지 않았습니다.")
     emit({"type": "agent_end", "agent": spec.agent_id, "response": response})
     return response

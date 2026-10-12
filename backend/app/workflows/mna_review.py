@@ -81,11 +81,11 @@ def load_companies(path: Path = DATA_PATH) -> list[dict[str, Any]]:
         return json.load(f)["companies"]
 
 
-def find_company(name: str) -> dict[str, Any] | None:
+def find_company(name: str, path: Path = DATA_PATH) -> dict[str, Any] | None:
     wanted = name.lower().strip()
     if not wanted:
         return None
-    for c in load_companies():
+    for c in load_companies(path):
         for alias in c["aliases"]:
             a = alias.lower()
             if a in wanted or wanted in a:
@@ -425,8 +425,11 @@ def recommend(assessments: dict[str, Assessment], company: dict[str, Any]) -> st
 # ---------------------------------------------------------------------------
 
 
-def review_acquisition(query: str, company: str, persona: str = "CEO", context: str | None = None) -> dict[str, Any]:
+def review_acquisition(
+    query: str, company: str, persona: str = "CEO", context: str | None = None, *, path: Path = DATA_PATH
+) -> dict[str, Any]:
     """Pure function so the workflow can be unit-tested without an LLM.
+    `path` is the company store this system owns (bound by the system's Tool).
 
     Returns (found case):
         {
@@ -443,7 +446,7 @@ def review_acquisition(query: str, company: str, persona: str = "CEO", context: 
     key = resolve_persona(persona)
     if key is None:
         return {"error": f"지원하지 않는 persona: {persona!r}", "supported_personas": list(PERSONAS)}
-    c = find_company(company)
+    c = find_company(company, path)
     if c is None:
         return {"query": query, "company": company, "found": False, "message": f"'{company}'에 대한 기업 데이터가 없습니다."}
 
