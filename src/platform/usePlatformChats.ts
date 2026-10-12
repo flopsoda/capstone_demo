@@ -15,6 +15,8 @@ export interface PlatformChats {
   /** Tabs with a run in progress. */
   busy: Set<ChatTabId>;
   send: (tab: ChatTabId, text: string) => Promise<void>;
+  /** Applies an action to one tab's state (used by other event feeds, e.g. inbound A2A runs). */
+  dispatch: (tab: ChatTabId, action: RunnerAction) => void;
 }
 
 /**
@@ -69,5 +71,5 @@ export function usePlatformChats(config: PlatformConfig): PlatformChats {
     [config, dispatch],
   );
 
-  return { states, busy, send };
+  return { states, busy, send, dispatch };
 }

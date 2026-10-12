@@ -12,11 +12,12 @@ import {
   GROUP_MEETING_AGENT_RUN_PATH,
   GROUP_NEWS_AGENT_RUN_PATH,
   GROUP_SUPER_RUN_PATH,
+  K_EVENTS_PATH,
   K_SUPER_DIRECT_RUN_PATH,
   MEETING_AGENT_RUN_PATH,
   NEWS_AGENT_RUN_PATH,
 } from "../live/api";
-import type { ChatTabId } from "../types/agent";
+import type { AgentId, ChatTabId } from "../types/agent";
 
 export interface PlatformTab extends SidebarTab {
   /** Backend run endpoint for direct chat with this agent (NDJSON stream). */
@@ -24,6 +25,20 @@ export interface PlatformTab extends SidebarTab {
   header: ChatHeaderInfo;
   /** One-click example request shown when the chat is empty. */
   samplePrompt?: string;
+}
+
+/**
+ * Runs that another agent system starts in this platform's backend (A2A
+ * inbound). They are observed on the backend's event channel and shown as a
+ * received request in the Super Agent's tab, plus a sidebar badge.
+ */
+export interface InboundObservation {
+  /** This backend's observer channel (SSE). */
+  eventsPath: string;
+  /** The tab (this platform's Super Agent) whose transcript shows received requests. */
+  tab: ChatTabId;
+  /** Display agent for each requesting system (`caller` stamp on the events). */
+  callers: Record<string, { agent: AgentId; label: string }>;
 }
 
 export interface PlatformConfig {
@@ -34,6 +49,7 @@ export interface PlatformConfig {
   tabs: PlatformTab[];
   /** Maps backend (system, agent) ids to the AgentIds this UI shows. */
   resolveAgent: AgentResolver;
+  inbound?: InboundObservation;
 }
 
 export const GROUP_SAMPLE_PROMPT =
@@ -64,6 +80,11 @@ export const K_PLATFORM: PlatformConfig = {
   subtitle: "K전자 Agent Platform",
   badge: "K Electronics",
   resolveAgent: (_system, agent) => agent,
+  inbound: {
+    eventsPath: K_EVENTS_PATH,
+    tab: "k_super",
+    callers: { group: { agent: "group_super", label: "그룹" } },
+  },
   tabs: [
     { id: "k_super", label: "K전자 슈퍼에이전트", hint: "슈퍼에이전트", path: K_SUPER_DIRECT_RUN_PATH, header: CHAT_HEADERS.k_super, samplePrompt: "뉴로엣지 인수안을 검토해줘. 지난 회의 기준과 최근 외부 리스크를 반영해서 본실사 진입 여부를 판단해." },
     { id: "advisory", label: "경영자문", hint: "전문가 에이전트", path: ADVISORY_AGENT_RUN_PATH, header: CHAT_HEADERS.advisory },

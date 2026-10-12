@@ -72,7 +72,7 @@ backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Wo
    위임하는 **위임 대화** 창이 차례로 열렸다 닫힙니다 (K 내부 lifecycle이 관찰용으로 relay됨). K의 최종 응답이 돌아오면 A2A 창이 요청 카드로 접히고,
    Group Super가 그룹 최종 판단을 씁니다. 필요하다고 판단하면 그룹 자체 전문 Agent에게도 위임합니다.
 3. **Demo Monitor**는 같은 실행을 전체 그래프(두 시스템 9노드)와 Step 1~8로 보여줍니다. 제품 UI에는 그래프와 Step이 없습니다.
-4. **K UI**에서는 K전자 측 직접 채팅을 보여줍니다: **뉴스** 탭에 `뉴로엣지 관련 악재만 다시 보여줘.`, **경영자문** 탭에 `뉴로엣지 인수를 CFO 관점에서 검토해줘.`
+4. **K UI**는 그룹의 A2A 요청이 처리되는 동안 Sidebar에 "외부 요청 처리 중 · 그룹" 배지가 켜지고, **K전자 슈퍼에이전트** 탭에 "외부 A2A 요청 · 그룹" 카드와 K 내부 위임 창이 나타났다가 "응답 반환"으로 접힙니다 (K UI를 K Super 탭에 둔 채 Group UI 옆에 띄우면 양쪽 관점이 동시에 보입니다). 그 밖에 K전자 측 직접 채팅: **뉴스** 탭에 `뉴로엣지 관련 악재만 다시 보여줘.`, **경영자문** 탭에 `뉴로엣지 인수를 CFO 관점에서 검토해줘.`
    (`earn-out이 뭐야?` 같은 개념 질문에는 Tool 없이 답함), **K전자 슈퍼에이전트** 탭에 `지난 회의에서 정한 기준만 정리해줘.`(미팅 위임 창이 열림).
    Group UI의 **미팅** 탭은 그룹 투자심의 회의 기록(Group 데이터)으로 답합니다.
 5. Monitor의 **초기화**로 관찰 화면을 비우고 다시 시연할 수 있습니다. 채팅 전사는 탭마다 유지됩니다.
@@ -117,6 +117,7 @@ src/
     config.ts          플랫폼별 설정: GROUP_PLATFORM / K_PLATFORM (탭 4개의 id · 라벨 · backend 경로 · 헤더 · 예시 요청, resolveAgent)
     usePlatformChats.ts  탭별 전사·세션 상태. send()가 해당 backend에 NDJSON 요청 → 같은 mapper·reducer로 적용
     PlatformApp.tsx    제품 UI: Header · Sidebar · ChatPanel · SessionWindows (그래프 · Step 없음)
+    useInboundRuns.ts  (K) 자기 backend 관찰 채널에서 origin=a2a run을 K Super 탭에 수신 카드·위임 창으로 표시, Sidebar 배지
   main.tsx             URL 경로로 화면 선택 (/group 기본 · /k · /monitor)
 
 backend/
@@ -264,4 +265,4 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 ## 범위 밖
 
 표준 A2A 프로토콜(이 레포의 A2A는 두 system 사이의 자체 약속: NDJSON lifecycle + 최종 응답), 실제 뉴스/공시 API, RAG, Vector DB,
-실제 Meeting DB, 실제 valuation 모델, 다중 persona 토론, 인증, 배포, K UI에서 외부 A2A 실행 표시(미확정)는 포함하지 않습니다.
+실제 Meeting DB, 실제 valuation 모델, 다중 persona 토론, 인증, 배포는 포함하지 않습니다.

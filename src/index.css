@@ -1519,3 +1519,14 @@ button {
     visibility: hidden;
   }
 }
+
+/* Sidebar: live note under a tab while its agent serves an external (A2A) request. */
+.sidebar__item-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #4f46e5;
+}

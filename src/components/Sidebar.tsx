@@ -10,9 +10,11 @@ interface SidebarProps {
   tabs: SidebarTab[];
   selected: ChatTabId;
   onSelect: (tab: ChatTabId) => void;
+  /** Live note under a tab, e.g. "외부 요청 처리 중 · 그룹" while an inbound A2A run is served. */
+  badges?: Partial<Record<ChatTabId, string>>;
 }
 
-export function Sidebar({ tabs, selected, onSelect }: SidebarProps) {
+export function Sidebar({ tabs, selected, onSelect, badges = {} }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sidebar__section-title">에이전트</div>
@@ -35,6 +37,12 @@ export function Sidebar({ tabs, selected, onSelect }: SidebarProps) {
               <span className="sidebar__item-text">
                 <span className="sidebar__item-label">{tab.label}</span>
                 <span className="sidebar__item-hint">{tab.hint}</span>
+                {badges[tab.id] && (
+                  <span className="sidebar__item-badge">
+                    <span className="session-card__live-dot" aria-hidden="true" />
+                    {badges[tab.id]}
+                  </span>
+                )}
               </span>
             </button>
           );

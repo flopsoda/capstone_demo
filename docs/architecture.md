@@ -429,6 +429,7 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 - `usePlatformChats.ts` — 탭마다 전사 · 세션 상태(`RunnerState`)를 유지한다. `send(tab, text)`는 그 탭의 backend 엔드포인트에 NDJSON 요청을 보내고, 도착하는 이벤트를 같은 mapper · reducer로 적용한다(사용자 메시지 추가 → root `agent_start` → 이벤트 → `agent_complete`, 실패 시 backend가 지목한 Agent로 `scenario_error`). 탭을 바꿔도 각 전사가 남는다.
 - `PlatformApp.tsx` — Header · Sidebar(설정의 탭) · ChatPanel · `SessionWindows`. 그래프 · Step · toolbar 없음. A2A / 위임 세션창은 채팅 옆에 열렸다가 요청 카드로 접힌다 (제품 기능).
 - `reducer`의 `scenario_error`는 열려 있던 세션을 모두 닫는다 (다음 요청이 옛 세션으로 라우팅되지 않도록).
+- `useInboundRuns.ts` — A2A 수신 표면이 있는 플랫폼(K)에서 자기 backend의 관찰 채널을 구독해 `origin: a2a`(relay 아님) run을 Super 탭에 보여 준다: root `agent_start`에 "외부 A2A 요청 · 그룹" A2A 세션을 열고(요청문), 이후 이벤트를 같은 mapper로 적용(위임 창 중첩, K Super 응답 스트리밍), `done`에 "응답 반환"으로 닫는다. Sidebar 배지는 큐가 비워진 뒤 꺼진다.
 - `src/main.tsx`: `/group`(기본) · `/k` · `/monitor`.
 - 검증(headless): `/group`에서 예시 요청 → A2A 세션창 안에 K의 위임 창이 차례로 열리고 닫힘 → "그룹 최종 판단" 메시지, 같은 시간 `/monitor`는 8/8 완료. `/k`에서 뉴스 직접 채팅(Tool 결과 + 응답)과 K Super 직접 채팅(미팅 위임 창 → "K전자 검토 결과").
 
@@ -600,7 +601,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | K Electronics backend (현 :8000) | 제품 | 공통 runtime + K system. 직접 채팅 4개(K Super 포함), A2A 수신 표면, 관찰 채널 | 자기 run |
 | Group backend (:8001) | 제품 | 공통 runtime + Group system. 직접 채팅 4개, K전자에 대한 A2A client, 관찰 채널 | 자기 run |
 | Group UI | 제품 | 탭 4개(Group Super · 경영자문 · 뉴스 · 미팅) + 협업 세션창. 그래프 없음 | Group backend의 요청자 NDJSON 스트림 |
-| K UI | 제품 | 탭 4개(K Super · 경영자문 · 뉴스 · 미팅) + 협업 세션창. 그래프 없음 | K backend의 요청자 스트림 (외부 A2A 실행 표시는 미확정, 넣으면 관찰 채널) |
+| K UI | 제품 | 탭 4개(K Super · 경영자문 · 뉴스 · 미팅) + 협업 세션창. 그래프 없음. 외부 A2A 요청은 K Super 탭에 수신 카드 + Sidebar 배지 | K backend의 요청자 스트림 + 관찰 채널(`origin: a2a` run만) |
 | Demo Monitor | 테스트·발표 전용 | 그래프 · Step 1~8 · 노드 상태 · A2A/위임 edge. 제품 navigation에 없는 별도 URL | Group backend의 관찰 채널 |
 
 소유 경계:
@@ -628,7 +629,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 8. **Step 1~8.** backend에는 없다. Demo Monitor가 이벤트를 해석한다: Group `agent_start` → 1, `a2a_start` → 2, relayed `delegation_start`(meeting/news/advisory) → 3/4/5, relayed `agent_end(k_super)` → 6, `a2a_end` → 7, Group `agent_end` → 8.
 9. **Frontend.** Vite 앱 하나, URL 경로로 Group UI · K UI · Demo Monitor 선택, dev proxy 둘. 의존성 추가 없음.
 10. **의존성.** backend runtime 의존성에 `httpx` 추가(A2A client · 프로세스 내 end-to-end 테스트).
-11. **미확정.** K UI에서 외부 A2A로 시작된 실행의 표시(없음 / 작은 상태 badge / 읽기 전용 수신 기록). 침투적인 자동 UI 전환은 하지 않는다.
+11. **K UI의 외부 A2A 실행 표시 (결정 · 구현됨).** Sidebar의 K Super 항목에 "외부 요청 처리 중 · 그룹" 배지 + K Super 탭 전사에 "외부 A2A 요청 · 그룹" 세션 카드(요청문, 그 아래 열리는 위임 창, 응답 반환으로 접힘). 탭 전환이나 자동 창 띄우기는 없다.
 
 ### 전환 단계와 상태
 
@@ -678,7 +679,7 @@ Phase 7 전까지 기존 단일 frontend와 mock Step 1·2·7·8은 그대로 �
 9. **Advisory persona 선택과 다중 관점.** persona는 `run_mna_review`의 인자이고 어떤 관점을 쓸지는 Advisory Agent의 모델 판단이다 (Skill: 한 번의 검토에 관점 하나, 지정 없으면 CEO).
    초기 실행에서 K Super가 "CEO/CFO/CTO 관점"을 모두 요구해 Advisory가 Tool을 세 번 호출한 사례가 있어 Skill과 위임 Tool 설명을 "관점 하나"로 조였다. 여러 관점의 비교 · 토론(CFO vs CTO)은 범위 밖이며, 필요해지면 Tool을 여러 번 호출할지, workflow가 다중 persona를 한 번에 돌려줄지 결정한다.
 10. **Advisory 호출 맥락의 2중 전달.** K Super → Advisory는 `task` 문장, Advisory → Tool은 `context` 인자로 같은 맥락이 두 번 LLM을 거친다. Advisory가 `context`를 요약하거나 빠뜨리면 workflow의 신호 추출이 약해진다 (Skill이 "그대로 넣으라"고 지시). 공유 구조(5번)를 도입하면 함께 해소된다.
-11. **K UI에서 외부 A2A 실행의 표시 (미확정).** Group의 A2A 요청으로 K backend가 실행될 때 K UI는 지금 아무것도 표시하지 않는다 (K의 `/api/events`는 있다). 선택지: 표시 없음 / Sidebar의 K Super 항목에 "외부 요청 처리 중 · 그룹" badge(K 관찰 채널의 `origin: a2a` run 시작·종료) / K Super 탭에 읽기 전용 수신 기록. 침투적인 자동 UI 전환은 하지 않는다.
+11. **K UI에서 외부 A2A 실행의 표시 (결정 · 구현됨).** `src/platform/useInboundRuns.ts`가 K의 `/api/events`를 구독해 `origin: a2a` run을 K Super 탭 상태에 같은 mapper · reducer로 흘려 넣는다(세션 카드 + 위임 창 + 응답 반환), Sidebar에는 배지. 배지는 전사 재생이 따라잡은 뒤 꺼진다. 남은 제약: 사용자가 K Super 탭에서 직접 대화하는 동시에 외부 요청이 오면 한 전사에 섞인다.
 12. **Demo Monitor의 소스.** Monitor는 Group 관찰 채널 하나만 구독한다(relay 덕분에 K lifecycle 포함). K UI에서 직접 시작한 K 실행은 Monitor에 보이지 않는다. 필요해지면 K 채널도 구독하고 relay된 복사본을 걸러낸다.
 
 ---
