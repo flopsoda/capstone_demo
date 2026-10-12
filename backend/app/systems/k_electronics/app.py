@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from ...runtime.api import ndjson_run, sse_events
 from ...runtime.events import new_run
-from ...runtime.schemas import RunRequest
+from ...runtime.schemas import A2ARequest, RunRequest
 from . import SYSTEM
 from .agents.advisory import run_advisory_agent
 from .agents.k_super import run_k_super
@@ -33,10 +33,21 @@ def events() -> StreamingResponse:
     return sse_events()
 
 
-@app.post("/api/k-super/run")
-def k_super_run(body: RunRequest) -> StreamingResponse:
-    """K Super receives a request from another agent system (A2A) and delegates to its specialists. Streams events."""
-    return ndjson_run(lambda: run_k_super(body.request), new_run(system=SYSTEM, root_agent="k_super", origin="a2a"))
+@app.post("/api/a2a/run")
+@app.post("/api/k-super/run")  # older path, same A2A surface; the current frontend scenario still posts here
+def a2a_run(body: A2ARequest) -> StreamingResponse:
+    """A2A inbound surface: another agent system's Super Agent hands K Super a request.
+    K Super delegates to its specialists and answers; the answer is agent_end(k_super).response.
+    The stream also carries K's lifecycle, which the caller may relay for observation but
+    must not feed to its agent as business data."""
+    run = new_run(system=SYSTEM, root_agent="k_super", origin="a2a", trace_id=body.trace_id, caller=body.caller)
+    return ndjson_run(lambda: run_k_super(body.request, invocation="a2a"), run)
+
+
+@app.post("/api/agents/k-super/run")
+def k_super_direct_run(body: RunRequest) -> StreamingResponse:
+    """Direct user → K Super (sidebar chat). Same agent; it may answer without delegating. Streams events."""
+    return ndjson_run(lambda: run_k_super(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="k_super"))
 
 
 @app.post("/api/agents/meeting/run")

@@ -245,3 +245,33 @@ def test_delegation_path_still_requires_tool(monkeypatch):
         collect_events(lambda: news.run_news_agent("안녕"))
     response, _ = collect_events(lambda: news.run_news_agent("안녕", invocation="direct"))
     assert response == "안녕하세요, 뉴스 에이전트입니다."
+
+
+def test_k_super_direct_chat_small_talk_does_not_delegate():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    with client.stream("POST", "/api/agents/k-super/run", json={"request": "안녕? 너는 무슨 일을 해?"}) as res:
+        assert res.status_code == 200, res.text
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    types = [e["type"] for e in events]
+    assert "error" not in types, events
+    assert "delegation_start" not in types, events
+    assert events[-1]["type"] == "done" and any(e["type"] == "agent_end" and e["response"] for e in events)
+
+
+def test_k_super_direct_chat_delegates_for_a_real_review():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    with client.stream(
+        "POST", "/api/agents/k-super/run", json={"request": "뉴로엣지 인수와 관련해 지난 회의에서 정한 기준만 정리해줘."}
+    ) as res:
+        assert res.status_code == 200, res.text
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    assert [e["to"] for e in events if e["type"] == "delegation_start"] == ["meeting"], events
+    assert events[-1]["type"] == "done"

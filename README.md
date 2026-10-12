@@ -129,7 +129,7 @@ backend/
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
     systems/
       k_electronics/                 K Electronics agent system (SYSTEM = "k_electronics", DATA_DIR)
-        app.py                       FastAPI: /api/health, /api/k-super/run, /api/agents/{meeting,news,advisory}/run (NDJSON 스트림), /api/events (SSE 관찰 채널)
+        app.py                       FastAPI: /api/health, /api/a2a/run (= /api/k-super/run, A2A 수신), /api/agents/{k-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE 관찰 채널)
         registry.py                  이 system의 CAPABILITIES와 allowed_agents (권한의 source of truth), skills_for / tools_for
         agents/
           k_super.py                 K전자 슈퍼에이전트: AGENT_ID · IDENTITY + Registry 위임 Tool (Super core)
@@ -142,7 +142,7 @@ backend/
         data/meetings.json           회의 fixture (NeuroEdge 전략회의 + 무관한 회의 2건)
         data/news.json               뉴스 fixture (NeuroEdge 리스크 기사 3건 + 무관한 기업 기사 2건)
         data/companies.json          인수 대상 기업 fixture (NeuroEdge 재무 · 가치 · 고객 · 기술 · 전략)
-  tests/                             test_workflow.py · test_news_workflow.py · test_mna_review_workflow.py · test_capabilities.py · test_k_super.py · test_events.py
+  tests/                             test_workflow.py · test_news_workflow.py · test_mna_review_workflow.py · test_capabilities.py · test_k_super.py · test_k_app.py · test_events.py
                                      · test_boundaries.py(runtime/library/system import 경계) (LLM 불필요), test_agents.py (Ollama Cloud 필요)
 ```
 

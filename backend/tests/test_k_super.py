@@ -130,3 +130,10 @@ def test_tool_message_shape_after_delegation(scripted):
     tool_msg = state["messages"][2]
     assert isinstance(tool_msg, ToolMessage) and tool_msg.content == "회의 결과" and tool_msg.tool_call_id == "c1"
     assert isinstance(state["messages"][-1], AIMessage) and not state["messages"][-1].tool_calls
+
+
+def test_direct_chat_may_answer_without_delegating(scripted):
+    scripted([AIMessage("안녕하세요, K전자 슈퍼에이전트입니다.")], {})
+    response, events = collect_events(lambda: run_k_super("안녕?", invocation="direct"))
+    assert response == "안녕하세요, K전자 슈퍼에이전트입니다."
+    assert [e["type"] for e in events] == ["agent_start", "agent_end"]
