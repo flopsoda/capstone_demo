@@ -546,14 +546,64 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 
 ---
 
-## 11. 다음 구현 대상: Step 7 (K Super → Group Super A2A 응답)
+## 11. 목표 구조와 전환 계획 (2026-10-12 결정)
 
-이번 문서화 시점에서 **아직 구현하지 않았다.** 방향만 적는다.
+Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 위의 독립된 Agent System 두 개**로 재편한다.
+이 장은 결정된 목표와 단계다. 각 단계가 끝나면 그 시점의 사실을 8장·10장과 이 장의 상태 표에 반영한다.
 
-- Step 6의 실제 K Super 응답이 이미 "Group Super에게 돌아갈 K전자 차원의 검토 결과"다. Step 7은 그 응답을 A2A 경계를 넘겨 전달하는 부분이며,
-  현재는 frontend가 `session_close`에 고정 문장("위 4개 핵심 조건을 ... 본실사 진입을 권고합니다")을 붙인다. 이 문장은 실제 Step 6 응답과 무관한 mock이다.
-- Step 7을 real로 바꾸려면 [12장](#12-current-limitations--next-architectural-work) 6번(A2A 경계 — 별도 프로세스인지, 같은 backend의 별도 Agent인지)을 먼저 결정해야 한다.
-  결정 전까지의 최소 교체는 A2A 세션 닫힘의 result를 mock 문장 대신 Step 6의 실제 `agent_end(k_super).response`로 바꾸는 것이다.
+### 목표 구조
+
+| 실행 단위 | 성격 | 내용 | 이벤트 소스 |
+| --- | --- | --- | --- |
+| K Electronics backend (현 :8000) | 제품 | 공통 runtime + K system. 직접 채팅 4개(K Super 포함), A2A 수신 표면, 관찰 채널 | 자기 run |
+| Group backend (:8001) | 제품 | 공통 runtime + Group system. 직접 채팅 4개, K전자에 대한 A2A client, 관찰 채널 | 자기 run |
+| Group UI | 제품 | 탭 4개(Group Super · 경영자문 · 뉴스 · 미팅) + 협업 세션창. 그래프 없음 | Group backend의 요청자 NDJSON 스트림 |
+| K UI | 제품 | 탭 4개(K Super · 경영자문 · 뉴스 · 미팅) + 협업 세션창. 그래프 없음 | K backend의 요청자 스트림 (외부 A2A 실행 표시는 미확정, 넣으면 관찰 채널) |
+| Demo Monitor | 테스트·발표 전용 | 그래프 · Step 1~8 · 노드 상태 · A2A/위임 edge. 제품 navigation에 없는 별도 URL | Group backend의 관찰 채널 |
+
+소유 경계:
+
+| 영역 | 공통 runtime | 공용 Capability 라이브러리 | 각 system 소유 |
+| --- | --- | --- | --- |
+| Agent core | Specialist core · Super core · invocation 개념 | | `AGENT_ID` · `IDENTITY` · SPEC |
+| Capability | `Skill` / `Capability` 타입, Registry 메커니즘 | 회의 · 외부 리스크 · M&A 검토 · 위임 Skill 본문, 데이터 경로를 받는 workflow 함수, Tool factory | Registry 내용(`CAPABILITIES`, `allowed_agents`), 라이브러리 Tool을 자기 데이터에 바인딩한 instance, `delegate_to_*`, A2A client Tool |
+| Data | | | fixture 파일 (K와 Group이 같은 구조의 데이터를 따로 가진다. Group이 K 데이터를 읽지 않는다) |
+| 이벤트 · API | emit / run context(run_id · system · origin · trace) / stream_run / 관찰 hub + SSE / NDJSON 래퍼 / A2A 요청·응답 형식 | | 엔드포인트 목록, 포트, 오류 귀속 기본 Agent |
+| Frontend | NDJSON client · SSE client · mapper · reducer · Sidebar/ChatPanel/SessionWindows · 표시 이름 catalog | | 플랫폼 설정(탭, 헤더, backend 주소), Tool별 결과 렌더 |
+
+두 system은 서로의 Agent · Tool · Workflow · Data · Registry를 import하거나 호출하지 않는다 (import 경계 테스트로 고정).
+
+### 결정 사항
+
+1. **A2A 프로토콜.** Group Super의 Capability Tool(K전자 검토 요청)이 K backend의 A2A 수신 엔드포인트를 HTTP로 호출한다. K는 현재 `/api/k-super/run`과 같은 NDJSON lifecycle 스트림을 돌려주고 `agent_end(k_super).response`가 최종 응답이다.
+   Group Super **Agent**는 최종 응답 텍스트만 `ToolMessage`로 받는다. K의 lifecycle 이벤트는 Group Tool이 **관찰 정보로** 자기 run에 다시 emit한다(`system` 태그 + relayed 표시). Group UI는 이것으로 A2A 세션 안에 K의 위임 세션을 중첩해 그린다.
+2. **관찰 채널.** runtime의 프로세스 내 hub가 `stream_run`의 이벤트를 복사하고, 각 backend가 `GET /api/events`를 SSE로 연다. 요청자 스트림은 그대로 유지한다.
+3. **Agent id.** `meeting` · `news` · `advisory` 같은 id는 system 내부 이름으로 유지하고, runtime이 모든 이벤트에 `system` 태그를 붙인다. id 개명은 하지 않는다.
+4. **Super Agent invocation.** Specialist와 같은 규칙: `direct`(사용자 직접 대화)는 근거 검사 없이 Skill 지침에 따르고, `a2a`(A2A 수신)에서만 "위임 1회 이상 · 응답 비어 있지 않음" 검사.
+5. **Group Super의 Capability.** A2A client Tool **과** 자기 Specialist 3개에 대한 `delegate_to_*` Tool을 모두 가진다. NeuroEdge 요청에서 K전자 A2A를 택하는 것은 Registry 제한이나 하드코딩이 아니라 요청 내용과 Skill/Tool 설명에 따른 모델 판단이다.
+6. **오류 전파.** K 실패는 Group에서 `k_super`로 귀속한 `AgentError`로 중단한다. mock 대체 없음.
+7. **Specialist 재사용.** Specialist core · Skill 본문 · workflow 함수 · Tool의 이름/설명/schema는 공용 라이브러리. system마다 새로 쓰는 것은 정체성 문장, Registry 등록, 데이터 파일, Tool 바인딩뿐이다.
+8. **Step 1~8.** backend에는 없다. Demo Monitor가 이벤트를 해석한다: Group `agent_start` → 1, `a2a_start` → 2, relayed `delegation_start`(meeting/news/advisory) → 3/4/5, relayed `agent_end(k_super)` → 6, `a2a_end` → 7, Group `agent_end` → 8.
+9. **Frontend.** Vite 앱 하나, URL 경로로 Group UI · K UI · Demo Monitor 선택, dev proxy 둘. 의존성 추가 없음.
+10. **의존성.** backend runtime 의존성에 `httpx` 추가(A2A client · 프로세스 내 end-to-end 테스트).
+11. **미확정.** K UI에서 외부 A2A로 시작된 실행의 표시(없음 / 작은 상태 badge / 읽기 전용 수신 기록). 침투적인 자동 UI 전환은 하지 않는다.
+
+### 전환 단계와 상태
+
+| Phase | 내용 | 상태 |
+| --- | --- | --- |
+| 0 | 결정 문서화 (이 장) | 완료 |
+| 1 | 동작 변화 없는 runtime 정비: Super core 추출(invocation) · run context · Registry 메커니즘/내용 분리 · workflow 데이터 경로 매개변수 | 예정 |
+| 2 | 디렉터리 경계 이동(runtime / 라이브러리 / K system) + import 경계 테스트 | 예정 |
+| 3 | 관찰 hub + SSE, run 시작 이벤트 | 예정 |
+| 4 | K Super의 두 표면: A2A 수신(`a2a`) · 직접 채팅(`direct`) | 예정 |
+| 5a | Group system: Group Super + A2A client Tool + Group app | 예정 |
+| 5b | Group Specialist 3개 + Group 데이터 + Group Super의 `delegate_to_*` | 예정 |
+| 6 | Demo Monitor | 예정 |
+| 7 | 제품 UI(Group · K), mock scenario 제거 | 예정 |
+| 8 | 정리 · 문서 · (선택) K UI 외부 실행 표시 | 예정 |
+
+Phase 7 전까지 기존 단일 frontend와 mock Step 1·2·7·8은 그대로 두며, 각 Phase가 끝날 때 현재 데모가 그대로 동작해야 한다.
 
 ---
 
@@ -564,7 +614,7 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
 1. **Scenario Step 경계 (Step 4에서 내린 결정).** Step은 **UI 전용** 개념으로 유지한다. backend에는 Step이 없다.
    K Super 실행 한 번이 Step 3·4·5를 포함하므로 `scenarioEvents.ts`의 `LIVE_DELEGATION_STEPS`가 backend `delegation_start`의 대상 Agent를 Step 번호로 매핑한다 (meeting → 3, news → 4, advisory → 5).
    종합(Step 6)은 위임이 아니므로 K Super의 `agent_end`(`response` 있음)로 올린다 (Step 6에서 내린 결정, `LIVE_SYNTHESIS_STEP`).
-   Step 7·8은 여전히 mock 이벤트가 Step을 올린다.
+   Step 7·8은 여전히 mock 이벤트가 Step을 올린다. **2026-10-12 결정**: Step 표시는 제품 UI에서 빠지고 Demo Monitor로 옮긴다 ([11장](#11-목표-구조와-전환-계획-2026-10-12-결정) 8번).
 2. **K Super 위임 정책 (Step 4에서 내린 결정과 남은 부분).** `tools → model` 루프로 바꿨고, 위임은 **순차**다: Skill이 "한 번에 하나"를 지시하고 `tests/test_agents.py`가 각 위임이 별도 model 턴에서 일어남을 검증한다.
    모델이 한 턴에 여러 tool call을 보내면 `_run_tools`는 그대로 순차 실행한다 (거부하지 않음). 이벤트 순서는 그래도 순차다.
    **종료 조건 (Step 6에서 내린 결정)**: "허용된 위임 Tool을 모두 호출"하는 임시 규칙(`_after_tools`, `pending_delegations`)을 제거했다.
@@ -580,10 +630,11 @@ LLM: `backend/app/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 
    Advisory Agent는 그 문장을 `run_mna_review`의 `context`(자유 텍스트)로 넘기고 workflow가 신호를 추출한다. 따라서 K Super가 무엇을 옮겨 적는지, Advisory가 무엇을 `context`에 넣는지는 모델 판단이며 실행마다 다를 수 있다 (`tests/test_agents.py`가 가격 기준 · 리스크 주제가 전달됐는지만 검증).
    Step 6 종합은 **텍스트만으로 구현했다**: K Super는 history의 `ToolMessage` 텍스트를 보고 최종 응답을 쓰고, frontend는 그 문자열을 그대로 표시한다.
    Step 7·8(Group Super가 K Super 응답을 받아 판단)에서 구조화된 결과(권고 코드, 조건 목록 등)가 필요해지면 `artifacts` / `context` 같은 공유 구조를 다시 본다.
-6. **Group Super와 A2A.** 현재 범위 밖이지만, Step 7·8을 real로 바꾸려면 A2A 경계를 어디에 둘지(별도 프로세스/서비스인지, 같은 backend 안의 별도 Agent인지) 결정해야 한다.
+6. **Group Super와 A2A (2026-10-12에 결정).** 별도 프로세스(Group backend)의 Group Super가 Capability Tool로 K backend의 A2A 수신 표면을 HTTP 호출한다. 상세는 [11장](#11-목표-구조와-전환-계획-2026-10-12-결정). 구현 전까지 Current implementation은 그대로(backend에 Group Super 없음).
 7. **오류 귀속.** `stream_run`이 `AgentError` 외 예외를 `k_super`로 귀속한다. Agent가 늘면 실행 중인 Agent를 추적하는 방식이 필요하다.
 8. **Agent 식별자 동기화.** backend `AGENT_ID` 문자열과 frontend `AgentId`가 수동으로 일치해야 한다. frontend는 모르는 id의 이벤트를 조용히 버린다. `LIVE_DELEGATION_STEPS`(frontend)도 같은 id를 쓴다.
    backend 안에서도 `capabilities/registry.py`(`allowed_agents`)와 `capabilities/tools/delegate_to_*.py`(`from` / `to`)가 같은 문자열을 리터럴로 가진다. Registry가 Agent 모듈을 import할 수 없기 때문이며, `tests/test_capabilities.py`가 일치를 검증한다.
+   **2026-10-12 결정**: 두 system이 같은 Specialist id를 쓰므로 id는 system 내부 이름으로 두고 runtime이 이벤트에 `system` 태그를 붙인다 ([11장](#11-목표-구조와-전환-계획-2026-10-12-결정) 3번).
 9. **Advisory persona 선택과 다중 관점.** persona는 `run_mna_review`의 인자이고 어떤 관점을 쓸지는 Advisory Agent의 모델 판단이다 (Skill: 한 번의 검토에 관점 하나, 지정 없으면 CEO).
    초기 실행에서 K Super가 "CEO/CFO/CTO 관점"을 모두 요구해 Advisory가 Tool을 세 번 호출한 사례가 있어 Skill과 위임 Tool 설명을 "관점 하나"로 조였다. 여러 관점의 비교 · 토론(CFO vs CTO)은 범위 밖이며, 필요해지면 Tool을 여러 번 호출할지, workflow가 다중 persona를 한 번에 돌려줄지 결정한다.
 10. **Advisory 호출 맥락의 2중 전달.** K Super → Advisory는 `task` 문장, Advisory → Tool은 `context` 인자로 같은 맥락이 두 번 LLM을 거친다. Advisory가 `context`를 요약하거나 빠뜨리면 workflow의 신호 추출이 약해진다 (Skill이 "그대로 넣으라"고 지시). 공유 구조(5번)를 도입하면 함께 해소된다.
