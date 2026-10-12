@@ -15,10 +15,17 @@ Event shapes (all have "type"):
   done             {}
 
 Every event emitted inside a run is also stamped with the run's identity
-(`run_id`, `system`, `origin`, optional `trace_id`) so that observers outside
-the request/response stream can tell runs — and agent systems — apart. Fields
-already present on an event are kept (events relayed from another system
-keep that system's stamp).
+(`run_id`, `system`, `origin`, optional `trace_id` / `caller`) so that
+observers outside the request/response stream can tell runs — and agent
+systems — apart. Fields already present on an event are kept (events relayed
+from another system keep that system's stamp).
+
+Besides the requester's stream, every event of a `stream_run` is published
+to the process-wide `HUB`, which any number of observers (the Demo Monitor,
+a platform UI watching for externally started runs) can subscribe to —
+see `EventHub` and the SSE endpoint in api.py. A run started by another
+agent system's A2A request is therefore visible in this process even though
+its requester stream goes to that other system.
 """
 
 from __future__ import annotations
@@ -46,6 +53,7 @@ class RunContext:
     root_agent: str  # the agent the run was started on; failures not attributed otherwise go here
     origin: str  # what started the run: "direct" (user) or "a2a" (another agent system)
     trace_id: str | None = None  # shared by runs that belong to one end-to-end request
+    caller: str | None = None  # for origin "a2a": the requesting agent system
 
     def stamp(self, event: AgentEvent) -> AgentEvent:
         event.setdefault("run_id", self.run_id)
@@ -53,6 +61,8 @@ class RunContext:
         event.setdefault("origin", self.origin)
         if self.trace_id:
             event.setdefault("trace_id", self.trace_id)
+        if self.caller:
+            event.setdefault("caller", self.caller)
         return event
 
 
@@ -95,16 +105,65 @@ def collect_events(fn: Callable[[], Any]) -> tuple[Any, list[AgentEvent]]:
 _DONE = object()
 
 
-def new_run(*, system: str, root_agent: str, origin: str = "direct", trace_id: str | None = None) -> RunContext:
-    return RunContext(run_id=uuid.uuid4().hex, system=system, root_agent=root_agent, origin=origin, trace_id=trace_id)
+class EventHub:
+    """Process-wide fan-out of run events to observers. Observers that are not
+    reading fast enough simply queue up; nothing is replayed to late subscribers."""
+
+    def __init__(self) -> None:
+        self._subscribers: set[queue.Queue[AgentEvent]] = set()
+        self._lock = threading.Lock()
+
+    def publish(self, event: AgentEvent) -> None:
+        with self._lock:
+            subscribers = list(self._subscribers)
+        for q in subscribers:
+            q.put(event)
+
+    def subscribe(self, *, timeout: float | None = None) -> Iterator[AgentEvent | None]:
+        """Yields events as they are published; yields None when `timeout` seconds pass
+        without one (so a transport can send a keep-alive). Unsubscribes when closed."""
+        q: queue.Queue[AgentEvent] = queue.Queue()
+        with self._lock:
+            self._subscribers.add(q)
+        try:
+            while True:
+                try:
+                    yield q.get(timeout=timeout)
+                except queue.Empty:
+                    yield None
+        finally:
+            with self._lock:
+                self._subscribers.discard(q)
+
+    @property
+    def subscriber_count(self) -> int:
+        with self._lock:
+            return len(self._subscribers)
 
 
-def stream_run(fn: Callable[[], Any], *, run: RunContext) -> Iterator[AgentEvent]:
-    """Runs `fn` in a thread and yields its events live, ending with error/done."""
+HUB = EventHub()
+
+
+def new_run(
+    *, system: str, root_agent: str, origin: str = "direct", trace_id: str | None = None, caller: str | None = None
+) -> RunContext:
+    return RunContext(
+        run_id=uuid.uuid4().hex, system=system, root_agent=root_agent, origin=origin, trace_id=trace_id, caller=caller
+    )
+
+
+def stream_run(fn: Callable[[], Any], *, run: RunContext, hub: EventHub | None = HUB) -> Iterator[AgentEvent]:
+    """Runs `fn` in a thread and yields its events live, ending with error/done.
+    Every event also goes to `hub` (the process-wide HUB by default) for observers."""
     q: queue.Queue[AgentEvent | object] = queue.Queue()
 
+    def sink(event: AgentEvent) -> None:
+        q.put(event)
+        if hub is not None:
+            hub.publish(event)
+
     def worker() -> None:
-        token = _emitter.set(q.put)
+        token = _emitter.set(sink)
         run_token = _run.set(run)
         try:
             fn()

@@ -1,4 +1,7 @@
-from app.runtime.events import AgentError, collect_events, emit, new_run, stream_run
+import threading
+
+from app.runtime.api import sse_line
+from app.runtime.events import AgentError, EventHub, collect_events, emit, new_run, stream_run
 
 RUN = new_run(system="k_electronics", root_agent="k_super", origin="a2a")
 
@@ -55,3 +58,59 @@ def test_stream_run_attributes_unlabelled_failures_to_the_root_agent():
 
     events = list(stream_run(work, run=new_run(system="k_electronics", root_agent="news")))
     assert events[-1]["type"] == "error" and events[-1]["agent"] == "news" and "network down" in events[-1]["message"]
+
+
+def test_stream_run_publishes_every_event_to_the_hub_for_observers():
+    hub = EventHub()
+    seen: list[dict] = []
+    ready = threading.Event()
+
+    def observe():
+        for event in hub.subscribe(timeout=0.05):
+            if event is None:
+                if ready.is_set():
+                    break
+                continue
+            seen.append(event)
+            if event["type"] in ("done", "error"):
+                ready.set()
+
+    t = threading.Thread(target=observe, daemon=True)
+    t.start()
+    while hub.subscriber_count == 0:
+        pass
+
+    def work():
+        emit({"type": "agent_start", "agent": "news", "request": "r"})
+        emit({"type": "agent_end", "agent": "news", "response": "ok"})
+
+    run = new_run(system="k_electronics", root_agent="news", origin="a2a", caller="group")
+    requester = list(stream_run(work, run=run, hub=hub))
+    t.join(timeout=2)
+    assert [e["type"] for e in requester] == ["agent_start", "agent_end", "done"]
+    # The observer saw the same events, in order, with the run stamp (incl. origin / caller).
+    assert seen == requester
+    assert all(e["run_id"] == run.run_id and e["origin"] == "a2a" and e["caller"] == "group" for e in seen)
+    assert hub.subscriber_count == 0  # unsubscribed when the observer stopped
+
+
+def test_hub_subscriber_yields_none_on_timeout_for_keepalives():
+    hub = EventHub()
+    it = hub.subscribe(timeout=0.01)
+    assert next(it) is None
+    hub.publish({"type": "done"})
+    assert next(it) == {"type": "done"}
+    it.close()
+    assert hub.subscriber_count == 0
+
+
+def test_sse_line_is_one_data_message():
+    assert sse_line({"type": "agent_start", "agent": "뉴스"}) == 'data: {"type": "agent_start", "agent": "뉴스"}\n\n'
+
+
+def test_llm_reads_the_backend_dotenv():
+    from pathlib import Path
+
+    from app.runtime import llm
+
+    assert llm.ENV_PATH == Path(__file__).resolve().parent.parent / ".env"

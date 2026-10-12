@@ -334,6 +334,8 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 - `stream_run(fn, run=RunContext)`은 Agent를 worker thread에서 돌리고 이벤트를 발생 즉시 yield한다. 마지막은 `done` 또는 `error`.
   `RunContext(run_id, system, root_agent, origin, trace_id)`는 `new_run()`으로 만들고, run 안에서 emit된 모든 이벤트에 `run_id` · `system` · `origin` · (`trace_id`)가 찍힌다.
   이미 찍혀 있는 필드는 유지한다(다른 system에서 relay된 이벤트). `AgentError`가 아닌 예외는 `root_agent`로 귀속한다.
+- **관찰 채널 (Phase 3).** `stream_run`은 요청자 큐뿐 아니라 프로세스 전역 `HUB`(`EventHub`)에도 모든 이벤트를 publish한다. `runtime/api.py`의 `sse_events()`가 그것을 `text/event-stream`으로 흘리며(15초 keep-alive), 각 system의 app이 `GET /api/events`로 연다.
+  요청을 보낸 쪽이 누구든(사용자 직접 채팅, 다른 system의 A2A 요청) 이 프로세스에서 일어나는 run은 전부 보인다. 늦게 구독한 관찰자에게 과거 이벤트를 replay하지는 않는다.
 - `collect_events(fn)`은 테스트용 동기 수집기다.
 - `AgentError(agent, message)`로 실패한 Agent를 지목한다. 지목되지 않은 예외는 `k_super`로 귀속된다.
 
@@ -367,7 +369,8 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 
 | Endpoint | 역할 |
 | --- | --- |
-| `GET /api/health` | 상태 확인 |
+| `GET /api/health` | 상태 확인 (`system` 포함) |
+| `GET /api/events` | 관찰 채널. 이 프로세스의 모든 run 이벤트를 SSE로 스트리밍 (Demo Monitor · 플랫폼 UI의 외부 실행 표시용) |
 | `POST /api/k-super/run` `{request}` | Step 3·4·5·6. K Super 실행(필요한 전문 Agent에게 순차 위임 후 최종 검토 결과 작성), lifecycle을 NDJSON으로 스트리밍 |
 | `POST /api/agents/meeting/run` `{request}` | 사용자 → Meeting Agent 직접 대화 (`invocation="direct"`). 같은 Agent core |
 | `POST /api/agents/news/run` `{request}` | 사용자 → News Agent 직접 대화. 같은 Agent core |
@@ -530,7 +533,7 @@ LLM: `backend/app/runtime/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama
 | `backend/tests/test_mna_review_workflow.py` | 아니오 | M&A 검토 workflow (persona별 항목 순서 · 우려 · 조건 순서, 같은 권고와 조건 집합, context 신호, 모르는 기업/persona) |
 | `backend/tests/test_capabilities.py` | 아니오 | Registry 내용(kind, allowed_agents), Tool 정의가 source of truth, Agent가 Registry subset을 쓰는지, Skill이 system prompt에 들어가는지 |
 | `backend/tests/test_k_super.py` | 아니오 | `route_on_tool_calls`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model(`common.get_chat_model` patch) + stub 위임 Tool로 만든 그래프(`k_super.build_k_super` patch)로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
-| `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속(root_agent) / run 식별자 stamp(relay된 stamp 유지) |
+| `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속(root_agent) / run 식별자 stamp(relay된 stamp 유지) / HUB publish·subscribe·keep-alive / SSE 형식 / `.env` 경로 |
 | `backend/tests/test_boundaries.py` | 아니오 | import 경계: runtime은 library·systems를, library는 systems를, system은 다른 system을 import하지 않음. system마다 registry.py와 data/ 존재 |
 | `backend/tests/test_agents.py` | 예 (`OLLAMA_API_KEY` 없으면 skip) | Meeting / News / Advisory Agent 단독 실행, K Super가 NeuroEdge 요청에 Meeting → News → Advisory를 각각 별도 model 턴에서 순차 위임하고 Advisory task에 회의 기준·외부 리스크를 담았는지(`context_signals`), 마지막에 Tool 호출 없는 최종 응답(본실사 판단 포함)으로 끝나는지, 회의 결정사항만 묻는 요청에는 Meeting에게만 위임하고 답하는지, NDJSON API, 경영자문 직접 대화의 개념 질문(Tool 없음) / 실제 검토(Tool 사용), delegation 경로의 Tool 검사 |
 
@@ -602,7 +605,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | 0 | 결정 문서화 (이 장) | 완료 |
 | 1 | 동작 변화 없는 runtime 정비: Super core 추출(invocation) · run context · Registry 메커니즘/내용 분리 · workflow 데이터 경로 매개변수 | 완료 |
 | 2 | 디렉터리 경계 이동(runtime / 라이브러리 / K system) + import 경계 테스트 | 완료 |
-| 3 | 관찰 hub + SSE, run 시작 이벤트 | 예정 |
+| 3 | 관찰 hub + SSE (별도 run 시작 이벤트는 두지 않음: root Agent의 `agent_start`에 `origin` · `caller`가 찍힌다) | 완료 |
 | 4 | K Super의 두 표면: A2A 수신(`a2a`) · 직접 채팅(`direct`) | 예정 |
 | 5a | Group system: Group Super + A2A client Tool + Group app | 예정 |
 | 5b | Group Specialist 3개 + Group 데이터 + Group Super의 `delegate_to_*` | 예정 |

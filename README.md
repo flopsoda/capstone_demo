@@ -115,10 +115,10 @@ backend/
       agent_core.py                  Specialist core(Specialist / build_specialist_graph / run_specialist, 호출 맥락 delegation|direct)
                                      + Super core(SuperAgent / build_super_graph / run_super, 호출 맥락 a2a|direct), system prompt 조립, 응답 추출
       capabilities.py                Skill / Capability 타입 + Registry 조회·검증 메커니즘
-      events.py                      emit() / RunContext(run_id · system · origin · trace_id stamp) / stream_run(), AgentError
+      events.py                      emit() / RunContext(run_id · system · origin · trace_id · caller stamp) / stream_run() / EventHub(HUB: 프로세스 전역 관찰 fan-out), AgentError
       llm.py                         ChatOllama (Ollama Cloud, OLLAMA_* 환경변수)
       schemas.py                     요청 스키마
-      api.py                         NDJSON 스트리밍 helper
+      api.py                         NDJSON 스트리밍 helper · SSE 관찰 채널 helper
     library/                         공용 Capability 라이브러리 (system을 import하지 않음)
       skills/                        specialist_delegation, meeting_context_analysis, external_risk_analysis, mna_feasibility_review (Skill 본문)
       tools/                         run_meeting_context_retrieval, run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory
@@ -129,7 +129,7 @@ backend/
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
     systems/
       k_electronics/                 K Electronics agent system (SYSTEM = "k_electronics", DATA_DIR)
-        app.py                       FastAPI: /api/health, /api/k-super/run, /api/agents/{meeting,news,advisory}/run (NDJSON 스트림)
+        app.py                       FastAPI: /api/health, /api/k-super/run, /api/agents/{meeting,news,advisory}/run (NDJSON 스트림), /api/events (SSE 관찰 채널)
         registry.py                  이 system의 CAPABILITIES와 allowed_agents (권한의 source of truth), skills_for / tools_for
         agents/
           k_super.py                 K전자 슈퍼에이전트: AGENT_ID · IDENTITY + Registry 위임 Tool (Super core)

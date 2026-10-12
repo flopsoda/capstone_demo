@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
-from ...runtime.api import ndjson_run
+from ...runtime.api import ndjson_run, sse_events
 from ...runtime.events import new_run
 from ...runtime.schemas import RunRequest
 from . import SYSTEM
@@ -25,6 +25,12 @@ app = FastAPI(title="K Electronics agent system", version="0.5.0")
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "system": SYSTEM}
+
+
+@app.get("/api/events")
+def events() -> StreamingResponse:
+    """Observer channel: every lifecycle event this system emits, as Server-Sent Events."""
+    return sse_events()
 
 
 @app.post("/api/k-super/run")

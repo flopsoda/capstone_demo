@@ -9,7 +9,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# backend/.env (this file is backend/app/runtime/llm.py)
+ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(ENV_PATH)
 
 DEFAULT_BASE_URL = "https://ollama.com"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
