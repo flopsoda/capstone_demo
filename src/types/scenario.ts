@@ -99,10 +99,15 @@ export interface LiveContext {
 /** Failure attributed to a specific agent by the backend (see src/live/api.ts). */
 export class LiveRunError extends Error {
   agent: AgentId;
-  constructor(agent: AgentId, message: string) {
+  /** Backend agent id as sent (before any per-surface resolution) and the system that blamed it. */
+  rawAgent: string;
+  system?: string;
+  constructor(agent: AgentId, message: string, rawAgent?: string, system?: string) {
     super(message);
     this.name = "LiveRunError";
     this.agent = agent;
+    this.rawAgent = rawAgent ?? agent;
+    this.system = system;
   }
 }
 

@@ -1,23 +1,23 @@
 import { AGENTS, type ChatTabId } from "../types/agent";
 
+export interface SidebarTab {
+  id: ChatTabId;
+  label: string;
+  hint: string;
+}
+
 interface SidebarProps {
+  tabs: SidebarTab[];
   selected: ChatTabId;
   onSelect: (tab: ChatTabId) => void;
 }
 
-const TABS: { id: ChatTabId; label: string; hint: string }[] = [
-  { id: "group_super", label: "그룹 슈퍼에이전트", hint: "슈퍼에이전트" },
-  { id: "advisory", label: "경영자문", hint: "전문가 에이전트" },
-  { id: "news", label: "뉴스", hint: "전문가 에이전트" },
-  { id: "meeting", label: "미팅", hint: "전문가 에이전트" },
-];
-
-export function Sidebar({ selected, onSelect }: SidebarProps) {
+export function Sidebar({ tabs, selected, onSelect }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sidebar__section-title">에이전트</div>
       <nav className="sidebar__nav">
-        {TABS.map((tab) => {
+        {tabs.map((tab) => {
           const meta = AGENTS[tab.id];
           const isSelected = tab.id === selected;
           return (

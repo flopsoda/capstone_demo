@@ -6,7 +6,7 @@
 문서 전체에서 **Current implementation**(지금 코드에 있는 것)과 **Target architecture**(지향하는 구조)를 구분해서 적는다.
 둘이 다른 곳은 [10. 현재 구현과 목표 구조의 차이](#10-현재-구현과-목표-구조의-차이)에 모아 두었다.
 
-기준 시점: 2026-10-11 (Step 3·4·5·6 real + Capability Registry, 나머지 mock).
+기준 시점: 2026-10-12 (Phase 7까지 완료: 두 Agent System backend + 제품 UI 둘 + Demo Monitor. Step 1~8 전부 real).
 
 ---
 
@@ -424,6 +424,16 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 직접 대화(Sidebar "미팅" · "뉴스" · "경영자문" 탭)는 `App.tsx`가 `LIVE_AGENT_PATHS` + `runDirectLive` + 같은 mapper로 처리한다. 전문 Agent 탭에 mock 응답 경로는 없다.
 직접 대화에서 Tool 없이 답하면 `tool_start`가 없으므로 노드에 Workflow 이름이 표시되지 않고 응답 메시지만 붙는다.
 
+### Current implementation — 제품 UI (Phase 7, `/group` · `/k`)
+
+`src/platform/`:
+- `config.ts` — 플랫폼마다 다른 것만: 제목, 탭 4개(id · 라벨 · backend 경로 · 헤더 · 예시 요청), `resolveAgent`. `GROUP_PLATFORM`은 자기 Specialist를 `group_*` id로 보여 relay된 K Specialist(`meeting` 등)와 구분한다. `K_PLATFORM`은 backend id 그대로.
+- `usePlatformChats.ts` — 탭마다 전사 · 세션 상태(`RunnerState`)를 유지한다. `send(tab, text)`는 그 탭의 backend 엔드포인트에 NDJSON 요청을 보내고, 도착하는 이벤트를 같은 mapper · reducer로 적용한다(사용자 메시지 추가 → root `agent_start` → 이벤트 → `agent_complete`, 실패 시 backend가 지목한 Agent로 `scenario_error`). 탭을 바꿔도 각 전사가 남는다.
+- `PlatformApp.tsx` — Header · Sidebar(설정의 탭) · ChatPanel · `SessionWindows`. 그래프 · Step · toolbar 없음. A2A / 위임 세션창은 채팅 옆에 열렸다가 요청 카드로 접힌다 (제품 기능).
+- `reducer`의 `scenario_error`는 열려 있던 세션을 모두 닫는다 (다음 요청이 옛 세션으로 라우팅되지 않도록).
+- `src/main.tsx`: `/group`(기본) · `/k` · `/monitor` · `/legacy`(옛 단일 앱, Phase 8에서 제거).
+- 검증(headless): `/group`에서 예시 요청 → A2A 세션창 안에 K의 위임 창이 차례로 열리고 닫힘 → "그룹 최종 판단" 메시지, 같은 시간 `/monitor`는 8/8 완료. `/k`에서 뉴스 직접 채팅(Tool 결과 + 응답)과 K Super 직접 채팅(미팅 위임 창 → "K전자 검토 결과").
+
 ### Current implementation — Demo Monitor (Phase 6, `/monitor`)
 
 테스트 · 발표용 관찰 화면이며 제품 UI의 navigation에 없다. `src/main.tsx`가 URL 경로로 화면을 고른다 (`/monitor` → `DemoMonitor`, 그 외 → 기존 `App`). 라우터 의존성은 없다.
@@ -471,25 +481,25 @@ Group Super 탭에서 `NeuroEdge` / `뉴로엣지` / `인수` 키워드가 들�
 
 | Step | 내용 | 상태 | 실행 주체 |
 | --- | --- | --- | --- |
-| 1 | 그룹 회장 → Group Super. 인수 검토 요청 | **MOCK** | frontend 이벤트 |
-| 2 | Group Super → K Super. A2A 인수안 검토 요청 | **MOCK** | frontend 이벤트 (A2A 세션 열림) |
-| 3 | K Super → Meeting Agent → `run_meeting_context_retrieval` | **REAL** | backend `POST /api/k-super/run`, LangGraph, Ollama Cloud |
+| 1 | 회장 → Group Super. 인수 검토 요청 | **REAL** | Group UI(`/group`) → `POST /group-api/agents/group-super/run` (Group backend :8001). Group Super `agent_start` |
+| 2 | Group Super → K Super. A2A 인수안 검토 요청 | **REAL** | Group Super의 Tool `request_k_electronics_review` → K `POST /api/a2a/run` (HTTP). 요청문은 Group Super가 쓴다. `a2a_start` → A2A 세션 |
+| 3 | K Super → Meeting Agent → `run_meeting_context_retrieval` | **REAL** | K backend :8000. K 이벤트는 Group 스트림에 relay되어 A2A 세션 안에 위임 세션으로 보인다 |
 | 4 | K Super → News Agent → `run_company_risk_news_analysis` | **REAL** | 같은 K Super 실행 안에서 Meeting 결과 수신 후 순차 위임 |
 | 5 | K Super → Advisory Agent → `run_mna_review` | **REAL** | 같은 K Super 실행 안에서 Meeting · News 결과를 보고 맥락을 담아 순차 위임 |
-| 6 | K Super가 전문 Agent 결과 종합 → K전자 차원의 최종 검토 결과 | **REAL** | 같은 K Super 실행의 마지막 `model` 턴. 추가 위임이 필요 없다고 판단해 Tool 호출 없이 응답 → `agent_end(k_super)`. REAL 구간 종료 |
-| 7 | K Super → Group Super. A2A 응답 | **MOCK** · 다음 구현 대상 | frontend 이벤트 (A2A 세션 닫힘). 결과 문장은 아직 mock 고정 문장 |
-| 8 | Group Super → 회장. 그룹 투자심의 최종 판단 | **MOCK** | frontend 이벤트 |
+| 6 | K Super가 전문 Agent 결과 종합 → K전자 차원의 최종 검토 결과 | **REAL** | 같은 K Super 실행의 마지막 `model` 턴. Tool 호출 없이 응답 → `agent_end(k_super)` |
+| 7 | K Super → Group Super. A2A 응답 | **REAL** | K의 최종 응답 텍스트만 Group Tool이 반환 → `a2a_end` → A2A 세션 닫힘(result = 실제 응답) |
+| 8 | Group Super → 회장. 그룹 투자심의 최종 판단 | **REAL** | Group Super의 마지막 `model` 턴 → `agent_end(group_super)`. Group Super가 자기 Specialist에게도 위임할 수 있다(모델 판단) |
 
-직접 대화 탭:
+Step 번호는 Demo Monitor(`/monitor`)만 표시한다. 제품 UI에는 Step도 그래프도 없다.
 
-| Sidebar 탭 | 상태 |
-| --- | --- |
-| 그룹 슈퍼에이전트 | scenario 트리거. 비매칭 입력은 고정 안내문 |
-| 미팅 | **REAL** (`POST /api/agents/meeting/run`) |
-| 뉴스 | **REAL** (`POST /api/agents/news/run`) |
-| 경영자문 | **REAL** (`POST /api/agents/advisory/run`) |
+직접 대화 탭 (모두 REAL, 플랫폼별):
 
-K Electronics Super는 Sidebar에 없고 그래프에서만 보인다.
+| 플랫폼 UI | 탭 | backend |
+| --- | --- | --- |
+| Group (`/group`) | 그룹 슈퍼에이전트 · 경영자문 · 뉴스 · 미팅 | `/group-api/agents/{group-super,advisory,news,meeting}/run` (:8001, Group 데이터) |
+| K Electronics (`/k`) | K전자 슈퍼에이전트 · 경영자문 · 뉴스 · 미팅 | `/api/agents/{k-super,advisory,news,meeting}/run` (:8000, K 데이터) |
+
+Super 탭도 직접 대화다(`invocation="direct"`). 인사에는 Tool 없이 답하고, 검토 요청에는 위임 · A2A 세션이 채팅 옆 창으로 열린다.
 
 ---
 
@@ -582,8 +592,8 @@ LLM: `backend/app/runtime/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama
 | --- | --- | --- |
 | Capability 정의 | 각 system의 `registry.py`에서 Agent별 Skill / Tool subset 제공. frontend에 Workflow 이름 상수 없음 | 같음 |
 | K Super 그래프 | `tools → model` 루프. 모델이 Tool 없이 응답하면 `END`, 그 응답이 종합 결과 | 같음 |
-| Group Super | backend REAL (Group system, Phase 5a). frontend는 mock | 같음 + frontend 연결 (Phase 7) |
-| A2A | backend REAL: Group Tool → K `/api/a2a/run` HTTP, 최종 응답만 Agent에 전달, lifecycle은 관찰용 relay. frontend scenario는 아직 상수 요청문을 K에 직접 전달 | frontend가 Group backend를 쓰면 완성 (Phase 7) |
+| Group Super | REAL (Group system + Group UI) | 같음 |
+| A2A | REAL: Group Tool → K `/api/a2a/run` HTTP, 최종 응답만 Agent에 전달, lifecycle은 관찰용 relay. Group UI가 Group backend를 쓴다 | 같음 |
 | News 데이터 | `data/news.json` 고정 fixture를 키워드로 조회 | 실제 뉴스 API / 검색 / RAG (`analyze_company_risk_news` 본문만 교체) |
 | Advisory 데이터 | `data/companies.json` 고정 fixture + 결정적 규칙 evaluator | 실제 재무 모델 / 밸류에이션 / 실사 데이터 (evaluator만 교체) |
 | Workflow 결과 렌더링 | `toolResultBlocks`가 Tool 이름별 `switch` (meeting, news, advisory 전용 렌더) | Tool이 늘어나도 frontend가 Tool별 지식을 과도하게 갖지 않는 방식 (미결정) |
@@ -647,7 +657,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | 5a | Group system: Group Super + A2A client Tool + Group app | 완료 |
 | 5b | Group Specialist 3개 + Group 데이터 + Group Super의 `delegate_to_*` | 완료 |
 | 6 | Demo Monitor | 완료 |
-| 7 | 제품 UI(Group · K), mock scenario 제거 | 예정 |
+| 7 | 제품 UI(Group · K) | 완료 (mock scenario 파일과 `/legacy`는 Phase 8에서 제거) |
 | 8 | 정리 · 문서 · (선택) K UI 외부 실행 표시 | 예정 |
 
 Phase 7 전까지 기존 단일 frontend와 mock Step 1·2·7·8은 그대로 두며, 각 Phase가 끝날 때 현재 데모가 그대로 동작해야 한다.

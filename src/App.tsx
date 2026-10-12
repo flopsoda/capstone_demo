@@ -5,16 +5,23 @@ import { Header } from "./components/Header";
 import { PanelSwitch, type RightPanelView } from "./components/PanelSwitch";
 import { ScenarioStatus } from "./components/ScenarioStatus";
 import { SessionWindows } from "./components/SessionWindows";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, type SidebarTab } from "./components/Sidebar";
 import { useScenarioRunner } from "./hooks/useScenarioRunner";
 import { createAgentEventMapper } from "./live/agentEvents";
 import { ADVISORY_AGENT_RUN_PATH, MEETING_AGENT_RUN_PATH, NEWS_AGENT_RUN_PATH, streamAgentRun } from "./live/api";
 import { MNA_SAMPLE_PROMPT, mnaScenario } from "./scenario/mnaScenario";
 import { getGroupSuperFallback } from "./scenario/mockResponses";
-import type { ChatTabId } from "./types/agent";
 import type { ChatItem } from "./types/scenario";
 
-type SideTab = Exclude<ChatTabId, "group_super">;
+type SideTab = "advisory" | "news" | "meeting";
+type LegacyTab = "group_super" | SideTab;
+
+const LEGACY_TABS: SidebarTab[] = [
+  { id: "group_super", label: "그룹 슈퍼에이전트", hint: "슈퍼에이전트" },
+  { id: "advisory", label: "경영자문", hint: "전문가 에이전트" },
+  { id: "news", label: "뉴스", hint: "전문가 에이전트" },
+  { id: "meeting", label: "미팅", hint: "전문가 에이전트" },
+];
 
 /** Specialist tabs are answered by the real backend agents (same cores K Super delegates to). */
 const LIVE_AGENT_PATHS: Record<SideTab, string> = {
@@ -29,7 +36,7 @@ let sideIdCounter = 0;
 const sideId = () => `s${++sideIdCounter}`;
 
 export default function App() {
-  const [tab, setTab] = useState<ChatTabId>("group_super");
+  const [tab, setTab] = useState<LegacyTab>("group_super");
   const [view, setView] = useState<RightPanelView>("graph");
   const runner = useScenarioRunner(mnaScenario);
 
@@ -39,7 +46,7 @@ export default function App() {
     news: [],
     meeting: [],
   });
-  const [replyPending, setReplyPending] = useState<ChatTabId | null>(null);
+  const [replyPending, setReplyPending] = useState<LegacyTab | null>(null);
   const replyTimer = useRef<number | null>(null);
   useEffect(
     () => () => {
@@ -124,7 +131,7 @@ export default function App() {
     <div className="app">
       <Header />
       <div className="app__body">
-        <Sidebar selected={tab} onSelect={setTab} />
+        <Sidebar tabs={LEGACY_TABS} selected={tab} onSelect={(t) => setTab(t as LegacyTab)} />
 
         <div className="main">
           <div className="toolbar">

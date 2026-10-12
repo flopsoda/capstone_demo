@@ -147,20 +147,23 @@ function applyEvent(state: RunnerState, ev: ScenarioEvent): RunnerState {
 
     case "scenario_error": {
       const failed = applyEvent(state, { type: "agent_error", agent: ev.agent });
-      return {
-        ...pushItem(failed, {
-          id: nextId(),
-          kind: "assistant",
-          sender: ev.agent,
-          title: "오류",
-          content: [
-            { kind: "badge", text: "실행 중단", tone: "high" },
-            { kind: "text", text: ev.message },
-          ],
-        }),
-        status: "error",
-        error: ev.message,
-      };
+      const withMessage = pushItem(failed, {
+        id: nextId(),
+        kind: "assistant",
+        sender: ev.agent,
+        title: "오류",
+        content: [
+          { kind: "badge", text: "실행 중단", tone: "high" },
+          { kind: "text", text: ev.message },
+        ],
+      });
+      // Nothing will close the sessions the failed run left open: close them so
+      // the next request is not routed into a stale window.
+      const sessions = { ...withMessage.sessions };
+      for (const id of withMessage.sessionStack) {
+        sessions[id] = { ...sessions[id], status: "closed", resultTitle: "중단" };
+      }
+      return { ...withMessage, sessions, sessionStack: [], status: "error", error: ev.message };
     }
 
     case "agent_status":

@@ -1,25 +1,29 @@
 # Executive AI — Multi-Agent Decision Support Demo
 
 대기업 경영진을 위한 Multi-Agent AI 시스템 데모입니다.
-고정된 NeuroEdge M&A 8 Step 시나리오를 재생하면서
-`Group Super → A2A → K Electronics Super → Agent Delegation → Workflow Tool → 결과 종합`
-구조를 채팅과 그래프에서 동시에 보여줍니다.
-
-mock을 한 단계씩 실제 Agent 실행으로 교체하는 중입니다. 현재 상태:
+같은 Agent Platform runtime 위에 **독립된 Agent System 두 개**(K그룹 · K전자)가 있고, 둘은 A2A(HTTP)로만 통신합니다.
 
 ```text
-Step 1  MOCK   회장 요청 접수
-Step 2  MOCK   A2A 요청 (Group Super → K Super)
-Step 3  REAL   K Super → Meeting Agent → run_meeting_context_retrieval   (Python · LangGraph · Ollama Cloud, 실행 이벤트 스트리밍)
-Step 4  REAL   K Super → News Agent → run_company_risk_news_analysis     (같은 K Super 실행 안에서 Meeting 결과 수신 후 순차 위임)
-Step 5  REAL   K Super → Advisory Agent → run_mna_review                 (Meeting · News 결과를 K Super가 맥락으로 담아 위임, CEO/CFO/CTO 관점 평가)
-Step 6  REAL   K Super 종합                                              (추가 위임이 필요 없다고 판단하면 Tool 호출 없이 최종 검토 결과를 작성 → agent_end)
-Step 7  MOCK   A2A 응답
-Step 8  MOCK   그룹 최종 판단
+User → Group Super → (A2A) → K Electronics Super → delegation → Meeting / News / Advisory → Workflow Tool
+                                                 ← K전자 최종 응답
+     ← 그룹 최종 판단
 ```
 
-Sidebar **미팅** · **뉴스** · **경영자문** 탭의 직접 채팅도 같은 Meeting / News / Advisory Agent가 실제로 응답합니다.
-직접 채팅에서는 Tool 사용이 강제되지 않아, 일반 개념 질문에는 Tool 없이 답하고 실제 기업 검토 요청에는 Workflow Tool을 사용합니다.
+NeuroEdge M&A 데모의 Step 1~8이 전부 실제 Agent 실행입니다 (Step은 Demo Monitor의 표시 개념일 뿐 backend는 모릅니다):
+
+```text
+Step 1  REAL   회장 요청 접수                         Group UI → Group backend (:8001)
+Step 2  REAL   A2A 요청 (Group Super → K Super)       Group Super의 Tool이 K backend(:8000) /api/a2a/run 호출, 요청문은 LLM이 작성
+Step 3  REAL   K Super → Meeting Agent → run_meeting_context_retrieval
+Step 4  REAL   K Super → News Agent → run_company_risk_news_analysis     (같은 K Super 실행 안에서 순차 위임)
+Step 5  REAL   K Super → Advisory Agent → run_mna_review                 (Meeting · News 결과를 맥락으로 담아 위임)
+Step 6  REAL   K Super 종합                                              (Tool 호출 없이 최종 검토 결과 → agent_end)
+Step 7  REAL   A2A 응답                                                  K의 최종 응답 텍스트만 Group Super에게 전달
+Step 8  REAL   그룹 최종 판단                                            Group Super의 마지막 model 턴
+```
+
+두 플랫폼 UI(`/group`, `/k`) 모두 **슈퍼에이전트 · 경영자문 · 뉴스 · 미팅** 탭의 직접 채팅을 제공하며, 협업형 요청에서는 A2A / 위임 세션이 채팅 옆 창으로 펼쳐집니다.
+직접 채팅에서는 Tool 사용이 강제되지 않아, 일반 개념 질문에는 Tool 없이 답하고 실제 검토 요청에는 Workflow Tool · 위임 · A2A를 사용합니다.
 
 ## 실행
 
@@ -38,10 +42,11 @@ npm install
 npm run dev      # http://localhost:5173  (/api → :8000 K, /group-api → :8001 Group proxy)
 npm run build    # tsc + vite build
 
-# 3) Demo Monitor (테스트 · 발표용 관찰 창, 제품 UI 아님): http://localhost:5173/monitor
-#    Group backend의 /api/events(SSE)를 구독해 전체 Agent Graph · Step 1~8 · 협업 세션을 실제 이벤트로만 보여준다.
-#    현재 Group 실행은 curl로 띄울 수 있다 (Phase 7에서 Group UI가 담당):
-#    curl -X POST localhost:8001/api/agents/group-super/run -H 'Content-Type: application/json' -d '{"request":"K전자가 검토 중인 뉴로엣지 인수안을 확인해줘. ... 본실사 진입을 승인할지 판단해."}'
+# 3) 브라우저 창
+#    http://localhost:5173/group    Group Platform UI (제품)  ← 기본 경로 / 도 여기
+#    http://localhost:5173/k        K Electronics Platform UI (제품)
+#    http://localhost:5173/monitor  Demo Monitor (테스트 · 발표용 관찰 창, 제품 UI 아님):
+#                                   Group backend의 /api/events(SSE)를 구독해 전체 Agent Graph · Step 1~8 · 협업 세션을 실제 이벤트로만 보여준다
 ```
 
 backend 테스트:
@@ -51,30 +56,25 @@ cd backend
 .venv/bin/python -m pytest        # tests/test_agents.py는 OLLAMA_API_KEY가 없으면 skip
 ```
 
-Step 3·4·5·6의 그래프/세션/메시지는 backend가 실행 중 보내는 lifecycle 이벤트(NDJSON 스트림)를 받는 즉시 바뀝니다.
-Step 번호는 backend `delegation_start`의 대상 Agent(meeting → 3, news → 4, advisory → 5)와 K Super의 `agent_end`(→ 6)에 맞춰 바뀝니다.
-K Super가 어떤 전문 Agent에게 위임할지, 언제 위임을 멈추고 최종 검토 결과를 쓸지는 요청과 누적된 결과를 보고 매 턴 스스로 판단합니다
-(등록된 Tool을 모두 호출해야 하는 규칙은 없습니다). Step 6 메시지("K전자 검토 결과")는 backend `agent_end(k_super).response` 문자열 그대로입니다.
-backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Workflow Tool을 호출하지 않음, K Super가 전문 Agent에게 전혀 위임하지 않고 답함 등) 그 시점에
-시나리오가 **오류 · 중단** 상태로 멈추고, backend가 지목한 Agent 노드가 error로 표시됩니다 (mock으로 대체하지 않음).
-초기화 또는 새 요청으로 재실행합니다.
+세션창 · 메시지 · (Monitor의) 그래프와 Step은 backend가 실행 중 보내는 lifecycle 이벤트(요청자에게는 NDJSON 스트림, 관찰자에게는 SSE)를 받는 즉시 바뀝니다.
+Group Super가 자기 전문 Agent에게 위임할지 K전자에 A2A로 요청할지, K Super가 어떤 전문 Agent에게 위임할지, 언제 멈추고 최종 응답을 쓸지는
+요청과 누적된 결과를 보고 매 턴 스스로 판단합니다 (등록된 Tool을 모두 호출해야 하는 규칙은 없습니다). 모든 메시지는 backend 응답 문자열 그대로입니다.
+backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Workflow Tool을 호출하지 않음, A2A 상대에 연결 불가 등) 그 시점에
+**오류 · 중단**으로 멈추고, backend가 지목한 Agent가 error로 표시됩니다 (mock으로 대체하지 않음). 새 요청으로 재실행합니다.
 
 ## 시연 순서
 
-1. Sidebar에서 **Group Super Agent**를 선택합니다 (기본 선택).
-2. `NeuroEdge` 또는 `인수` 키워드가 포함된 요청을 보냅니다.
-   (빈 채팅의 **예시 요청 불러오기** 버튼으로 대표 문장을 입력할 수 있습니다.)
-3. 8 Step 시나리오가 자동 재생되며 오른쪽 패널이 채팅과 동기화됩니다.
-   - **Agent Graph**: 팀 회의용 토폴로지 시각화 (실제 제품 UI에는 포함되지 않음)
-   - **Agent Sessions**: 세션마다 별도 채팅창이 옆에 열리는 실제 대화 뷰.
-     A2A 요청 시 2번째 창(Group Super ↔ K Electronics Super), Delegation 시 3번째 창
-     (K Electronics Super ↔ 전문 Agent)이 생기고, 세션이 끝나면 창이 부모 창의 요청 말풍선으로
-     날아 들어가며 사라집니다. 남은 요청 카드에는 결과가 붙고 "대화 보기"로 다시 펼칠 수 있습니다.
-4. 완료 후 Sidebar의 **뉴스** 탭에서 `뉴로엣지 관련 악재만 다시 보여줘.`를 보내면
-   같은 News Agent(backend)가 사용자 직접 요청에도 실제로 응답하며, 그래프의 News 노드가 다시 active 됩니다.
-   **경영자문** 탭에서 `뉴로엣지 인수를 CFO 관점에서 검토해줘.`를 보내면 같은 Advisory Agent가 `run_mna_review(persona="CFO")`로 답하고,
-   `earn-out이 뭐야?` 같은 개념 질문에는 Tool 없이 답합니다.
-5. **Reset Scenario**로 초기화하고 재실행할 수 있습니다.
+창 세 개를 띄웁니다: `/group`, `/k`, `/monitor`.
+
+1. **Group UI**의 **그룹 슈퍼에이전트** 탭에서 요청을 보냅니다 (빈 채팅의 **예시 요청 불러오기**로 대표 문장 입력).
+2. Group Super가 요청을 판단해 K전자에 A2A로 검토를 요청합니다. 채팅 옆에 **A2A 대화** 창이 열리고, 그 안에 K전자 슈퍼에이전트가 미팅 → 뉴스 → 경영자문에게
+   위임하는 **위임 대화** 창이 차례로 열렸다 닫힙니다 (K 내부 lifecycle이 관찰용으로 relay됨). K의 최종 응답이 돌아오면 A2A 창이 요청 카드로 접히고,
+   Group Super가 그룹 최종 판단을 씁니다. 필요하다고 판단하면 그룹 자체 전문 Agent에게도 위임합니다.
+3. **Demo Monitor**는 같은 실행을 전체 그래프(두 시스템 9노드)와 Step 1~8로 보여줍니다. 제품 UI에는 그래프와 Step이 없습니다.
+4. **K UI**에서는 K전자 측 직접 채팅을 보여줍니다: **뉴스** 탭에 `뉴로엣지 관련 악재만 다시 보여줘.`, **경영자문** 탭에 `뉴로엣지 인수를 CFO 관점에서 검토해줘.`
+   (`earn-out이 뭐야?` 같은 개념 질문에는 Tool 없이 답함), **K전자 슈퍼에이전트** 탭에 `지난 회의에서 정한 기준만 정리해줘.`(미팅 위임 창이 열림).
+   Group UI의 **미팅** 탭은 그룹 투자심의 회의 기록(Group 데이터)으로 답합니다.
+5. Monitor의 **초기화**로 관찰 화면을 비우고 다시 시연할 수 있습니다. 채팅 전사는 탭마다 유지됩니다.
 
 ## 아키텍처 개념 (UI 표현)
 
@@ -86,9 +86,8 @@ backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Wo
 | Workflow Tool          | 전문 Agent가 Skill에 따라 선택·실행하는 정형 업무  | 노드 안 `run_*` 모노스페이스 라벨     |
 | Workflow 내부 단계     | Tool 내부에 캡슐화 (Agent가 단계별 호출하지 않음)  | 표시하지 않음 (`tool_end` 결과만)     |
 
-그래프 노드 6개: Group Chairman, Group Super Agent, K Electronics Super Agent,
-Meeting Agent, News Agent, Management Advisory. K Electronics Super는 Sidebar에 없고
-그래프에서만 보입니다.
+그래프(Demo Monitor)의 노드 9개: Group 회장, Group Super, 그룹 미팅 · 뉴스 · 경영자문, K Electronics Super, K 미팅 · 뉴스 · 경영자문.
+제품 UI에는 그래프가 없고 Sidebar 탭(슈퍼 + 전문가 3)과 협업 세션창만 있습니다.
 
 ## 구조
 
@@ -118,8 +117,12 @@ src/
     AgentGraph (React Flow), AgentNode, ScenarioStatus, PanelSwitch,
     SessionCard (세션을 연 요청 카드 + 결과/재생), SessionWindow (세션별 채팅창),
     SessionWindows (열린 세션 창 목록)
-  App.tsx              플랫폼 UI (현재: 단일 앱, Phase 7에서 Group / K로 분리)
-  main.tsx             URL 경로로 화면 선택 (/monitor → DemoMonitor, 그 외 → App)
+  platform/
+    config.ts          플랫폼별 설정: GROUP_PLATFORM / K_PLATFORM (탭 4개의 id · 라벨 · backend 경로 · 헤더 · 예시 요청, resolveAgent)
+    usePlatformChats.ts  탭별 전사·세션 상태. send()가 해당 backend에 NDJSON 요청 → 같은 mapper·reducer로 적용
+    PlatformApp.tsx    제품 UI: Header · Sidebar · ChatPanel · SessionWindows (그래프 · Step 없음)
+  App.tsx              옛 단일 앱 (/legacy, Phase 8에서 제거)
+  main.tsx             URL 경로로 화면 선택 (/group 기본 · /k · /monitor · /legacy)
 
 backend/
   app/

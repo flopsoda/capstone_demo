@@ -77,7 +77,7 @@ export async function streamAgentRun(
     if (!line.trim()) return;
     const event = JSON.parse(line) as AgentEvent;
     if (event.type === "error") {
-      throw new LiveRunError(isAgentId(event.agent) ? event.agent : fallbackAgent, event.message);
+      throw new LiveRunError(isAgentId(event.agent) ? event.agent : fallbackAgent, event.message, event.agent, event.system);
     }
     if (event.type === "done") {
       finished = true;
@@ -133,8 +133,12 @@ export const K_SUPER_RUN_PATH = "/api/k-super/run";
 export const MEETING_AGENT_RUN_PATH = "/api/agents/meeting/run";
 export const NEWS_AGENT_RUN_PATH = "/api/agents/news/run";
 export const ADVISORY_AGENT_RUN_PATH = "/api/agents/advisory/run";
+export const K_SUPER_DIRECT_RUN_PATH = "/api/agents/k-super/run";
 export const K_EVENTS_PATH = "/api/events";
 
 /* Group backend (Vite proxy: /group-api → :8001/api) */
 export const GROUP_SUPER_RUN_PATH = "/group-api/agents/group-super/run";
+export const GROUP_MEETING_AGENT_RUN_PATH = "/group-api/agents/meeting/run";
+export const GROUP_NEWS_AGENT_RUN_PATH = "/group-api/agents/news/run";
+export const GROUP_ADVISORY_AGENT_RUN_PATH = "/group-api/agents/advisory/run";
 export const GROUP_EVENTS_PATH = "/group-api/events";

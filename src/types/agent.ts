@@ -26,8 +26,8 @@ export type EdgeState = "idle" | "active" | "completed";
  */
 export type CommunicationType = "a2a" | "delegation";
 
-/** Chat tabs available in the sidebar. K Electronics Super is not directly chat-able. */
-export type ChatTabId = "group_super" | "advisory" | "news" | "meeting";
+/** Agents a platform UI can chat with directly (every agent but the user). */
+export type ChatTabId = Exclude<AgentId, "chairman">;
 
 export type AgentKind = "user" | "super" | "shared";
 
