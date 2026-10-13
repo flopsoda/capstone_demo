@@ -6,7 +6,7 @@
 문서 전체에서 **Current implementation**(지금 코드에 있는 것)과 **Target architecture**(지향하는 구조)를 구분해서 적는다.
 둘이 다른 곳은 [10. 현재 구현과 목표 구조의 차이](#10-현재-구현과-목표-구조의-차이)에 모아 두었다.
 
-기준 시점: 2026-10-12 (Phase 7까지 완료: 두 Agent System backend + 제품 UI 둘 + Demo Monitor. Step 1~8 전부 real).
+기준 시점: 2026-10-13 (Phase 8까지 완료: 두 Agent System backend + 제품 UI 둘 + Demo Monitor, mock scenario · 옛 단일 앱 제거. Step 1~8 전부 real).
 
 ---
 
@@ -20,8 +20,8 @@
 - 계열사 Super Agent는 자기 전문 Agent들에게 업무를 위임하고 결과를 종합한다.
 - 전문 Agent는 자신에게 허용된 Workflow Tool로 실제 데이터를 조회·분석한다.
 
-현재는 이 구조를 **NeuroEdge 인수 검토**라는 고정 scenario 하나로 시연하면서,
-mock으로 재생되던 단계를 한 Step씩 실제 Agent 실행으로 교체하는 중이다 ([7장](#7-개발-전략-mock--real-vertical-slice)).
+현재는 이 구조를 **NeuroEdge 인수 검토**라는 대표 요청으로 시연한다. 처음에는 mock으로 재생되던 단계를 한 Step씩 실제 Agent 실행으로 교체했고,
+지금은 모든 Step이 실제 실행이며 mock 경로는 없다 ([7장](#7-개발-전략-vertical-slice)).
 
 ---
 
@@ -52,9 +52,9 @@ Subsidiary Super Agent
 ```text
 그룹 회장 (Chairman)
        ↓
-그룹 슈퍼에이전트 (Group Super)          ← backend REAL (Group system, :8001) · frontend는 아직 mock (Phase 7)
-       ├── delegation → 그룹 미팅 / 뉴스 / 경영자문 에이전트 (Group 데이터)   ← backend REAL (Phase 5b)
-       ⇅ A2A (HTTP)                      ← backend REAL (Group Tool → K `/api/a2a/run`) · frontend는 아직 mock
+그룹 슈퍼에이전트 (Group Super)          ← REAL (Group system, :8001; Group UI `/group`)
+       ├── delegation → 그룹 미팅 / 뉴스 / 경영자문 에이전트 (Group 데이터)   ← REAL (Phase 5b)
+       ⇅ A2A (HTTP)                      ← REAL (Group Tool → K `/api/a2a/run`; UI는 relay된 K lifecycle로 A2A 세션을 그림)
 K전자 슈퍼에이전트 (K Electronics Super)  ← backend REAL (K system, :8000)
        ↓ delegation
        ├── 미팅 에이전트 (Meeting)         ← backend REAL (LangGraph)
@@ -132,8 +132,7 @@ Super Agent → Specialist Agent   (delegation)
 User        → Specialist Agent   (직접 대화)
 ```
 
-**Current implementation** — `backend/app/systems/k_electronics/agents/meeting.py`, `news.py`
-**Current implementation** — `backend/app/runtime/agent_core.py` + `backend/app/systems/k_electronics/agents/{meeting,news,advisory}.py`
+**Current implementation** — `backend/app/runtime/agent_core.py` + `backend/app/systems/k_electronics/agents/{meeting,news,advisory}.py` (Group도 같은 core: `systems/group/agents/`)
 - 세 Agent는 `runtime/agent_core.py`의 **공통 specialist core** 하나를 쓴다: `Specialist(agent_id, display_name, system_prompt, tools)` 값 객체,
   `build_specialist_graph(spec)`(LangGraph `StateGraph(MessagesState)`, `model ⇄ tools` 루프), `run_specialist(spec, graph, task, invocation=...)`.
   Agent 파일에는 `AGENT_ID` · `IDENTITY` · Registry 조회(`SYSTEM_PROMPT`, `TOOLS`) · `build_*_agent()` · `run_*_agent()`만 있다.
@@ -195,12 +194,12 @@ Advisory Agent  → run_mna_review
 - Delegation은 backend에서 `delegation_start` / `delegation_end` 이벤트로 드러난다. 일반 `tool_start`로 보고하지 않는다. UI 입장에서 위임은 Agent 간 handoff이기 때문이다.
 
 **Current implementation**
-- Delegation: K Super에 허용된 Tool `delegate_to_meeting_agent` / `delegate_to_news_agent` / `delegate_to_advisory_agent`(`capabilities/tools/`)가 같은 프로세스 안에서 `run_meeting_agent(task)` / `run_news_agent(task)` / `run_advisory_agent(task)`를 직접 호출한다.
+- Delegation: K Super에 허용된 Tool `delegate_to_meeting_agent` / `delegate_to_news_agent` / `delegate_to_advisory_agent`(`systems/k_electronics/tools/`, 라이브러리 factory `library/tools/delegation.make_delegate_tool`로 생성)가 같은 프로세스 안에서 `run_meeting_agent(task)` / `run_news_agent(task)` / `run_advisory_agent(task)`를 호출한다.
 - A2A (Phase 5a): Group system의 Tool `request_k_electronics_review`(`systems/group/tools/`)가 `runtime/a2a.request_review()`로 K의 `POST /api/a2a/run`을 HTTP 호출한다.
   `a2a_start(group_super → k_super, request)` emit → K의 NDJSON 스트림을 읽으며 K의 lifecycle 이벤트를 `relayed: true`로 자기 run에 다시 emit(관찰용) → 마지막 `agent_end`의 `response`를 꺼내 `a2a_end` emit 후 반환.
   Group Super의 `ToolMessage`에는 그 최종 텍스트만 들어간다. K의 `error`는 `AgentError("k_super", ...)`로 전파되어 Group run이 중단된다. 연결 실패도 같다.
   K의 주소는 `K_ELECTRONICS_A2A_URL`(기본 `http://localhost:8000/api/a2a/run`). 테스트는 `make_client`를 K app의 TestClient로 바꿔 프로세스 안에서 같은 경로를 돈다.
-  frontend는 아직 이 경로를 쓰지 않는다 (Step 2·7은 mock, Phase 7에서 교체).
+  Group UI(`/group`)는 이 경로를 그대로 쓴다: `a2a_start` / relayed K 이벤트 / `a2a_end`가 채팅 옆 A2A 세션창이 된다 (Phase 7).
 
 ---
 
@@ -254,12 +253,12 @@ systems/k_electronics/
 | `external_risk_analysis` | skill | `news` | `library/skills/external_risk_analysis.py` |
 | `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(data/news.json)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
+| `run_mna_review` | tool | `advisory` | `systems/k_electronics/tools/run_mna_review.py` = `make_run_mna_review(data/companies.json)` → `library/workflows/mna_review.review_acquisition` |
 
 Group system의 Registry(`systems/group/registry.py`)는 같은 메커니즘으로 자기 내용을 가진다 (Phase 5a·5b):
 `group_super` ← Skill `subsidiary_review`(Group 전용) · `specialist_delegation`(라이브러리), Tool `request_k_electronics_review`(A2A client) · `delegate_to_{meeting,news,advisory}_agent`(Group 전용 설명, 라이브러리 factory `library/tools/delegation.make_delegate_tool`);
 `meeting` / `news` / `advisory` ← 라이브러리 Skill 3개 + 라이브러리 Tool factory를 `systems/group/data/`에 바인딩한 instance 3개.
 어느 Tool을 쓸지(자기 Specialist 위임 vs K전자 A2A)는 Registry 제한 없이 요청과 Tool 설명에 따른 모델 판단이다.
-| `run_mna_review` | tool | `advisory` | `systems/k_electronics/tools/run_mna_review.py` = `make_run_mna_review(data/companies.json)` → `library/workflows/mna_review.review_acquisition` |
 
 설계 규칙:
 
@@ -345,7 +344,7 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 - **관찰 채널 (Phase 3).** `stream_run`은 요청자 큐뿐 아니라 프로세스 전역 `HUB`(`EventHub`)에도 모든 이벤트를 publish한다. `runtime/api.py`의 `sse_events()`가 그것을 `text/event-stream`으로 흘리며(15초 keep-alive), 각 system의 app이 `GET /api/events`로 연다.
   요청을 보낸 쪽이 누구든(사용자 직접 채팅, 다른 system의 A2A 요청) 이 프로세스에서 일어나는 run은 전부 보인다. 늦게 구독한 관찰자에게 과거 이벤트를 replay하지는 않는다.
 - `collect_events(fn)`은 테스트용 동기 수집기다.
-- `AgentError(agent, message)`로 실패한 Agent를 지목한다. 지목되지 않은 예외는 `k_super`로 귀속된다.
+- `AgentError(agent, message)`로 실패한 Agent를 지목한다. 지목되지 않은 예외는 run의 `root_agent`(K: `k_super`, Group: `group_super`, 직접 대화는 그 Agent)로 귀속된다.
 
 | 이벤트 | payload | 발생 위치 |
 | --- | --- | --- |
@@ -354,7 +353,7 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 | `a2a_start` | `from, to, request` | Group의 A2A client Tool 진입 (Phase 5a) |
 | `a2a_end` | `from, to, response` | 위 Tool 반환 직전. 그 사이의 K 이벤트는 `relayed: true`로 relay된다 |
 | `delegation_start` | `from, to, task` | `delegate_to_*` 진입 |
-| `tool_start` | `agent, tool, args` | `common.execute_tool_calls` (Specialist의 Workflow Tool) |
+| `tool_start` | `agent, tool, args` | `agent_core.execute_tool_calls` (Specialist의 Workflow Tool) |
 | `tool_end` | `agent, tool, result` | 위 Tool 실행 직후 |
 | `agent_end` | `agent, response` | 각 Agent 정상 종료 |
 | `delegation_end` | `from, to, response` | 위임 Tool 반환 직전 |
@@ -392,10 +391,9 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 | `GET /api/health` | 상태 확인 (`system: group`) |
 | `GET /api/events` | 관찰 채널 (relay된 K 이벤트 포함) |
 | `POST /api/agents/group-super/run` `{request}` | 사용자 → Group Super 직접 대화. 자기 Specialist에게 위임하거나 A2A Tool로 K에 요청하고 그룹 판단을 쓴다. NDJSON 스트림에 `delegation_*`(Group) · `a2a_start` · relayed K 이벤트 · `a2a_end` · `agent_end(group_super)`가 흐른다 |
-| `POST /api/agents/{meeting,news,advisory}/run` `{request}` | 사용자 → Group의 전문 Agent 직접 대화 (Group 데이터) |
-| `POST /api/agents/meeting/run` `{request}` | 사용자 → Meeting Agent 직접 대화 (`invocation="direct"`). 같은 Agent core |
-| `POST /api/agents/news/run` `{request}` | 사용자 → News Agent 직접 대화. 같은 Agent core |
-| `POST /api/agents/advisory/run` `{request}` | 사용자 → Advisory Agent 직접 대화. 같은 Agent core |
+| `POST /api/agents/{meeting,news,advisory}/run` `{request}` | 사용자 → Group의 전문 Agent 직접 대화 (`invocation="direct"`, Group 데이터). 같은 Agent core |
+
+K system에도 같은 모양의 `POST /api/agents/{meeting,news,advisory}/run`이 있다 (K 데이터).
 
 ### Current implementation — frontend 반영
 
@@ -435,7 +433,7 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 
 ### Current implementation — Demo Monitor (Phase 6, `/monitor`)
 
-테스트 · 발표용 관찰 화면이며 제품 UI의 navigation에 없다. `src/main.tsx`가 URL 경로로 화면을 고른다 (`/monitor` → `DemoMonitor`, 그 외 → 기존 `App`). 라우터 의존성은 없다.
+테스트 · 발표용 관찰 화면이며 제품 UI의 navigation에 없다. `src/main.tsx`가 URL 경로로 화면을 고른다 (`/monitor` → `DemoMonitor`, `/k` → K UI, 그 외 → Group UI). 라우터 의존성은 없다.
 
 - `src/live/api.ts` `subscribeAgentEvents(url)`: backend `GET /api/events`(SSE)를 브라우저 `EventSource`로 구독한다. Vite dev proxy는 `/api` → :8000(K), `/group-api` → :8001(Group, `/api`로 rewrite).
 - `src/hooks/useDemoObserver.ts`: Group backend의 관찰 채널 하나를 구독한다. relay 덕분에 K의 lifecycle도 같은 채널에 흐른다.
@@ -444,8 +442,8 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 - `src/monitor/steps.ts`: Step 1~8 해석(11장 8번 표). backend에는 Step이 없다.
 - `src/live/agentEvents.ts`의 mapper는 `a2a_start`(A2A 세션 열림 · 상대 Super 노드 active · A2A edge) / `a2a_end`(세션 닫힘, result = 상대의 최종 응답, 상대 노드 completed)를 알고,
   `resolveAgent(system, agent)` 옵션으로 backend id를 화면의 `AgentId`로 바꾼다. 전체 그래프에서는 Group system의 `meeting` / `news` / `advisory`가 `group_meeting` / `group_news` / `group_advisory`가 된다 (`resolveForFullGraph`).
-- `src/types/agent.ts`: `AgentId`에 `group_meeting` · `group_news` · `group_advisory` 추가. 그래프는 `GraphUniverse`(노드 · 좌표 · pool)를 받으며 `DEFAULT_UNIVERSE`(기존 6노드, `App`)와 `FULL_UNIVERSE`(9노드 · pool 둘, Monitor)가 있다.
-- 검증: headless Chromium으로 `/monitor`를 열고 curl로 Group에 요청을 보내면 Step 1 → 8이 실제 이벤트로만 전진하고, Group 회장 · Group Super · K Super · K Specialist 3개가 completed, 호출되지 않은 Group Specialist는 idle로 남는다. 기존 `/` 데모도 그대로 Step 8까지 재생된다.
+- `src/types/agent.ts`: `AgentId`에 `group_meeting` · `group_news` · `group_advisory` 추가. 그래프는 `GraphUniverse`(노드 · 좌표 · pool)를 받으며 `DEFAULT_UNIVERSE`(6노드, `AgentGraph`의 기본값)와 `FULL_UNIVERSE`(9노드 · pool 둘, Monitor가 사용)가 있다.
+- 검증: headless Chromium으로 `/monitor`를 열고 curl로 Group에 요청을 보내면 Step 1 → 8이 실제 이벤트로만 전진하고, Group 회장 · Group Super · K Super · K Specialist 3개가 completed, 호출되지 않은 Group Specialist는 idle로 남는다.
 
 ---
 
@@ -562,7 +560,7 @@ LLM: `backend/app/runtime/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama
 | `backend/tests/test_news_workflow.py` | 아니오 | 뉴스 리스크 workflow (기업 alias, category 필터, 정렬) |
 | `backend/tests/test_mna_review_workflow.py` | 아니오 | M&A 검토 workflow (persona별 항목 순서 · 우려 · 조건 순서, 같은 권고와 조건 집합, context 신호, 모르는 기업/persona) |
 | `backend/tests/test_capabilities.py` | 아니오 | Registry 내용(kind, allowed_agents), Tool 정의가 source of truth, Agent가 Registry subset을 쓰는지, Skill이 system prompt에 들어가는지 |
-| `backend/tests/test_k_super.py` | 아니오 | `route_on_tool_calls`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model(`common.get_chat_model` patch) + stub 위임 Tool로 만든 그래프(`k_super.build_k_super` patch)로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
+| `backend/tests/test_k_super.py` | 아니오 | `route_on_tool_calls`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model(`agent_core.get_chat_model` patch) + stub 위임 Tool로 만든 그래프(`k_super.build_k_super` patch)로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
 | `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속(root_agent) / run 식별자 stamp(relay된 stamp 유지) / HUB publish·subscribe·keep-alive / SSE 형식 / `.env` 경로 |
 | `backend/tests/test_k_app.py` | 아니오 | K app 표면을 scripted model로 end-to-end: `/api/a2a/run`이 K Super → Meeting → Tool 체인을 돌리고 trace_id · caller · origin을 stamp, 위임 없는 답은 `error`, `/api/agents/k-super/run`은 위임 없이 답해도 정상 |
 | `backend/tests/test_group.py` | 아니오 | Group Registry 내용(12개), Agent가 Registry subset을 쓰는지, 위임 Tool의 from/to, Group Tool instance가 Group 데이터만 읽는지(K와 분리), A2A Tool이 K lifecycle을 relay하고 최종 응답만 반환, K 실패·연결 실패를 `k_super`로 귀속, Group app → K app 프로세스 내 end-to-end, Group Super → 자기 Specialist 위임, Specialist 직접 endpoint |
@@ -644,9 +642,10 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | 5b | Group Specialist 3개 + Group 데이터 + Group Super의 `delegate_to_*` | 완료 |
 | 6 | Demo Monitor | 완료 |
 | 7 | 제품 UI(Group · K) | 완료 |
-| 8 | 정리 · 문서 (옛 단일 앱 · scenario mock · `/api/k-super/run` 제거, reducer를 `state/runState.ts`로). K UI 외부 실행 표시는 미확정으로 남김 (12장 11번) | 완료 |
+| 8 | 정리 · 문서 (옛 단일 앱 · scenario mock · `/api/k-super/run` 제거, reducer를 `state/runState.ts`로) | 완료 |
+| 8+ | K UI의 외부 A2A 실행 표시 (11번 결정, 12장 11번) | 완료 |
 
-Phase 7 전까지 기존 단일 frontend와 mock Step 1·2·7·8은 그대로 두며, 각 Phase가 끝날 때 현재 데모가 그대로 동작해야 한다.
+각 Phase가 끝날 때 현재 데모가 그대로 동작해야 한다는 규칙으로 진행했다 (Phase 7 전까지는 옛 단일 frontend의 mock Step 1·2·7·8을 유지).
 
 ---
 
@@ -662,7 +661,7 @@ Phase 7 전까지 기존 단일 frontend와 mock Step 1·2·7·8은 그대로 �
    `tests/test_agents.py`가 NeuroEdge 요청(세 Agent 모두)과 회의 결정사항만 묻는 요청(Meeting만)으로 확인한다. 모델이 필요한 Agent를 빠뜨리거나 불필요한 Agent를 부르는 것을 막는 코드는 없다 (의도적).
    병렬 위임과 frontend session stack(중첩 전제)의 형제 세션 처리는 여전히 열려 있다. Group Super도 같은 core · 같은 정책이며, 자기 Specialist 위임과 K전자 A2A 중 무엇을 쓸지는 Tool 설명에 따른 모델 판단이다 (NeuroEdge 요청에서 K A2A를 고르고, K 응답 뒤 그룹 미팅 기록을 추가로 참조한 실행도 있었다).
 3. **위임 Tool ↔ 대상 Agent의 순환 의존 (Step 5에서 내린 결정과 남은 부분).** `delegate_to_*` Tool은 대상 Agent의 `run_*`를 호출 시점에 import해서 순환을 끊는다 ([4장](#4-capability-registry)).
-   Step 5에서 **공통 specialist core**, Phase 1에서 **공통 super core**를 도입했다 (`common.SuperAgent` / `build_super_graph` / `run_super`, [3.1](#31-super-agent)). Agent 파일은 정체성과 Registry 조회만 갖는다.
+   Step 5에서 **공통 specialist core**, Phase 1에서 **공통 super core**를 도입했다 (`agent_core.SuperAgent` / `build_super_graph` / `run_super`, [3.1](#31-super-agent)). Agent 파일은 정체성과 Registry 조회만 갖는다.
    Phase 5b에서 위임 Tool이 6개(K 3 + Group 3)가 되면서 `library/tools/delegation.make_delegate_tool(name, description, from_agent, to_agent, run)` factory를 두었다. 각 system의 `delegate_to_*.py`는 Agent-visible 설명(`DESCRIPTION`)과 `FROM_AGENT` / `TO_AGENT`, runner 조회만 갖는다.
    `tests/test_agents.py`의 `_NoToolGraph`처럼 `build_*_agent`를 monkeypatch하는 테스트가 있으므로 `run_*_agent`는 그래프를 모듈 전역 이름으로 조회한다.
 4. **Workflow 결과의 frontend 렌더링.** Tool별 `switch`를 계속 늘릴지, backend가 표시 힌트를 함께 보낼지, 범용 렌더로 갈지.

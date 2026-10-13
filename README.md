@@ -27,6 +27,8 @@ Step 8  REAL   그룹 최종 판단                                            G
 
 ## 실행
 
+요구 버전: **Node `^20.19 || >=22.12`** (Vite 8 · oxlint), **Python `>=3.12`** (3.13으로 검증). 외부 의존은 Ollama Cloud API key 하나뿐입니다.
+
 ```bash
 # 1) Python backend — K Electronics system (별도 터미널)
 cd backend
@@ -54,6 +56,8 @@ backend 테스트:
 ```bash
 cd backend
 .venv/bin/python -m pytest        # tests/test_agents.py는 OLLAMA_API_KEY가 없으면 skip
+                                  # 키가 있으면 실제 Ollama Cloud를 호출한다 (수 분 소요 · 과금). 빠른 로컬 검증은:
+.venv/bin/python -m pytest --ignore=tests/test_agents.py
 ```
 
 세션창 · 메시지 · (Monitor의) 그래프와 Step은 backend가 실행 중 보내는 lifecycle 이벤트(요청자에게는 NDJSON 스트림, 관찰자에게는 SSE)를 받는 즉시 바뀝니다.
@@ -142,8 +146,7 @@ backend/
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
     systems/
       group/                         Group agent system (SYSTEM = "group") — `uvicorn app.systems.group.app:app --port 8001`
-        app.py                       FastAPI: /api/health, /api/agents/group-super/run (NDJSON), /api/events (SSE)
-        app.py                       + /api/agents/{meeting,news,advisory}/run (Group 전문 Agent 직접 채팅)
+        app.py                       FastAPI: /api/health, /api/agents/{group-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE)
         registry.py                  Group의 CAPABILITIES (12개): group_super ← subsidiary_review · specialist_delegation · request_k_electronics_review · delegate_to_*;
                                      meeting / news / advisory ← 라이브러리 Skill + Group 데이터에 바인딩한 run_*
         agents/group_super.py        그룹 슈퍼에이전트: AGENT_ID · IDENTITY + Registry (Super core). 자기 Specialist 위임과 K전자 A2A 중 선택은 모델 판단
@@ -253,11 +256,11 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 | `agent_error`       | 노드 error                                                 |
 | `scenario_error`    | 노드 error + 오류 메시지 + 열린 세션 닫힘 + 상태 `error` (중단) |
 | `agent_status`      | 노드 status 텍스트 / 강조 변경, `workflow`로 실행 중인 Tool 표시 |
-| `edge`              | edge 상태 직접 제어 (A2A 응답 등 역방향)                   |
+| `edge`              | edge 상태 직접 제어. reducer만 처리하며 현재 생성하는 곳은 없음 (mock scenario 시절 어휘) |
 | `message`           | Assistant 메시지 추가 (`final`이면 같은 발신자의 스트리밍 초안을 대체) |
 | `message_delta`     | 토큰 조각: 발신자의 초안 메시지를 제자리에서 키움 (없으면 생성)  |
 | `message_commit`    | 발신자가 Tool/위임/A2A로 넘어감: 초안을 그대로 확정           |
-| `activity`          | 단발성 Activity 카드 추가                                  |
+| `activity`          | 단발성 Activity 카드 추가. reducer · 렌더만 있고 현재 생성하는 곳은 없음 (mock scenario 시절 어휘) |
 | `session_open`      | A2A / Delegation 세션 시작. 이후 message는 이 세션으로 라우팅 |
 | `session_close`     | 가장 안쪽 세션 종료, 결과(result)를 요청 카드에 부착        |
 | `scenario_complete` | 사용된 노드 전체 completed, 완료 배지 표시 (Demo Monitor)  |

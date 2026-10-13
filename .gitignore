@@ -19,6 +19,10 @@ dist-ssr
 backend/.venv
 __pycache__/
 .pytest_cache/
+*.egg-info/
+
+# Claude Code per-user permissions (local only; run `git rm --cached .claude/settings.local.json` once if still tracked)
+.claude/settings.local.json
 
 # Editor directories and files
 .vscode/*

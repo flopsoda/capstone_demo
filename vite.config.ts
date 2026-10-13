@@ -5,7 +5,6 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react()],
   server: {
-    // Python agent backend (backend/): `uvicorn app.main:app --port 8000`
     proxy: {
       // K Electronics backend: `uvicorn app.main:app --port 8000`
       '/api': 'http://localhost:8000',

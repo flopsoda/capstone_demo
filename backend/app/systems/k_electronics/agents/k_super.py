@@ -50,5 +50,5 @@ def build_k_super() -> CompiledStateGraph:
 
 
 def run_k_super(request: str, *, invocation: Invocation = "a2a") -> str:
-    """Runs K Super on one request and returns its final answer; see common.run_super."""
+    """Runs K Super on one request and returns its final answer; see agent_core.run_super."""
     return run_super(SPEC, build_k_super(), request, invocation=invocation)
