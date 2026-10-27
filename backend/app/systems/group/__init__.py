@@ -6,7 +6,7 @@
     skills/      Skills specific to this system (library Skills are registered from app/library)
     tools/       delegate_to_* (handoffs to this system's specialists) · request_k_electronics_review (A2A client to K Electronics)
                  · run_* bound to data/
-    data/        this system's fixtures (virtual)
+    data/        this system's fixtures (virtual); meetings.json seeds its meeting store (schema `grp`)
 
 Talks to K Electronics only through its A2A surface (HTTP); never imports it.
 """
@@ -15,5 +15,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ...library.workflows.meeting_store import MeetingStore
+
 SYSTEM = "group"  # stamped on every event this system emits
 DATA_DIR = Path(__file__).resolve().parent / "data"
+# This system's meeting records: its own schema in the meetings database, seeded from data/meetings.json.
+MEETING_STORE = MeetingStore("grp", seed=DATA_DIR / "meetings.json")

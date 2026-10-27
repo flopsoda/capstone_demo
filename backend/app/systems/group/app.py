@@ -36,22 +36,22 @@ def events() -> StreamingResponse:
 @app.post("/api/agents/group-super/run")
 def group_super_run(body: RunRequest) -> StreamingResponse:
     """User → Group Super. Delegates to the Group's specialists or asks K Electronics over A2A, as it judges. Streams events."""
-    return ndjson_run(lambda: run_group_super(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="group_super"))
+    return ndjson_run(lambda: run_group_super(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="group_super", principal=body.principal))
 
 
 @app.post("/api/agents/meeting/run")
 def meeting_run(body: RunRequest) -> StreamingResponse:
     """Direct user → Group Meeting Agent (group-level meeting records). Streams events."""
-    return ndjson_run(lambda: run_meeting_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="meeting"))
+    return ndjson_run(lambda: run_meeting_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="meeting", principal=body.principal))
 
 
 @app.post("/api/agents/news/run")
 def news_run(body: RunRequest) -> StreamingResponse:
     """Direct user → Group News Agent. Streams events."""
-    return ndjson_run(lambda: run_news_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="news"))
+    return ndjson_run(lambda: run_news_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="news", principal=body.principal))
 
 
 @app.post("/api/agents/advisory/run")
 def advisory_run(body: RunRequest) -> StreamingResponse:
     """Direct user → Group Advisory Agent (group-level acquisition targets). Streams events."""
-    return ndjson_run(lambda: run_advisory_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="advisory"))
+    return ndjson_run(lambda: run_advisory_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="advisory", principal=body.principal))

@@ -40,6 +40,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from .schemas import Principal
+
 log = logging.getLogger("agents")
 
 AgentEvent = dict[str, Any]
@@ -55,6 +57,7 @@ class RunContext:
     origin: str  # what started the run: "direct" (user) or "a2a" (another agent system)
     trace_id: str | None = None  # shared by runs that belong to one end-to-end request
     caller: str | None = None  # for origin "a2a": the requesting agent system
+    principal: Principal | None = None  # the user the run acts for; read by tools, never stamped on events
 
     def stamp(self, event: AgentEvent) -> AgentEvent:
         event.setdefault("run_id", self.run_id)
@@ -146,10 +149,17 @@ HUB = EventHub()
 
 
 def new_run(
-    *, system: str, root_agent: str, origin: str = "direct", trace_id: str | None = None, caller: str | None = None
+    *,
+    system: str,
+    root_agent: str,
+    origin: str = "direct",
+    trace_id: str | None = None,
+    caller: str | None = None,
+    principal: Principal | None = None,
 ) -> RunContext:
     return RunContext(
-        run_id=uuid.uuid4().hex, system=system, root_agent=root_agent, origin=origin, trace_id=trace_id, caller=caller
+        run_id=uuid.uuid4().hex, system=system, root_agent=root_agent, origin=origin, trace_id=trace_id, caller=caller,
+        principal=principal,
     )
 
 

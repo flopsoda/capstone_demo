@@ -4,6 +4,7 @@
       "id": "MTG-2026-09-15",
       "date": "2026-09-15",
       "title": "AI 반도체 전략회의",
+      "classification": 3,
       "topics": ["NeuroEdge", "뉴로엣지", "M&A", "인수", "AI NPU", "NPU"],
       "decisions": [
         { "speaker": "CFO", "statement": "2.5조 원을 초과할 경우 가격 타당성 재검토" },
@@ -11,38 +12,40 @@
         { "speaker": "CEO", "statement": "자체 개발 대비 최소 2년 이상 Time-to-Market 단축 필요" }
       ],
       "action_items": [
-        { "text": "적정 기업가치 산정", "owner": "재무기획팀", "status": "open" },
-        { "text": "최대 고객사 의존도 확인", "owner": "전략기획팀", "status": "open" },
-        { "text": "핵심인력 Retention 확인", "owner": "인사팀", "status": "open" },
-        { "text": "NeuroEdge 기술 실사 자료 요청", "owner": "CTO 직속", "status": "done" }
+        { "text": "적정 기업가치 산정", "owner": "재무기획팀", "status": "open", "due": "2026-10-10" },
+        { "text": "최대 고객사 의존도 확인", "owner": "전략기획팀", "status": "open", "due": "2026-11-30" },
+        { "text": "핵심인력 Retention 확인", "owner": "인사팀", "status": "open", "due": "2026-10-31" },
+        { "text": "NeuroEdge 기술 실사 자료 요청", "owner": "CTO 직속", "status": "done", "due": "2026-09-30" }
       ]
     },
     {
       "id": "MTG-2026-08-27",
       "date": "2026-08-27",
       "title": "하반기 생산설비 투자 점검회의",
+      "classification": 2,
       "topics": ["설비 투자", "CAPEX", "파운드리", "수율"],
       "decisions": [
         { "speaker": "COO", "statement": "3나노 라인 증설은 수율 70% 달성 이후 재검토" },
         { "speaker": "CFO", "statement": "하반기 CAPEX 상한 1.2조 원 유지" }
       ],
       "action_items": [
-        { "text": "3나노 수율 개선 로드맵 보고", "owner": "제조본부", "status": "open" },
-        { "text": "장비 리드타임 재협상", "owner": "구매팀", "status": "done" }
+        { "text": "3나노 수율 개선 로드맵 보고", "owner": "제조본부", "status": "open", "due": "2026-11-14" },
+        { "text": "장비 리드타임 재협상", "owner": "구매팀", "status": "done", "due": "2026-09-30" }
       ]
     },
     {
       "id": "MTG-2026-07-08",
       "date": "2026-07-08",
       "title": "유럽 법인 조직 개편 회의",
+      "classification": 2,
       "topics": ["조직 개편", "유럽 법인", "인력 운영"],
       "decisions": [
         { "speaker": "CEO", "statement": "유럽 영업 법인 2개를 1개로 통합" },
         { "speaker": "CHRO", "statement": "통합 과정에서 핵심 영업인력 이탈 방지 대책 선행" }
       ],
       "action_items": [
-        { "text": "통합 법인 조직도 확정", "owner": "인사팀", "status": "done" },
-        { "text": "현지 노무 리스크 검토", "owner": "법무팀", "status": "open" }
+        { "text": "통합 법인 조직도 확정", "owner": "인사팀", "status": "done", "due": "2026-08-31" },
+        { "text": "현지 노무 리스크 검토", "owner": "법무팀", "status": "open", "due": "2026-10-20" }
       ]
     }
   ]

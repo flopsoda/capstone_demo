@@ -1,4 +1,4 @@
-"""Live LLM tests (Ollama Cloud). Skipped when OLLAMA_API_KEY is not configured."""
+"""Live LLM tests. Skipped when the configured provider's key (OLLAMA_API_KEY, or OPENAI_API_KEY with LLM_PROVIDER=openai) is not set."""
 
 import json
 import os
@@ -9,7 +9,9 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-pytestmark = pytest.mark.skipif(not os.environ.get("OLLAMA_API_KEY"), reason="OLLAMA_API_KEY not set")
+_KEY = "OPENAI_API_KEY" if os.environ.get("LLM_PROVIDER", "").strip().lower() == "openai" else "OLLAMA_API_KEY"
+# The meeting tools read the test meeting database (tests/conftest.py); the other agents' data is fixture files.
+pytestmark = [pytest.mark.skipif(not os.environ.get(_KEY), reason=f"{_KEY} not set"), pytest.mark.usefixtures("meeting_db")]
 
 A2A_REQUEST = (
     "뉴로엣지 인수안에 대해 계열사 차원의 예비 검토를 수행해주세요.\n"
@@ -341,3 +343,35 @@ def test_group_meeting_agent_direct_chat_uses_group_records():
     assert tool_end["tool"] == MEETING_WORKFLOW and tool_end["result"]["meetings"][0]["title"] == "그룹 투자심의위원회 사전회의"
     final = next(e for e in events if e["type"] == "agent_end")
     assert "2026-09-30" in final["response"] or "투자심의" in final["response"], final["response"]
+
+
+TRANSCRIPT = """(화자 자동 식별 transcript)
+[00:00] 김민수 (CEO): 오늘은 뉴로엣지 협상 전략을 정하겠습니다.
+[00:10] 박지훈 (CFO): 실사 결과 고객 집중도가 38%라서, 가격 상한을 2.3조 원으로 낮춰야 합니다.
+[00:25] 김민수 (CEO): 동의합니다. 가격 상한은 2.3조 원으로 하겠습니다.
+[00:32] 이서연 (CTO): 핵심 설계팀 Retention 패키지는 인사팀이 11월 14일까지 설계해 주세요.
+[00:45] 미확인 화자 1: 최대 고객사와의 장기 계약 갱신 여부는 아직 모릅니다."""
+
+
+def test_meeting_agent_saves_a_transcript_as_a_draft():
+    from app.runtime.events import collect_events
+    from app.systems.k_electronics.agents.meeting import run_meeting_agent
+
+    response, events = collect_events(lambda: run_meeting_agent(
+        f"2026-10-24 뉴로엣지 협상 전략회의 녹음입니다. 회의록 초안을 작성해서 저장해줘. 대외비(3)로.\n\n{TRANSCRIPT}", invocation="direct"))
+    saved = [e for e in events if e["type"] == "tool_end" and e["tool"] == "save_meeting_minutes"]
+    assert saved, [e.get("tool") for e in events if e["type"] == "tool_end"]
+    result = saved[-1]["result"]
+    assert result["saved"] and result["status"] == "draft"  # never finalized without being asked
+    assert any("2.3조" in d["statement"] for d in result["record"]["decisions"])
+    assert result["meeting_id"] in response
+
+
+def test_meeting_agent_tracks_overdue_items():
+    from app.runtime.events import collect_events
+    from app.systems.k_electronics.agents.meeting import run_meeting_agent
+
+    response, events = collect_events(lambda: run_meeting_agent("기한이 지난 Action Item 알려줘.", invocation="direct"))
+    tracked = [e for e in events if e["type"] == "tool_end" and e["tool"] == "run_action_item_tracking"]
+    assert tracked and tracked[-1]["result"]["summary"]["overdue"] >= 1
+    assert "적정 기업가치 산정" in response

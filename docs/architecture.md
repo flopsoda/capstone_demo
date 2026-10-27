@@ -6,7 +6,8 @@
 문서 전체에서 **Current implementation**(지금 코드에 있는 것)과 **Target architecture**(지향하는 구조)를 구분해서 적는다.
 둘이 다른 곳은 [10. 현재 구현과 목표 구조의 차이](#10-현재-구현과-목표-구조의-차이)에 모아 두었다.
 
-기준 시점: 2026-10-13 (Phase 8까지 완료: 두 Agent System backend + 제품 UI 둘 + Demo Monitor, mock scenario · 옛 단일 앱 제거. Step 1~8 전부 real).
+기준 시점: 2026-10-27 (Phase 8까지 완료: 두 Agent System backend + 제품 UI 둘 + Demo Monitor, mock scenario · 옛 단일 앱 제거. Step 1~8 전부 real.
+이후 미팅 에이전트의 회의 기록 업무 — Postgres 회의 저장소, 회의록 작성 · 진행 추적 · 일정 Tool, 요청자(principal) 전달 — 추가: 11장 12 · 13번 결정).
 
 ---
 
@@ -137,7 +138,8 @@ User        → Specialist Agent   (직접 대화)
   `build_specialist_graph(spec)`(LangGraph `StateGraph(MessagesState)`, `model ⇄ tools` 루프), `run_specialist(spec, graph, task, invocation=...)`.
   Agent 파일에는 `AGENT_ID` · `IDENTITY` · Registry 조회(`SYSTEM_PROMPT`, `TOOLS`) · `build_*_agent()` · `run_*_agent()`만 있다.
 - Registry가 허용한 Capability:
-  - Meeting: Skill `meeting_context_analysis`(조회·정리 지침, 응답 형식), Tool `run_meeting_context_retrieval`.
+  - Meeting: Skill `meeting_context_analysis`(조회·정리 · 브리핑 지침), `meeting_minutes_writing`(transcript → 초안 → 확정 지침), `meeting_follow_up`(진행 추적 · 갱신 · 일정 지침),
+    Tool `run_meeting_context_retrieval`, `save_meeting_minutes`, `run_action_item_tracking`, `update_action_item`, `run_meeting_schedule` ([3.3](#33-workflow-tool)).
   - News: Skill `external_risk_analysis`(외부 리스크 조사·정리 지침, 응답 형식), Tool `run_company_risk_news_analysis`.
   - Advisory: Skill `mna_feasibility_review`(인수 검토 지침 — 관점 선택, 맥락 전달, 응답 형식), Tool `run_mna_review`.
 - **호출 맥락(invocation)** 은 `"delegation" | "direct"` 두 가지다. 같은 그래프가 쓰이고, 호출 맥락은 LangGraph `config["configurable"]`로 실행마다 전달된다 (state에 넣지 않는다).
@@ -153,7 +155,7 @@ Workflow Tool은 **Agent가 아니다**.
 전문 Agent가 실제 업무를 수행하기 위해 사용하는 **고정적이거나 반고정적인 업무 절차**이며, Registry 관점에서는 **Tool Capability**다 ([4장](#4-capability-registry)).
 
 ```text
-Meeting Agent   → run_meeting_context_retrieval
+Meeting Agent   → run_meeting_context_retrieval · save_meeting_minutes · run_action_item_tracking · update_action_item · run_meeting_schedule
 News Agent      → run_company_risk_news_analysis
 Advisory Agent  → run_mna_review
 ```
@@ -164,9 +166,28 @@ Advisory Agent  → run_mna_review
 - Workflow Tool은 데이터 경계이기도 하다. Agent는 fixture / DB를 직접 만지지 않는다.
 
 **Current implementation** — Agent-visible Tool과 내부 workflow를 분리한다.
-- `backend/app/library/tools/run_meeting_context_retrieval.py`: `make_run_meeting_context_retrieval(path)`가 `@tool("run_meeting_context_retrieval")`(인자 `query: str, topics: list[str] | None`)을 돌려준다. Agent에게 보이는 표면(이름·설명·schema)만 가지며, 어느 데이터를 읽는지는 호출한 system이 `path`로 정한다 (`systems/k_electronics/tools/run_meeting_context_retrieval.py`가 `data/meetings.json`에 바인딩).
-- `backend/app/library/workflows/meeting_context_retrieval.py`: 내부 구현 workflow. 순수 함수 `retrieve_meeting_context(query, topics, path=...)`가 주어진 회의 store(K: `systems/k_electronics/data/meetings.json`)를 키워드 점수(topic 3점, title 2점, decision 1점, 절대/상대 threshold)로 조회한다. LLM 없이 테스트한다.
-- 반환은 dict (`matched`, `meetings[]`에 `decisions`, `open_action_items`).
+- **회의 저장소 (2026-10-27).** 미팅 Tool 다섯 개는 Postgres 회의 저장소를 쓴다. `library/workflows/meeting_store.MeetingStore(schema, seed)`가 system마다 하나 있고
+  (`systems/<system>/__init__.py`의 `MEETING_STORE`: K는 schema `kelec`, Group은 `grp`), 연결은 `MEETINGS_DATABASE_URL`이다. 처음 쓸 때 schema(`meeting_schema.sql`, 테이블 15개)가 없으면 만들고,
+  회의가 하나도 없으면 그 system의 `data/meetings.json`으로 채운다. 배포에서는 system마다 DB role이 따로라 Group은 K의 schema를 읽을 수 없다.
+  Tool factory는 `path` 대신 store를 받는다: `make_<tool>(store)`. workflow 함수는 `store`와 `viewer`를 인자로 받는 함수이고 LLM 없이 테스트한다 (`tests/test_meeting_records.py`, 테스트 DB 필요).
+- **요청자(viewer).** 모든 미팅 workflow는 `Viewer(email, name, groups, clearance, can_write)`로 거른다. Tool은 이를 모델 인자가 아니라 run에서 읽는다
+  (`library/tools/meeting_access.current_viewer()` ← `RunContext.principal` · `origin`, [6장](#6-backend와-frontend의-책임)). 등급 규칙은 gateway `shared/access.py`와 같다:
+  `classification <= clearance AND (allowed_groups IS NULL OR 겹침)`을 SQL 안에서 먼저 적용하므로 볼 수 없는 회의는 읽히지도 않는다.
+  principal이 없는 요청(로컬 UI · 테스트)은 `MEETINGS_ANONYMOUS_CLEARANCE`(배포 0, 로컬 예시 4)를 쓴다. 다른 system의 A2A 요청으로 시작된 run(`origin = "a2a"`)은 읽기만 한다.
+- `run_meeting_context_retrieval(query, topics, meeting_id?, date_from?, date_to?)` → `library/workflows/meeting_context_retrieval.retrieve_meeting_context`:
+  열람 가능한 회의 중 **확정 회의록**만(id로 한 회의를 볼 때는 초안 포함) 키워드 점수(topic 3점, title 2점, decision 1점, 절대/상대 threshold — 기존 그대로)로 고른다.
+  반환 dict의 기존 key(`matched`, `meetings[].id · date · title · decisions[{speaker, statement}] · open_action_items[{text, owner}]`)는 유지하고
+  `summary`, 결정의 `ref`(예: `MTG-2026-09-15-D1`) · `kind`, `open_issues`, Action Item의 `id · due · status · overdue_days`를 더했다 (frontend 렌더 · gateway 감사로그 호환).
+- `save_meeting_minutes(title, date, summary, decisions?, action_items?, attendees?, topics?, body?, classification, location?, meeting_id?, finalize, correction_reason?)` → `meeting_minutes.save_minutes`:
+  처음엔 초안, `finalize=true`면 확정하되 담당 · 기한이 빠진 Action Item이 있으면 확정하지 않고 `warnings`로 알린다. 확정본은 `correction_reason`이 있을 때만 정정되고
+  이전 버전은 `minutes_revisions`에 snapshot으로 남으며, 기존 Action Item은 지우지 않는다. 결정은 `decision | resolution(outcome · 찬반 수 · dissents) | criterion | opinion | issue`,
+  이전 결정을 바꾸면 `supersedes`, 쟁점을 해결하면 `resolves`(ref). 사람 · 조직 이름은 디렉터리(`people` · `org_units`)에서 찾고 없으면 등록해 `new_directory_entries`로 알린다.
+- `run_action_item_tracking(query?, owner?, status?, due_before?, due_within_days?, overdue_only, meeting_id?, mine)` → `action_items.track_action_items`: 회의를 가로질러
+  지연 일수 큰 순 → 기한 순, 같은 범위의 상태별 건수(`summary`)와 기준일(`as_of`, 요일 포함 — 모델은 오늘 날짜를 모른다)을 준다. 조회만 한다.
+- `update_action_item(item_id, status?, note?, due?, owner?)` → `action_items.update_action_item`: 변경마다 `action_item_updates`에 누가 · 언제 · 이전/새 상태 · 메모를 남긴다. 모르는 id면 `candidates`.
+- `run_meeting_schedule(action = list | create | update | cancel, ...)` → `meeting_schedule.meeting_schedule`: 외부 캘린더 동기화 없는 사내 일정.
+  `create`의 `carry_over_from`은 이전 회의의 보류 안건과 미결 쟁점(`issue`)을 새 회의 안건으로 이월한다. 시각은 한국 시간이며 `list`는 `today`(요일 포함)를 준다.
+  예약된 회의의 회의록은 같은 id로 `save_meeting_minutes`에 쓴다.
 - `backend/app/library/tools/run_company_risk_news_analysis.py`: `make_run_company_risk_news_analysis(path)` → `@tool("run_company_risk_news_analysis")`, 인자 `query: str, company: str, topics: list[str] | None`.
 - `backend/app/library/workflows/company_risk_news_analysis.py`: 순수 함수 `analyze_company_risk_news(..., path=...)`가 주어진 기사 store(K: `data/news.json`, 가상 기사 5건)를 조회한다.
   `company`를 기사 `companies` alias와 대조해 대상 기업 기사만 남기고, `query`/`topics`에서 리스크 category 키워드(`customer_concentration`, `legal_dispute`, `key_personnel`, `labor_dispute`)를 찾아 좁힌 뒤 HIGH → MEDIUM → LOW, 최신순으로 정렬한다. 키워드가 없으면 그 기업의 모든 리스크를 돌려준다.
@@ -249,7 +270,13 @@ systems/k_electronics/
 | `delegate_to_news_agent` | tool | `k_super` | `systems/k_electronics/tools/delegate_to_news_agent.py` → `agents/news.run_news_agent` |
 | `delegate_to_advisory_agent` | tool | `k_super` | `systems/k_electronics/tools/delegate_to_advisory_agent.py` → `agents/advisory.run_advisory_agent` |
 | `meeting_context_analysis` | skill | `meeting` | `library/skills/meeting_context_analysis.py` |
-| `run_meeting_context_retrieval` | tool | `meeting` | `systems/k_electronics/tools/run_meeting_context_retrieval.py` = `library/tools/...make_run_meeting_context_retrieval(data/meetings.json)` → `library/workflows/meeting_context_retrieval.retrieve_meeting_context` |
+| `meeting_minutes_writing` | skill | `meeting` | `library/skills/meeting_minutes_writing.py` |
+| `meeting_follow_up` | skill | `meeting` | `library/skills/meeting_follow_up.py` |
+| `run_meeting_context_retrieval` | tool | `meeting` | `systems/k_electronics/tools/run_meeting_context_retrieval.py` = `library/tools/...make_run_meeting_context_retrieval(MEETING_STORE)` → `library/workflows/meeting_context_retrieval.retrieve_meeting_context` |
+| `save_meeting_minutes` | tool | `meeting` | `make_save_meeting_minutes(MEETING_STORE)` → `library/workflows/meeting_minutes.save_minutes` |
+| `run_action_item_tracking` | tool | `meeting` | `make_run_action_item_tracking(MEETING_STORE)` → `library/workflows/action_items.track_action_items` |
+| `update_action_item` | tool | `meeting` | `make_update_action_item(MEETING_STORE)` → `library/workflows/action_items.update_action_item` |
+| `run_meeting_schedule` | tool | `meeting` | `make_run_meeting_schedule(MEETING_STORE)` → `library/workflows/meeting_schedule.meeting_schedule` |
 | `external_risk_analysis` | skill | `news` | `library/skills/external_risk_analysis.py` |
 | `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(data/news.json)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
@@ -257,7 +284,7 @@ systems/k_electronics/
 
 Group system의 Registry(`systems/group/registry.py`)는 같은 메커니즘으로 자기 내용을 가진다 (Phase 5a·5b):
 `group_super` ← Skill `subsidiary_review`(Group 전용) · `specialist_delegation`(라이브러리), Tool `request_k_electronics_review`(A2A client) · `delegate_to_{meeting,news,advisory}_agent`(Group 전용 설명, 라이브러리 factory `library/tools/delegation.make_delegate_tool`);
-`meeting` / `news` / `advisory` ← 라이브러리 Skill 3개 + 라이브러리 Tool factory를 `systems/group/data/`에 바인딩한 instance 3개.
+`meeting` / `news` / `advisory` ← 라이브러리 Skill 5개 + 라이브러리 Tool factory를 `systems/group/data/` · Group 회의 저장소(schema `grp`)에 바인딩한 instance 7개 (모두 19개).
 어느 Tool을 쓸지(자기 Specialist 위임 vs K전자 A2A)는 Registry 제한 없이 요청과 Tool 설명에 따른 모델 판단이다.
 
 설계 규칙:
@@ -381,7 +408,7 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 | --- | --- |
 | `GET /api/health` | 상태 확인 (`system` 포함) |
 | `GET /api/events` | 관찰 채널. 이 프로세스의 모든 run 이벤트를 SSE로 스트리밍 (Demo Monitor · 플랫폼 UI의 외부 실행 표시용) |
-| `POST /api/a2a/run` `{request, trace_id?, caller?}` | **A2A 수신 표면.** 다른 system의 Super Agent가 보낸 요청으로 K Super 실행(`invocation="a2a"`, 필요한 전문 Agent에게 순차 위임 후 최종 검토 결과 작성). lifecycle을 NDJSON으로 스트리밍하고 `agent_end(k_super).response`가 A2A 응답이다. `trace_id` · `caller`는 이벤트 stamp로만 쓰인다 (업무 payload 아님) |
+| `POST /api/a2a/run` `{request, trace_id?, caller?, principal?}` | **A2A 수신 표면.** 다른 system의 Super Agent가 보낸 요청으로 K Super 실행(`invocation="a2a"`, 필요한 전문 Agent에게 순차 위임 후 최종 검토 결과 작성). lifecycle을 NDJSON으로 스트리밍하고 `agent_end(k_super).response`가 A2A 응답이다. `trace_id` · `caller`는 이벤트 stamp로만 쓰인다 (업무 payload 아님). `principal`은 상대 system이 대신 요청하는 사용자다: K는 자기 자료에 그 사용자의 등급을 적용하고, 이 run에서는 회의 기록을 바꾸지 않는다 |
 | `POST /api/agents/k-super/run` `{request}` | 사용자 → K Super 직접 대화 (`invocation="direct"`, 위임 없이 답해도 된다). 같은 Agent core |
 
 `backend/app/systems/group/app.py` (FastAPI, `uvicorn app.systems.group.app:app --port 8001`)
@@ -394,6 +421,11 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 | `POST /api/agents/{meeting,news,advisory}/run` `{request}` | 사용자 → Group의 전문 Agent 직접 대화 (`invocation="direct"`, Group 데이터). 같은 Agent core |
 
 K system에도 같은 모양의 `POST /api/agents/{meeting,news,advisory}/run`이 있다 (K 데이터).
+
+모든 run 요청 body는 선택 필드 `principal {email, name, groups, clearance}`를 받는다 (`runtime/schemas.Principal`). gateway가 Keycloak 로그인 사용자로 채워 보내고,
+`new_run(..., principal=)`이 `RunContext.principal`에 담는다. 이벤트에는 찍히지 않으며 Agent(LLM)에게도 보이지 않는다. Tool이 `current_run()`으로 읽는다.
+Group의 A2A Tool은 자기 run의 principal을 K의 `/api/a2a/run`에 그대로 넘긴다 (`runtime/a2a.request_review(..., principal=)`).
+backend는 이 값을 검증 없이 믿는다: backend 포트는 배포 내부망에만 열려 있다는 전제다 (12장 13번).
 
 ### Current implementation — frontend 반영
 
@@ -550,13 +582,14 @@ K Super
 | 종합 (Step 6) | 마지막 `model` 턴의 AI 응답. `agent_core.run_super`가 근거 검사(`a2a`: 위임 1회 이상, 응답 비어 있지 않음) 후 `agent_end(k_super, response)` emit |
 | UI 반영 | K 이벤트가 Group Tool에 의해 relay → Group UI: `agentEvents.ts` mapper → `state/runState.ts` reducer(A2A 세션 안의 위임 세션). Demo Monitor: 같은 mapper · reducer + `monitor/steps.ts`(Step 3 / 4 / 5 / 6) |
 
-LLM: `backend/app/runtime/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama.com`), 기본 모델 `deepseek-v4.1-flash`, `OLLAMA_API_KEY` 필요. 키는 `backend/.env`에 두고 Git에 넣지 않는다.
+LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`https://ollama.com`), 기본 모델 `deepseek-v4.1-flash`, `OLLAMA_API_KEY` 필요. `LLM_PROVIDER=openai`이면 `ChatOpenAI`로 OpenAI 호환 API(`OPENAI_API_KEY` · `OPENAI_MODEL` · `OPENAI_BASE_URL`, 예: Groq의 `openai/gpt-oss-120b`)를 쓴다. 키는 `backend/.env`에 두고 Git에 넣지 않는다.
 
 테스트:
 
 | 파일 | LLM 필요 | 검증 내용 |
 | --- | --- | --- |
-| `backend/tests/test_workflow.py` | 아니오 | 회의 조회 workflow |
+| `backend/tests/test_workflow.py` | 아니오 (테스트 DB) | 회의 조회 workflow — 회의 저장소 seed 위에서 기존 검색 결과 그대로, 등급 필터(대외비 회의는 사내 사용자에게 읽히지 않음), id · 기간 조회 |
+| `backend/tests/test_meeting_records.py` | 아니오 (테스트 DB) | 회의록 초안 → 확정(담당 · 기한 없으면 확정 안 됨) → 정정(사유 필수, snapshot, Action Item 유지), 쓰기 권한(등급 · A2A), 진행 조회(지연 순 · 건수 · 담당 · 기간 · 키워드), 갱신 이력과 후보, 일정 예약 · 이월 · 취소, viewer가 run의 principal에서 오는지, system별 저장소 분리, 저장소 없음 → 오류 결과 |
 | `backend/tests/test_news_workflow.py` | 아니오 | 뉴스 리스크 workflow (기업 alias, category 필터, 정렬) |
 | `backend/tests/test_mna_review_workflow.py` | 아니오 | M&A 검토 workflow (persona별 항목 순서 · 우려 · 조건 순서, 같은 권고와 조건 집합, context 신호, 모르는 기업/persona) |
 | `backend/tests/test_capabilities.py` | 아니오 | Registry 내용(kind, allowed_agents), Tool 정의가 source of truth, Agent가 Registry subset을 쓰는지, Skill이 system prompt에 들어가는지 |
@@ -564,9 +597,10 @@ LLM: `backend/app/runtime/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama
 | `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속(root_agent) / run 식별자 stamp(relay된 stamp 유지) / HUB publish·subscribe·keep-alive / SSE 형식 / `.env` 경로 |
 | `backend/tests/test_k_app.py` | 아니오 | K app 표면을 scripted model로 end-to-end: `/api/a2a/run`이 K Super → Meeting → Tool 체인을 돌리고 trace_id · caller · origin을 stamp, 위임 없는 답은 `error`, `/api/agents/k-super/run`은 위임 없이 답해도 정상 |
 | `backend/tests/test_group.py` | 아니오 | Group Registry 내용(12개), Agent가 Registry subset을 쓰는지, 위임 Tool의 from/to, Group Tool instance가 Group 데이터만 읽는지(K와 분리), A2A Tool이 K lifecycle을 relay하고 최종 응답만 반환, K 실패·연결 실패를 `k_super`로 귀속, Group app → K app 프로세스 내 end-to-end, Group Super → 자기 Specialist 위임, Specialist 직접 endpoint |
-| `backend/tests/test_group_workflows.py` | 아니오 | 라이브러리 workflow 3개를 Group 데이터로 실행 |
+| `backend/tests/test_group_workflows.py` | 아니오 (회의는 테스트 DB) | 라이브러리 workflow 3개를 Group 데이터로 실행 |
 | `backend/tests/test_boundaries.py` | 아니오 | import 경계: runtime은 library·systems를, library는 systems를, system은 다른 system을 import하지 않음. system마다 registry.py와 data/ 존재 |
-| `backend/tests/test_agents.py` | 예 (`OLLAMA_API_KEY` 없으면 skip) | Meeting / News / Advisory Agent 단독 실행, K Super 직접 대화(인사에는 위임 없이 · 회의 기준 요청에는 Meeting 위임), Group Super → K A2A 실제 왕복(relay된 K 위임 세 건, 그룹 판단; Group 자체 위임은 허용) · Group 직접 인사 · Group 미팅 에이전트 직접 대화(Group 데이터), K Super가 NeuroEdge 요청에 Meeting → News → Advisory를 각각 별도 model 턴에서 순차 위임하고 Advisory task에 회의 기준·외부 리스크를 담았는지(`context_signals`), 마지막에 Tool 호출 없는 최종 응답(본실사 판단 포함)으로 끝나는지, 회의 결정사항만 묻는 요청에는 Meeting에게만 위임하고 답하는지, NDJSON API, 경영자문 직접 대화의 개념 질문(Tool 없음) / 실제 검토(Tool 사용), delegation 경로의 Tool 검사 |
+| `backend/tests/conftest.py` | – | 모든 테스트에서 `MEETINGS_DATABASE_URL`을 지운다. `meeting_db` fixture: `MEETINGS_TEST_DATABASE_URL`(이름에 test가 든 버릴 DB)의 `kelec` · `grp` schema를 지우고 다시 seed. 변수가 없으면 해당 테스트 skip |
+| `backend/tests/test_agents.py` | 예 (`OLLAMA_API_KEY` 없으면 skip, 테스트 DB 필요) | Meeting / News / Advisory Agent 단독 실행, K Super 직접 대화(인사에는 위임 없이 · 회의 기준 요청에는 Meeting 위임), Group Super → K A2A 실제 왕복(relay된 K 위임 세 건, 그룹 판단; Group 자체 위임은 허용) · Group 직접 인사 · Group 미팅 에이전트 직접 대화(Group 데이터), 미팅 에이전트가 transcript로 회의록 초안을 저장(확정하지 않음) · 지연 Action Item 조회, K Super가 NeuroEdge 요청에 Meeting → News → Advisory를 각각 별도 model 턴에서 순차 위임하고 Advisory task에 회의 기준·외부 리스크를 담았는지(`context_signals`), 마지막에 Tool 호출 없는 최종 응답(본실사 판단 포함)으로 끝나는지, 회의 결정사항만 묻는 요청에는 Meeting에게만 위임하고 답하는지, NDJSON API, 경영자문 직접 대화의 개념 질문(Tool 없음) / 실제 검토(Tool 사용), delegation 경로의 Tool 검사 |
 
 ---
 
@@ -578,6 +612,8 @@ LLM: `backend/app/runtime/llm.py` — `ChatOllama`, Ollama Cloud(`https://ollama
 | K Super 그래프 | `tools → model` 루프. 모델이 Tool 없이 응답하면 `END`, 그 응답이 종합 결과 | 같음 |
 | Group Super | REAL (Group system + Group UI) | 같음 |
 | A2A | REAL: Group Tool → K `/api/a2a/run` HTTP, 최종 응답만 Agent에 전달, lifecycle은 관찰용 relay. Group UI가 Group backend를 쓴다 | 같음 |
+| Meeting 데이터 | Postgres 회의 저장소(system별 schema, fixture로 seed). 회의록 · 결정 · Action Item · 진행 이력 · 일정. 키워드 점수 조회 | + 녹음 transcript 저장과 보존 기간 삭제, 의미 검색(임베딩) |
+| 사용자 맥락 | 요청 body의 `principal`(gateway가 보냄)을 run이 들고 Tool이 읽음. 미팅 Tool만 사용 | 다른 Tool(뉴스 · 자문 자료 등급)도 같은 규칙 |
 | News 데이터 | `data/news.json` 고정 fixture를 키워드로 조회 | 실제 뉴스 API / 검색 / RAG (`analyze_company_risk_news` 본문만 교체) |
 | Advisory 데이터 | `data/companies.json` 고정 fixture + 결정적 규칙 evaluator | 실제 재무 모델 / 밸류에이션 / 실사 데이터 (evaluator만 교체) |
 | Workflow 결과 렌더링 | `toolResultBlocks`가 Tool 이름별 `switch` (meeting, news, advisory 전용 렌더) | Tool이 늘어나도 frontend가 Tool별 지식을 과도하게 갖지 않는 방식 (미결정) |
@@ -628,6 +664,10 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 9. **Frontend.** Vite 앱 하나, URL 경로로 Group UI · K UI · Demo Monitor 선택, dev proxy 둘. 의존성 추가 없음.
 10. **의존성.** backend runtime 의존성에 `httpx` 추가(A2A client · 프로세스 내 end-to-end 테스트).
 11. **K UI의 외부 A2A 실행 표시 (결정 · 구현됨).** Sidebar의 K Super 항목에 "외부 요청 처리 중 · 그룹" 배지 + K Super 탭 전사에 "외부 A2A 요청 · 그룹" 세션 카드(요청문, 그 아래 열리는 위임 창, 응답 반환으로 접힘). 탭 전환이나 자동 창 띄우기는 없다.
+12. **회의 저장소 (2026-10-27 결정 · 구현됨).** 미팅 에이전트의 회의 기록은 JSON fixture가 아니라 Postgres다: DB 하나에 system마다 schema와 DB role을 따로 둔다 (K `kelec`, Group `grp`).
+    fixture는 seed로만 쓴다. backend 의존성에 `psycopg[binary]` 추가. Tool은 회의록 작성(초안 → 확정 → 정정), Action Item 진행 조회 · 갱신, 사내 일정(외부 캘린더 동기화 없음)까지 다섯 개.
+    회의록 항목은 공공기록물법 시행령 제18조②(참석자 · 배석자, 안건, 발언 요지, 결정 사항과 표결 내용)와 상법 제391조의3(반대자와 반대 이유, 출석자 서명)을 기준으로 잡았다.
+13. **요청자 전달 (2026-10-27 결정 · 구현됨).** gateway가 run 요청에 `principal`을 담고, runtime은 그것을 `RunContext`에 두며, Tool이 읽는다 (모델 인자로 받지 않음). A2A는 principal을 넘기되 수신 측은 읽기만 한다.
 
 ### 전환 단계와 상태
 
@@ -680,6 +720,17 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 10. **Advisory 호출 맥락의 2중 전달.** K Super → Advisory는 `task` 문장, Advisory → Tool은 `context` 인자로 같은 맥락이 두 번 LLM을 거친다. Advisory가 `context`를 요약하거나 빠뜨리면 workflow의 신호 추출이 약해진다 (Skill이 "그대로 넣으라"고 지시). 공유 구조(5번)를 도입하면 함께 해소된다.
 11. **K UI에서 외부 A2A 실행의 표시 (결정 · 구현됨).** `src/platform/useInboundRuns.ts`가 K의 `/api/events`를 구독해 `origin: a2a` run을 K Super 탭 상태에 같은 mapper · reducer로 흘려 넣는다(세션 카드 + 위임 창 + 응답 반환), Sidebar에는 배지. 배지는 전사 재생이 따라잡은 뒤 꺼진다. 남은 제약: 사용자가 K Super 탭에서 직접 대화하는 동시에 외부 요청이 오면 한 전사에 섞인다.
 12. **Demo Monitor의 소스.** Monitor는 Group 관찰 채널 하나만 구독한다(relay 덕분에 K lifecycle 포함). K UI에서 직접 시작한 K 실행은 Monitor에 보이지 않는다. 필요해지면 K 채널도 구독하고 relay된 복사본을 걸러낸다.
+
+---
+
+13. **principal의 신뢰 경계.** backend는 요청 body의 `principal`을 검증 없이 믿는다. 배포에서 backend 포트는 내부망에만 열려 있고(gateway만 Group을, Group만 K를 호출) 이것이 유일한 방어다.
+    내부망의 다른 컨테이너도 principal을 꾸며 보낼 수 있으므로, 경계를 넓히면 서명된 토큰(예: gateway가 서명한 JWT)이나 mTLS가 필요하다.
+14. **회의 기록 쓰기 권한의 세분화.** 지금은 미팅 에이전트를 쓸 수 있는 사용자라면 자기 등급 이하의 회의를 저장 · 확정 · 정정할 수 있다. "확정은 간사만", "의결기구(`meeting_series.formal`)는 표결 · 서명 필수" 같은 규칙은 schema에만 있고 Tool이 강제하지 않는다.
+    delegation 경로(Super Agent → 미팅 에이전트)에서도 같은 system이면 쓸 수 있다.
+15. **녹음 transcript와 보존 기간.** `transcripts` · `transcript_segments` 테이블과 `expires_at`은 있지만 채우는 경로가 없다. transcript 원문은 채팅 메시지로만 오고, 모델이 Tool 인자로 수만 자를 옮겨 적게 하는 것은 맞지 않다.
+    STT 서비스나 gateway가 transcript id를 넘기는 경로, 만료 transcript와 원본 녹음 파일의 삭제 작업이 함께 정해져야 한다. 그 전까지 결정 · Action Item의 "근거 발언" 링크는 비어 있다.
+16. **회의 저장소 schema 변경.** schema는 없을 때만 만든다 (`meeting_schema.sql`). 테이블을 바꾸려면 migration 방식을 정해야 한다 (현재 도구 없음).
+17. **새 미팅 Tool 결과의 frontend 렌더.** Vite 제품 UI의 `toolResultBlocks`는 `run_meeting_context_retrieval`만 전용 렌더가 있고 나머지 네 Tool 결과는 JSON으로 보인다 (4번과 같은 문제).
 
 ---
 

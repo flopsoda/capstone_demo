@@ -4,6 +4,7 @@
       "id": "MTG-G-2026-09-30",
       "date": "2026-09-30",
       "title": "그룹 투자심의위원회 사전회의",
+      "classification": 3,
       "topics": [
         "투자심의",
         "투자 심의",
@@ -33,12 +34,14 @@
         {
           "text": "K전자 뉴로엣지 인수안의 계열사 검토 결과 수령",
           "owner": "그룹 전략실",
-          "status": "open"
+          "status": "open",
+          "due": "2026-10-31"
         },
         {
           "text": "그룹 AI 투자 포트폴리오 현황 정리",
           "owner": "그룹 전략실",
-          "status": "done"
+          "status": "done",
+          "due": "2026-10-15"
         }
       ]
     },
@@ -46,6 +49,7 @@
       "id": "MTG-G-2026-09-10",
       "date": "2026-09-10",
       "title": "그룹 하반기 경영전략회의",
+      "classification": 2,
       "topics": [
         "경영전략",
         "포트폴리오",
@@ -67,7 +71,8 @@
         {
           "text": "성장축별 투자 우선순위 보고",
           "owner": "그룹 전략실",
-          "status": "open"
+          "status": "open",
+          "due": "2026-11-20"
         }
       ]
     },
@@ -75,6 +80,7 @@
       "id": "MTG-G-2026-08-20",
       "date": "2026-08-20",
       "title": "계열사 CEO 간담회",
+      "classification": 2,
       "topics": [
         "계열사",
         "실적",
@@ -95,12 +101,14 @@
         {
           "text": "K바이오 임상 리스크 점검",
           "owner": "그룹 전략실",
-          "status": "open"
+          "status": "open",
+          "due": "2026-10-15"
         },
         {
           "text": "계열사 실적 공유 양식 통일",
           "owner": "그룹 재무실",
-          "status": "done"
+          "status": "done",
+          "due": "2026-09-30"
         }
       ]
     }

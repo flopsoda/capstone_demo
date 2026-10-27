@@ -37,7 +37,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
   - K Super → Specialist는 **delegation**(`delegation_start/end`), Group Super ⇅ K Super는 **A2A**다. Specialist 호출을 A2A라고 부르지 않는다.
 - **Agent state는 message history 중심이다.** `MessagesState`를 쓰고, `meeting_result` 같은 Agent별 결과 field를 추가하지 않는다. 공유 구조가 꼭 필요하면 범용 구조를 제안하고 결정을 받는다.
 - **Agent 경계를 유지한다.** 하위 Agent의 내부 메시지 / tool call을 상위 Agent history에 병합하지 않는다. 최종 결과만 전달한다. A2A도 같다: 상대 system의 lifecycle은 관찰용으로 relay(`relayed: true`)만 하고 Agent에게는 최종 응답 텍스트만 준다.
-- **Workflow Tool이 데이터 경계다.** Agent가 fixture / DB를 직접 읽지 않는다.
+- **Workflow Tool이 데이터 경계다.** Agent가 fixture / DB를 직접 읽지 않는다. 사용자별 접근(등급 · 작성자)은 Tool이 run의 principal로 정하며, 모델 인자로 받지 않는다.
 - **Agent system 경계를 지킨다.** `runtime/`은 `library/`·`systems/`를, `library/`는 `systems/`를, 한 system은 다른 system을 import하지 않는다 (`tests/test_boundaries.py`). system 간 업무는 A2A(HTTP)로만 오간다. 같은 모양의 Workflow / Data가 필요하면 라이브러리 factory에 자기 데이터를 바인딩한다.
 
 ## Backend ↔ Frontend
@@ -51,7 +51,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 
 ## Capability 추가 시
 
-- Agent-visible Capability(Skill = 업무 지침, Tool = `@tool`)는 system 중립이면 `backend/app/library/skills/`, `library/tools/`(factory `make_<tool>(path)`)에, 한 system 전용이면 `systems/<system>/tools/`에 정의하고, 그 system의 `registry.py` `CAPABILITIES`에 `allowed_agents`와 함께 등록한다. **권한은 그곳에만** 적는다.
+- Agent-visible Capability(Skill = 업무 지침, Tool = `@tool`)는 system 중립이면 `backend/app/library/skills/`, `library/tools/`(factory `make_<tool>(path)`, 회의 저장소를 쓰는 Tool은 `make_<tool>(store)`)에, 한 system 전용이면 `systems/<system>/tools/`에 정의하고, 그 system의 `registry.py` `CAPABILITIES`에 `allowed_agents`와 함께 등록한다. **권한은 그곳에만** 적는다.
 - Agent 파일은 `skills_for(AGENT_ID)` / `tools_for(AGENT_ID)`로 자기 subset만 받는다. Agent 파일에서 Skill / Tool 모듈을 직접 import하거나 `TOOLS`를 하드코딩하지 않는다.
 - Tool의 이름 · description · argument schema는 `@tool` 정의가 source of truth다. Registry나 다른 곳에 중복 정의하지 않는다.
 - Tool 내부의 workflow 단계와 helper는 `backend/app/library/workflows/`에 두고 Registry에 등록하지 않는다. workflow는 데이터 store 경로를 `path`로 받는 순수 함수다. Agent가 직접 쓰는 것만 Capability다.
@@ -66,7 +66,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 ## 구현 후
 
 - 관련 테스트를 실행한다.
-  - backend: `cd backend && .venv/bin/python -m pytest` (`tests/test_agents.py`는 `OLLAMA_API_KEY`가 있어야 실행된다). import 경계는 `tests/test_boundaries.py`가 지킨다.
+  - backend: `cd backend && .venv/bin/python -m pytest` (회의 저장소 테스트는 `MEETINGS_TEST_DATABASE_URL` — 이름에 test가 든 버릴 Postgres DB — 가 있어야 실행되고 없으면 skip. `tests/test_agents.py`는 LLM key — `OLLAMA_API_KEY`, `LLM_PROVIDER=openai`면 `OPENAI_API_KEY` — 가 있어야 실행된다). import 경계는 `tests/test_boundaries.py`가 지킨다.
   - frontend: `npm run build` (tsc 포함), `npm run lint`
 - 실제 실행 경로를 바꿨다면 backend 둘(`:8000`, `:8001`) + frontend를 띄워 `/group`에서 예시 요청을 한 번 돌리고 `/monitor`가 8/8까지 가는지 본다.
 - 문서는 **적힌 사실이 틀려졌을 때** 코드와 같은 커밋에서 갱신한다. "의미있는 변화"가 아니라 "문서가 거짓이 되었는가"가 기준이다.

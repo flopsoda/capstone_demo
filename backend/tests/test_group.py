@@ -67,7 +67,13 @@ def test_group_registry_content():
         "delegate_to_news_agent": ("tool", {"group_super"}),
         "delegate_to_advisory_agent": ("tool", {"group_super"}),
         "meeting_context_analysis": ("skill", {"meeting"}),
+        "meeting_minutes_writing": ("skill", {"meeting"}),
+        "meeting_follow_up": ("skill", {"meeting"}),
         "run_meeting_context_retrieval": ("tool", {"meeting"}),
+        "save_meeting_minutes": ("tool", {"meeting"}),
+        "run_action_item_tracking": ("tool", {"meeting"}),
+        "update_action_item": ("tool", {"meeting"}),
+        "run_meeting_schedule": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
@@ -102,7 +108,7 @@ def test_group_delegation_tools_point_at_group_agents():
     assert "계열사" in dm.DESCRIPTION and "A2A" in dm.DESCRIPTION  # the Group Super's view of who does what
 
 
-def test_group_tools_read_group_data_not_k_data():
+def test_group_tools_read_group_data_not_k_data(meeting_db):
     from app.systems.k_electronics import registry as k_registry
 
     g_meet = group_registry.get_capability("run_meeting_context_retrieval").impl
@@ -187,7 +193,7 @@ def test_group_super_direct_small_talk_needs_no_tool(scripted):
     assert [e["type"] for e in events] == ["agent_start", "agent_end", "done"]
 
 
-def test_group_super_may_delegate_to_its_own_specialists(scripted):
+def test_group_super_may_delegate_to_its_own_specialists(scripted, meeting_db):
     """No registry restriction steers Group Super to A2A: delegating to the Group's meeting agent works the same way."""
     scripted([
         _call("delegate_to_meeting_agent", 1, task="그룹 투자심의 사전회의 결정사항"),
@@ -213,3 +219,29 @@ def test_group_specialist_direct_chat_endpoints(scripted):
     assert [e["type"] for e in events] == ["agent_start", "tool_start", "tool_end", "agent_end", "done"]
     assert events[2]["result"]["risks"][0]["category"] == "key_personnel"
     assert events[0]["system"] == "group" and events[0]["origin"] == "direct"
+
+
+def test_a2a_forwards_the_user_and_k_runs_as_that_user_without_write_access(k_in_process, monkeypatch):
+    """K applies its own access rules to the Group user it is acting for; the forwarded user never widens anything."""
+    import importlib
+
+    from app.library.tools.meeting_access import current_viewer
+    from app.runtime.events import current_run, emit, new_run, stream_run
+    from app.runtime.schemas import Principal
+
+    k_app_module = importlib.import_module("app.systems.k_electronics.app")
+    seen = {}
+
+    def fake_k_super(request, *, invocation):
+        seen["run"], seen["viewer"] = current_run(), current_viewer()
+        emit({"type": "agent_end", "agent": "k_super", "response": "K전자 검토 결과"})  # the A2A answer
+        return "K전자 검토 결과"
+
+    monkeypatch.setattr(k_app_module, "run_k_super", fake_k_super)
+    user = Principal(email="ceo@example.com", name="김민수", groups=("executive",), clearance=4)
+    run = new_run(system="group", root_agent="group_super", principal=user)
+    events = list(stream_run(lambda: a2a_tool.request_k_electronics_review.invoke({"request": "뉴로엣지 검토"}), run=run, hub=None))
+    assert events[-1]["type"] == "done"
+    assert seen["run"].principal == user and seen["run"].origin == "a2a"
+    assert seen["viewer"].clearance == 4 and seen["viewer"].can_write is False
+    assert all("principal" not in e for e in events)

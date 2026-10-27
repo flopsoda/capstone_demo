@@ -2,16 +2,17 @@
 
 from app.library.workflows.company_risk_news_analysis import analyze_company_risk_news
 from app.library.workflows.meeting_context_retrieval import retrieve_meeting_context
+from app.library.workflows.meeting_store import Viewer
 from app.library.workflows.mna_review import review_acquisition
-from app.systems.group import DATA_DIR
+from app.systems.group import DATA_DIR, MEETING_STORE
 
-MEETINGS = DATA_DIR / "meetings.json"
+EXECUTIVE = Viewer("ceo@example.com", "", frozenset({"executive"}), 4, True)
 NEWS = DATA_DIR / "news.json"
 COMPANIES = DATA_DIR / "companies.json"
 
 
-def test_group_meeting_store_has_the_investment_committee_premeeting():
-    out = retrieve_meeting_context("뉴로엣지 인수안 그룹 투자심의 기준", ["투자심의", "뉴로엣지"], path=MEETINGS)
+def test_group_meeting_store_has_the_investment_committee_premeeting(meeting_db):
+    out = retrieve_meeting_context("뉴로엣지 인수안 그룹 투자심의 기준", ["투자심의", "뉴로엣지"], store=MEETING_STORE, viewer=EXECUTIVE)
     assert out["matched"] >= 1
     m = out["meetings"][0]  # best match first
     assert m["title"] == "그룹 투자심의위원회 사전회의"

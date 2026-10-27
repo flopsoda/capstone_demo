@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from .events import AgentEvent
+from .schemas import Principal
 
 A2A_TIMEOUT = httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=5.0)
 
@@ -39,10 +40,14 @@ def request_review(
     *,
     caller: str,
     trace_id: str | None,
+    principal: Principal | None = None,
     observe: Callable[[AgentEvent], None] | None = None,
 ) -> str:
-    """Posts `request` to the peer's A2A surface and returns the peer's final answer."""
+    """Posts `request` to the peer's A2A surface and returns the peer's final answer.
+    `principal` (the user this run acts for) goes along so the peer applies its access rules to that user."""
     body: dict[str, Any] = {"request": request, "trace_id": trace_id, "caller": caller}
+    if principal is not None:
+        body["principal"] = principal.model_dump()
     final: str | None = None
     finished = False
     try:

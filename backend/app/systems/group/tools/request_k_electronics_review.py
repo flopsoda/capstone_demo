@@ -52,6 +52,7 @@ def request_k_electronics_review(request: str) -> str:
                 request,
                 caller=SYSTEM,
                 trace_id=trace_id,
+                principal=run.principal if run is not None else None,
                 observe=lambda event: emit({**event, "relayed": True}),
             )
     except A2AError as e:

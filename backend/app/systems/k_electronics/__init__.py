@@ -4,12 +4,16 @@
     registry.py  this system's CAPABILITIES with permissions
     agents/      k_super (super core) · meeting / news / advisory (specialist core)
     tools/       delegate_to_* (handoffs to this system's specialists) · run_* bound to data/
-    data/        this system's fixtures (virtual)
+    data/        this system's fixtures (virtual); meetings.json seeds its meeting store (schema `kelec`)
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from ...library.workflows.meeting_store import MeetingStore
+
 SYSTEM = "k_electronics"  # stamped on every event this system emits
 DATA_DIR = Path(__file__).resolve().parent / "data"
+# This system's meeting records: its own schema in the meetings database, seeded from data/meetings.json.
+MEETING_STORE = MeetingStore("kelec", seed=DATA_DIR / "meetings.json")
