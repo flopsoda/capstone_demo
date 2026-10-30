@@ -88,6 +88,8 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
         correction_reason: str | None = None,
         transcript_id: str | None = None,
         flag_reviews: list[FlagReview] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
     ) -> dict[str, Any]:
         """회의록을 회의 기록 저장소에 저장한다. 처음에는 초안(draft)으로 저장하고, 사용자가 확인하면 같은 meeting_id로
     다시 호출하며 finalize=true로 확정한다. 담당자나 기한이 빠진 Action Item, 검토되지 않은 Compliance 항목(compliance_flags의 open)이
@@ -112,6 +114,8 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
         correction_reason: 확정된 회의록을 정정할 때의 사유.
         transcript_id: 녹음 자동 변환본 첫 줄의 transcript id (예: "TR-20261028-1A2B3C"). 회의에 발언 원문을 연결한다.
         flag_reviews: Compliance 검토 결과 — 사용자(간사)가 각 항목에 대해 판단을 말했을 때만.
+        start_time: 회의 시작 시각 HH:MM (한국 시간). 녹음 시각이나 회의에서 밝힌 시각만. 예약된 회의는 비워 두면 예약 시각을 쓴다.
+        end_time: 회의 종료 시각 HH:MM (한국 시간). start_time과 같은 기준.
     """
         viewer = current_viewer()
         return store_call(lambda: save_minutes(
@@ -119,7 +123,7 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
             decisions=plain(decisions or []), action_items=plain(action_items or []), attendees=plain(attendees or []),
             topics=topics, body=body, classification=classification, location=location, meeting_id=meeting_id,
             finalize=finalize, correction_reason=correction_reason, transcript_id=transcript_id,
-            flag_reviews=plain(flag_reviews or []),
+            flag_reviews=plain(flag_reviews or []), start_time=start_time, end_time=end_time,
         ))
 
     return save_meeting_minutes

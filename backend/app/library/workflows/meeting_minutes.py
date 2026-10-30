@@ -37,9 +37,11 @@ from .meeting_store import (
     find_person,
     kst_date,
     new_meeting_code,
+    time_label,
     next_item_number,
     parse_date,
     parse_person_label,
+    parse_time_of_day,
     person_id,
     resolve_owner,
 )
@@ -60,7 +62,7 @@ def _fail(error: str) -> dict[str, Any]:
 def minutes_record(conn: psycopg.Connection, meeting_id: int) -> dict[str, Any]:
     """The meeting's minutes as one document (also the snapshot kept for each corrected version)."""
     m = conn.execute(
-        """SELECT m.code, m.title, m.starts_at, m.location, m.topics, m.classification,
+        """SELECT m.code, m.title, m.starts_at, m.ends_at, m.location, m.topics, m.classification,
                   mi.status, mi.version, mi.summary, mi.body, mi.finalized_by, mi.finalized_at
            FROM meetings m JOIN minutes mi ON mi.meeting_id = m.id WHERE m.id = %s""",
         (meeting_id,),
@@ -102,6 +104,7 @@ def minutes_record(conn: psycopg.Connection, meeting_id: int) -> dict[str, Any]:
     return {
         "id": m["code"],
         "date": kst_date(m["starts_at"]),
+        "time": time_label(m["starts_at"], m["ends_at"]),
         "title": m["title"],
         "status": m["status"],
         "version": m["version"],
@@ -290,6 +293,8 @@ def save_minutes(
     correction_reason: str | None = None,
     transcript_id: str | None = None,
     flag_reviews: list[dict[str, Any]] | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
 ) -> dict[str, Any]:
     if not viewer.can_write:
         return _fail("다른 Agent System이 보낸 요청으로는 회의 기록을 바꿀 수 없습니다. 이 시스템의 사용자가 직접 요청해야 합니다.")
@@ -303,6 +308,12 @@ def save_minutes(
         day = None
     if day is None:
         return _fail("date는 회의 날짜(YYYY-MM-DD)여야 합니다.")
+    try:
+        start_clock, end_clock = parse_time_of_day(start_time), parse_time_of_day(end_time)
+    except ValueError:
+        return _fail("start_time · end_time은 한국 시각 HH:MM이어야 합니다 (예: 14:00).")
+    if start_clock and end_clock and end_clock <= start_clock:
+        return _fail("end_time은 start_time보다 늦어야 합니다.")
     decisions, action_items, attendees = decisions or [], action_items or [], attendees or []
     warnings: list[str] = []
     created: list[str] = []
@@ -316,7 +327,7 @@ def save_minutes(
     with store.connect() as conn:
         if meeting_id:
             row = conn.execute(
-                f"""SELECT m.id, m.code, m.starts_at, mi.status AS minutes_status, mi.version
+                f"""SELECT m.id, m.code, m.starts_at, m.ends_at, mi.status AS minutes_status, mi.version
                     FROM meetings m LEFT JOIN minutes mi ON mi.meeting_id = m.id
                     WHERE m.code = %(code)s AND {VISIBLE} FOR UPDATE OF m""",
                 {"code": meeting_id.strip(), **viewer.scope()},
@@ -328,25 +339,29 @@ def save_minutes(
                 return _fail("이미 확정된 회의록입니다. 정정하려면 정정 사유(correction_reason)를 함께 보내야 합니다.")
             if was == "final" and not can_confirm(conn, viewer, mid):
                 return _fail(confirm_denied())
-            clock = row["starts_at"].astimezone(KST).timetz() if row["starts_at"] else DEFAULT_MEETING_TIME
-            starts = datetime.combine(day, clock.replace(tzinfo=None), KST)
+            # 시각은 알려 준 것만 바꾸고, 날짜가 바뀌면 원래 시각을 그 날짜로 옮긴다
+            clock = start_clock or (row["starts_at"].astimezone(KST).time() if row["starts_at"] else DEFAULT_MEETING_TIME)
+            starts = datetime.combine(day, clock, KST)
+            end_at = end_clock or (row["ends_at"].astimezone(KST).time() if row["ends_at"] else None)
+            ends = datetime.combine(day, end_at, KST) if end_at and end_at > clock else None
             if was == "final":
                 conn.execute(
                     "INSERT INTO minutes_revisions (meeting_id, version, snapshot, changed_by, reason) VALUES (%s, %s, %s, %s, %s)",
                     (mid, row["version"], Jsonb(minutes_record(conn, mid)), viewer.email, correction_reason.strip()),
                 )
             conn.execute(
-                """UPDATE meetings SET title = %s, starts_at = %s, location = coalesce(%s, location), topics = %s,
+                """UPDATE meetings SET title = %s, starts_at = %s, ends_at = %s, location = coalesce(%s, location), topics = %s,
                                        classification = %s, status = 'held', updated_at = now() WHERE id = %s""",
-                (title, starts, location, topics or [], classification, mid),
+                (title, starts, ends, location, topics or [], classification, mid),
             )
         else:
             was = None
             code = new_meeting_code(conn, day)
             mid = conn.execute(
-                """INSERT INTO meetings (code, title, status, starts_at, location, topics, classification, created_by)
-                   VALUES (%s, %s, 'held', %s, %s, %s, %s, %s) RETURNING id""",
-                (code, title, datetime.combine(day, DEFAULT_MEETING_TIME, KST), location, topics or [], classification, viewer.email),
+                """INSERT INTO meetings (code, title, status, starts_at, ends_at, location, topics, classification, created_by)
+                   VALUES (%s, %s, 'held', %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (code, title, datetime.combine(day, start_clock or DEFAULT_MEETING_TIME, KST),
+                 datetime.combine(day, end_clock, KST) if end_clock else None, location, topics or [], classification, viewer.email),
             ).fetchone()["id"]
 
         # Judged on the participants as they were: a call cannot name its requester secretary and finalize at once.

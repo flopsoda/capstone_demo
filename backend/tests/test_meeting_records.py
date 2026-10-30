@@ -152,6 +152,20 @@ def test_schedule_create_with_carry_over_then_list_and_cancel():
     assert out["saved"] and out["meeting_id"] == "MTG-2026-11-04-01"
 
 
+def test_minutes_keep_the_meeting_time():
+    new = save(start_time="14:05", end_time="15:10")  # a meeting first recorded from its minutes
+    assert new["record"]["date"] == "2026-10-24" and new["record"]["time"] == "14:05~15:10"
+    assert save(start_time="9:70")["saved"] is False and save(start_time="15:00", end_time="14:00")["saved"] is False
+    # A scheduled meeting keeps its own time unless the minutes say otherwise.
+    meeting_schedule(store=STORE, viewer=SECRETARY, action="create", title="정기 점검", starts_at="2026-11-04 10:30",
+                     ends_at="2026-11-04 11:30", today=TODAY)
+    kept = save(meeting_id="MTG-2026-11-04-01", title="정기 점검", date="2026-11-04", decisions=[], action_items=[])
+    assert kept["record"]["time"] == "10:30~11:30"
+    moved = save(meeting_id="MTG-2026-11-04-01", title="정기 점검", date="2026-11-04", decisions=[], action_items=[],
+                 start_time="10:40")
+    assert moved["record"]["time"] == "10:40~11:30"
+
+
 def test_carry_over_takes_open_issues_of_a_held_meeting_not_its_whole_agenda():
     meeting_schedule(store=STORE, viewer=SECRETARY, action="create", title="1차 검토", starts_at="2026-10-26 14:00",
                      agenda=["가격 범위", "실사 착수"], today=TODAY)

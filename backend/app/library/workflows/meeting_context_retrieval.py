@@ -14,7 +14,7 @@ import re
 from datetime import date
 from typing import Any
 
-from .meeting_store import OPEN_STATUSES, OWNER_LABEL, PERSON_LABEL, VISIBLE, MeetingStore, Viewer, decision_ref, kst_date, parse_date, today_kst
+from .meeting_store import OPEN_STATUSES, OWNER_LABEL, PERSON_LABEL, VISIBLE, MeetingStore, Viewer, decision_ref, kst_date, parse_date, time_label, today_kst
 
 
 _MIN_TOKEN_LEN = 2
@@ -74,7 +74,7 @@ def _load(store: MeetingStore, viewer: Viewer, *, meeting_id: str | None, date_f
     params = {**viewer.scope(), "code": meeting_id, "date_from": date_from, "date_to": date_to, "today": today}
     with store.connect() as conn:
         meetings = conn.execute(
-            f"""SELECT m.id, m.code, m.starts_at, m.title, m.topics, m.classification, mi.status AS minutes_status, mi.summary
+            f"""SELECT m.id, m.code, m.starts_at, m.ends_at, m.title, m.topics, m.classification, mi.status AS minutes_status, mi.summary
                 FROM meetings m JOIN minutes mi ON mi.meeting_id = m.id
                 WHERE {VISIBLE}
                   AND (mi.status = 'final' OR m.code = %(code)s)
@@ -104,6 +104,7 @@ def _load(store: MeetingStore, viewer: Viewer, *, meeting_id: str | None, date_f
         out.append({
             "id": m["code"],
             "date": kst_date(m["starts_at"]),
+            "time": time_label(m["starts_at"], m["ends_at"]),
             "title": m["title"],
             "status": m["minutes_status"],
             "classification": m["classification"],

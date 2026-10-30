@@ -177,6 +177,18 @@ def update_action_item(
             values += [owner_person, owner_unit]
             changes.append(f"담당 {row['owner'] or '없음'} → {owner.strip()}")
         conn.execute(f"UPDATE action_items SET {', '.join(sets)} WHERE id = %s", (*values, row["id"]))
+        # 확정된 회의록의 할 일을 다른 사람에게 맡기거나 기한을 바꾸면, 그 담당자에게 업무 배정 메일을 다시 보낸다
+        # (초안의 할 일은 회의록을 확정할 때 함께 보냄). 같은 내용이면 다시 보내지 않는다 (outbox의 dedupe).
+        mails: list[dict[str, Any]] = []
+        reassigned = owner or (new_due is not None and new_due != row["due_date"])
+        if reassigned and conn.execute(
+            "SELECT 1 FROM action_items a JOIN minutes mi ON mi.meeting_id = a.meeting_id WHERE a.id = %s AND mi.status = 'final'",
+            (row["id"],),
+        ).fetchone():
+            from .outbox import queue_assignment_mail, summarize  # outbox → meeting_minutes → … 순환을 피함
+
+            mail_id = queue_assignment_mail(conn, row["id"], viewer)
+            mails = summarize(conn, [mail_id]) if mail_id else []
         text = "; ".join([*changes, note.strip()] if note else changes) or None
         conn.execute(
             "INSERT INTO action_item_updates (action_item_id, by_email, old_status, new_status, note) VALUES (%s, %s, %s, %s, %s)",
@@ -195,4 +207,5 @@ def update_action_item(
             for h in history
         ],
         "new_directory_entries": created,
+        "mail_queued": mails,
     }

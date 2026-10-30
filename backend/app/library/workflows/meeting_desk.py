@@ -14,8 +14,8 @@ from typing import Any
 from .action_items import track_action_items, update_action_item
 from .compliance import apply_reviews, flag_ref, flags_of
 from .meeting_context_retrieval import retrieve_meeting_context
-from .meeting_schedule import meeting_schedule
-from .meeting_store import PERSON_LABEL, VISIBLE, MeetingStore, Viewer, can_confirm, confirm_denied, kst_date, today_kst
+from .meeting_schedule import meeting_schedule, scheduled_meeting
+from .meeting_store import PERSON_LABEL, VISIBLE, MeetingStore, Viewer, can_confirm, confirm_denied, kst_date, time_label, today_kst
 from .outbox import manage_outbox
 
 UPCOMING_DAYS = 14
@@ -32,7 +32,7 @@ def overview(*, store: MeetingStore, viewer: Viewer, today: date | None = None) 
     mine = track_action_items(store=store, viewer=viewer, mine=True, limit=10, today=today) if viewer.email else {}
     with store.connect() as conn:
         minutes = conn.execute(
-            f"""SELECT m.code, m.title, m.starts_at, m.classification, mi.status, mi.version,
+            f"""SELECT m.code, m.title, m.starts_at, m.ends_at, m.classification, mi.status, mi.version,
                        (SELECT count(*) FROM compliance_flags f WHERE f.meeting_id = m.id AND f.status = 'open') AS open_flags,
                        (SELECT count(*) FROM decisions d WHERE d.meeting_id = m.id) AS decisions,
                        (SELECT count(*) FROM action_items a WHERE a.meeting_id = m.id) AS items
@@ -61,7 +61,8 @@ def overview(*, store: MeetingStore, viewer: Viewer, today: date | None = None) 
                    "mail_sent": mail["sent"], "flags_open": flags,
                    "my_items": len(items), "my_overdue": sum(1 for i in items if i["overdue_days"] > 0)},
         "upcoming": upcoming.get("meetings", []),
-        "minutes": [{"id": r["code"], "title": r["title"], "date": kst_date(r["starts_at"]), "status": r["status"],
+        "minutes": [{"id": r["code"], "title": r["title"], "date": kst_date(r["starts_at"]),
+                     "time": time_label(r["starts_at"], r["ends_at"]), "status": r["status"],
                      "version": r["version"], "classification": r["classification"], "open_flags": r["open_flags"],
                      "decisions": r["decisions"], "items": r["items"]} for r in minutes],
         "my_items": items,
@@ -117,8 +118,11 @@ def items(*, store: MeetingStore, viewer: Viewer, view: str = "mine", today: dat
 
 
 def update_item(*, store: MeetingStore, viewer: Viewer, item_id: str, status: str | None = None,
-                note: str | None = None, today: date | None = None) -> dict[str, Any]:
-    return update_action_item(store=store, viewer=viewer, item_id=item_id, status=status, note=note, today=today)
+                note: str | None = None, owner: str | None = None, due: str | None = None,
+                today: date | None = None) -> dict[str, Any]:
+    """완료 · 진행 중 표시와 담당 · 기한 지정 (확정된 회의록이면 새 담당자에게 업무 배정 메일)."""
+    return update_action_item(store=store, viewer=viewer, item_id=item_id, status=status, note=note, owner=owner, due=due,
+                              today=today)
 
 
 SCHEDULE_ACTIONS = ("create", "update", "cancel")
@@ -137,12 +141,18 @@ def schedule(*, store: MeetingStore, viewer: Viewer, action: str, meeting_id: st
 
 
 def meeting(*, store: MeetingStore, viewer: Viewer, meeting_id: str | None, today: date | None = None) -> dict[str, Any]:
-    """회의 하나: 회의록 · 결정 · 열린 Action Item(retrieval과 같은 모양) + 참석자 + Compliance 표시 + 확정 권한."""
+    """회의 하나: 회의록 · 결정 · 열린 Action Item(retrieval과 같은 모양) + 참석자 + Compliance 표시 + 확정 권한.
+    회의록이 아직 없는 예약된 회의는 {scheduled: 일정 · 안건 · 참석 대상}."""
     if not meeting_id:
         return {"error": "meeting_id가 필요합니다."}
     found = retrieve_meeting_context("", store=store, viewer=viewer, meeting_id=meeting_id.strip(), today=today)
     if not found["meetings"]:
-        return {"error": "해당하는 회의가 없거나 열람 권한이 없습니다."}
+        with store.connect() as conn:
+            row = conn.execute(f"SELECT m.id FROM meetings m WHERE m.code = %(code)s AND {VISIBLE}",
+                               {"code": meeting_id.strip(), **viewer.scope()}).fetchone()
+            if row is None:
+                return {"error": "해당하는 회의가 없거나 열람 권한이 없습니다."}
+            return {"scheduled": scheduled_meeting(conn, row["id"])}
     with store.connect() as conn:
         mid = conn.execute("SELECT id FROM meetings WHERE code = %s", (meeting_id.strip(),)).fetchone()["id"]
         people = conn.execute(

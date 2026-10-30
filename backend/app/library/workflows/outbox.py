@@ -131,7 +131,8 @@ def queue_minutes_mail(conn: psycopg.Connection, meeting_id: int, record: dict[s
     """Final (or corrected) minutes → every participant; each open Action Item with a person owner → that owner."""
     m = _meeting(conn, meeting_id)
     tag = "회의록 정정" if corrected else "회의록"
-    lines = [f"{m['title']} ({record['date']}) 회의록 v{record['version']}을 공유드립니다.", "", "요약", record["summary"]]
+    when = f"{record['date']} {record['time']}" if record.get("time") else record["date"]
+    lines = [f"{m['title']} ({when}) 회의록 v{record['version']}을 공유드립니다.", "", "요약", record["summary"]]
     decided = [d for d in record["decisions"] if d["kind"] in ("decision", "resolution", "criterion")]
     if decided:
         lines += ["", "결정사항"] + [f"- {d['ref']} {d['statement']}" for d in decided]
@@ -146,7 +147,7 @@ def queue_minutes_mail(conn: psycopg.Connection, meeting_id: int, record: dict[s
     queued = []
     for p in conn.execute("SELECT person_id FROM meeting_participants WHERE meeting_id = %s ORDER BY person_id", (meeting_id,)):
         mail_id = queue(conn, kind="minutes", meeting_id=meeting_id, person_id=p["person_id"],
-                        subject=f"[{tag}] {m['title']} ({record['date']})", body=body, created_by=viewer.email)
+                        subject=f"[{tag}] {m['title']} ({when})", body=body, created_by=viewer.email)
         if mail_id:
             queued.append(mail_id)
     for a in conn.execute(

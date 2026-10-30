@@ -40,7 +40,7 @@ def _fail(action: str, error: str) -> dict[str, Any]:
     return {"ok": False, "action": action, "error": error}
 
 
-def _meeting(conn: psycopg.Connection, meeting_id: int) -> dict[str, Any]:
+def scheduled_meeting(conn: psycopg.Connection, meeting_id: int) -> dict[str, Any]:
     m = conn.execute(
         """SELECT m.code, m.title, m.status, m.starts_at, m.ends_at, m.location, m.classification, s.name AS series
            FROM meetings m LEFT JOIN meeting_series s ON s.id = m.series_id WHERE m.id = %s""",
@@ -165,7 +165,7 @@ def meeting_schedule(
                     ORDER BY m.starts_at LIMIT 50""",
                 {**viewer.scope(), "start": start, "end": end, "mine": mine, "email": viewer.email, "name": viewer.name or None},
             ).fetchall()
-            meetings = [_meeting(conn, r["id"]) for r in rows]
+            meetings = [scheduled_meeting(conn, r["id"]) for r in rows]
         return {"ok": True, "action": action, "today": day_label(today), "from": start.isoformat(), "to": end.isoformat(),
                 "matched": len(meetings), "meetings": meetings}
 
@@ -202,7 +202,7 @@ def meeting_schedule(
             _add_participants(conn, mid, attendees or [], created)
             _add_agenda(conn, mid, agenda or [], carried)
             mails = queue_schedule_mail(conn, mid, action, viewer)
-            return {"ok": True, "action": action, "meeting": _meeting(conn, mid), "mail_queued": mails, "new_directory_entries": created}
+            return {"ok": True, "action": action, "meeting": scheduled_meeting(conn, mid), "mail_queued": mails, "new_directory_entries": created}
 
         if not meeting_id:
             return _fail(action, "바꿀 회의의 meeting_id가 필요합니다.")
@@ -230,5 +230,5 @@ def meeting_schedule(
             _add_participants(conn, row["id"], attendees or [], created)
             _add_agenda(conn, row["id"], agenda or [], [])
         mails = queue_schedule_mail(conn, row["id"], action, viewer)
-        return {"ok": True, "action": action, "meeting": _meeting(conn, row["id"]), "mail_queued": mails,
+        return {"ok": True, "action": action, "meeting": scheduled_meeting(conn, row["id"]), "mail_queued": mails,
                 "new_directory_entries": created}

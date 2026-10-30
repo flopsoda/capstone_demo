@@ -234,6 +234,22 @@ def kst_minute(ts: datetime | None) -> str | None:
     return ts.astimezone(KST).strftime("%Y-%m-%d %H:%M") if ts else None
 
 
+def time_label(starts: datetime | None, ends: datetime | None) -> str | None:
+    """14:00~15:00 (KST), or just 14:00 without an end."""
+    if not starts:
+        return None
+    text = starts.astimezone(KST).strftime("%H:%M")
+    return f"{text}~{ends.astimezone(KST).strftime('%H:%M')}" if ends else text
+
+
+def parse_time_of_day(value: str | None) -> time | None:
+    """'14:05' (KST) → time; None/'' → None. Raises ValueError on anything else."""
+    if not value or not str(value).strip():
+        return None
+    hour, minute = str(value).strip().split(":")[:2]
+    return time(int(hour), int(minute))
+
+
 # ---------------------------------------------------------------------------
 # People · org units (the directory the records point to)
 # ---------------------------------------------------------------------------

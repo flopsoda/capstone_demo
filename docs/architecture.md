@@ -451,6 +451,7 @@ K system에도 같은 모양의 `POST /api/agents/{meeting,news,advisory}/run`�
 Group system에는 Agent를 거치지 않는 **회의 업무 화면용** `POST /api/desk/{overview,mail,flags,items,meeting,schedule,report}`도 있다 (2026-10-30, `library/workflows/meeting_desk`).
 `report` `{meeting_id, kind: minutes|report}`는 저장된 회의록으로 만든 **회의록(양식) · 회의 결과 보고서(개조식) PDF**를 돌려준다 (`library/workflows/meeting_report`, fpdf2 + 나눔 글꼴;
 양식은 data.go.kr에 공개된 공공데이터전략위원회 회의록 · 회의 결과를 따름). 같은 PDF가 회의록 메일에 첨부되고, 의장 · 간사 메일에는 결과 보고서도 붙는다.
+배포에서는 이 desk API를 Open WebUI 채팅 안의 회의 카드가 부른다 (gateway가 회의 Tool 결과로 답변 끝에 카드 블록을 붙이고 Open WebUI 스크립트가 그림). 회의록 저장 Tool은 회의 시각(start_time · end_time)도 받는다.
 사람이 회의 기록과 Agent가 보낸 메일을 목록으로 보고 Compliance 검토 · Action Item 완료 · 실패한 메일 다시 보내기를 직접 누르는 경로다. body는 run과 같은 `principal` / `principal_token`(+ action · mail_ids · reviews · item_id …)이고,
 미팅 Tool과 같은 workflow 함수 · 권한 규칙(VISIBLE · can_confirm · can_write)을 쓴다. 배포에서는 gateway의 `/meetings/` 화면이 Open WebUI 로그인 사용자로 이것을 부른다.
 

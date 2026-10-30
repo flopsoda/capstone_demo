@@ -91,10 +91,27 @@ def test_desk_schedule_create_update_cancel(desk):
     moved = desk("schedule", action="update", meeting_id=code, starts_at=f"{day} 16:00", agenda=["단가 협상"])
     assert moved["ok"] is True and moved["meeting"]["starts_at"].endswith("16:00")
     assert moved["meeting"]["ends_at"].endswith("17:00")  # 시작만 옮기면 길이(1시간)는 그대로
+    # 회의록이 아직 없는 예약된 회의도 한 건으로 열린다 (채팅 카드가 일정을 보여 줌)
+    scheduled = desk("meeting", meeting_id=code)["scheduled"]
+    assert scheduled["starts_at"].endswith("16:00") and [a["title"] for a in scheduled["agenda"]] == ["재고 보고", "단가 협상"]
     assert [a["title"] for a in moved["meeting"]["agenda"]] == ["재고 보고", "단가 협상"]
     assert desk("schedule", action="cancel", meeting_id=code)["ok"] is True
     assert code not in [m["id"] for m in desk("overview")["upcoming"]]
     assert desk("schedule", action="list")["ok"] is False  # 목록은 overview가 보여 줌
+
+
+def test_desk_assigns_owner_and_due_and_mails_the_owner_once_the_minutes_are_final(desk):
+    plain = {**MINUTES, "body": None}  # 위험 발언 검토 없이 확정되도록
+    draft = save_minutes(store=STORE, viewer=WRITER, **{**plain, "action_items": [{"text": "협력사별 재고 현황 보고"}]})
+    item = f"{draft['meeting_id']}-A1"
+    assigned = desk("items", item_id=item, owner="박지훈", due="2026-11-20")
+    assert assigned["updated"] and assigned["item"]["owner"] == "박지훈 (CFO)" and assigned["mail_queued"] == []  # 초안: 확정 때 보냄
+    final = save_minutes(store=STORE, viewer=WRITER, meeting_id=draft["meeting_id"], finalize=True,
+                         **{**plain, "action_items": [{"id": item, "text": "협력사별 재고 현황 보고", "owner": "박지훈", "due": "2026-11-20"}]})
+    assert final["finalized"] and [m["kind"] for m in final["mail_queued"]].count("assignment") == 1
+    moved = desk("items", item_id=item, owner="김민수")
+    assert [(m["kind"], m["to"]) for m in moved["mail_queued"]] == [("assignment", "김민수 (CEO)")]
+    assert desk("items", item_id=item, owner="김민수")["mail_queued"] == []  # 같은 배정은 다시 보내지 않음
 
 
 def test_desk_without_a_user_sees_nothing(desk, monkeypatch):

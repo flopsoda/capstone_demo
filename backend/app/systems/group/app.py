@@ -89,6 +89,8 @@ class DeskRequest(Identified):
     agenda: list[str] | None = None
     classification: int | None = None
     kind: str | None = None  # report: minutes(회의록) · report(회의 결과 보고서)
+    owner: str | None = None  # items: 담당 지정
+    due: str | None = None  # items: 기한 지정 (YYYY-MM-DD)
 
 
 def _desk(body: DeskRequest, call: Callable[[Viewer], dict[str, Any]]) -> dict[str, Any]:
@@ -122,7 +124,7 @@ def desk_flags(body: DeskRequest) -> dict[str, Any]:
 def desk_items(body: DeskRequest) -> dict[str, Any]:
     if body.item_id:
         return _desk(body, lambda v: meeting_desk.update_item(store=MEETING_STORE, viewer=v, item_id=body.item_id,
-                                                              status=body.status, note=body.note))
+                                                              status=body.status, note=body.note, owner=body.owner, due=body.due))
     return _desk(body, lambda v: meeting_desk.items(store=MEETING_STORE, viewer=v, view=body.view))
 
 
