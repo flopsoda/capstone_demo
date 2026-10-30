@@ -47,7 +47,8 @@ def make_run_meeting_schedule(store: MeetingStore) -> BaseTool:
         starts_at: 시작 시각 "YYYY-MM-DD HH:MM" (create 필수).
         ends_at: 종료 시각 "YYYY-MM-DD HH:MM".
         location: 장소 또는 화상회의 링크.
-        attendees: 참석 대상 이름 목록 (update에서는 추가만 한다).
+        attendees: 참석 대상 목록. 직책과 의장 · 간사는 이름 뒤 괄호에 쓴다 (예: "김회장 (의장)", "박지훈 (CFO)",
+            "정전략 (그룹 전략실장, 간사)"). update에서는 추가만 한다.
         agenda: 안건 목록 (update에서는 뒤에 추가한다).
         classification: 회의 등급 1 공개 · 2 사내 · 3 대외비 · 4 극비 (create).
         carry_over_from: 안건 · 미결 쟁점을 이월해 올 이전 회의 id (create).

@@ -1,9 +1,13 @@
 """Meeting minutes — implementation workflow behind the save_meeting_minutes Tool.
 
 Draft → final. A draft is rewritten freely; finalizing needs every Action Item to have an
-owner and a due date. Final minutes are never overwritten in place: a correction needs a
-reason, snapshots the previous version into minutes_revisions and keeps every existing
-Action Item (they are closed with update_action_item, not deleted).
+owner and a due date, no open Compliance flag (compliance.py), and a requester who may confirm
+the meeting's records (meeting_store.can_confirm). Final minutes are never overwritten in place:
+a correction (same permission) needs a reason, snapshots the previous version into
+minutes_revisions and keeps every existing Action Item (they are closed with update_action_item,
+not deleted). A recording's transcript is attached by its speech-service id (transcripts.py);
+decisions and Action Items may point at the statement they came from by its [mm:ss] stamp.
+Finalizing or correcting queues the minutes and assignment mail for approval (outbox.py).
 
 The model supplies the content; ids, codes, validation, the directory lookups and the
 access check are deterministic here. Not agent-visible; no LangChain dependency.
@@ -17,6 +21,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
+from .compliance import apply_reviews, flags_of, open_flag_count, scan_minutes, scan_transcript
 from .meeting_store import (
     DEFAULT_MEETING_TIME,
     KST,
@@ -25,6 +30,8 @@ from .meeting_store import (
     VISIBLE,
     MeetingStore,
     Viewer,
+    can_confirm,
+    confirm_denied,
     decision_ref,
     find_decision,
     find_person,
@@ -32,9 +39,12 @@ from .meeting_store import (
     new_meeting_code,
     next_item_number,
     parse_date,
+    parse_person_label,
     person_id,
     resolve_owner,
 )
+from .outbox import queue_minutes_mail, unit_owned
+from .transcripts import TranscriptUnavailable, attach_transcript, fetch_transcript, segment_at
 
 ROLES = ("chair", "secretary", "required", "optional", "observer")
 KINDS = ("decision", "resolution", "criterion", "opinion", "issue")
@@ -132,6 +142,8 @@ def _write_participants(conn: psycopg.Connection, meeting_id: int, attendees: li
         role = a.get("role") or "required"
         if role not in ROLES:
             role = "required"
+        if role == "required":
+            role = parse_person_label(a["name"])[2] or role
         pid = person_id(conn, a["name"], created, title=a.get("title"))
         attended = a.get("attended", True)
         conn.execute(
@@ -162,20 +174,23 @@ def _write_decisions(conn: psycopg.Connection, meeting_id: int, decisions: list[
         supersedes = find_decision(conn, d["supersedes"], viewer) if d.get("supersedes") else None
         if d.get("supersedes") and supersedes is None:
             warnings.append(f"결정 {seq}: 바꾼다는 이전 결정 '{d['supersedes']}'을 찾지 못함")
+        source = _source(conn, meeting_id, d.get("source_time"), f"결정 {seq}", warnings) or (None, None)
         decision_id = conn.execute(
             """INSERT INTO decisions (meeting_id, seq, kind, speaker_id, speaker_label, statement, rationale, outcome,
-                                      votes_for, votes_against, votes_abstain, supersedes_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                      votes_for, votes_against, votes_abstain, supersedes_id, source_transcript_id, source_seq)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (meeting_id, seq) DO UPDATE SET
                  kind = EXCLUDED.kind, speaker_id = EXCLUDED.speaker_id, speaker_label = EXCLUDED.speaker_label,
                  statement = EXCLUDED.statement, rationale = EXCLUDED.rationale, outcome = EXCLUDED.outcome,
                  votes_for = EXCLUDED.votes_for, votes_against = EXCLUDED.votes_against,
                  votes_abstain = EXCLUDED.votes_abstain, supersedes_id = EXCLUDED.supersedes_id,
+                 source_transcript_id = coalesce(EXCLUDED.source_transcript_id, decisions.source_transcript_id),
+                 source_seq = CASE WHEN EXCLUDED.source_transcript_id IS NULL THEN decisions.source_seq ELSE EXCLUDED.source_seq END,
                  resolved_by_id = CASE WHEN EXCLUDED.kind = 'issue' THEN decisions.resolved_by_id END
                RETURNING id""",
             (meeting_id, seq, kind, speaker_id, label, d["statement"], d.get("rationale"), outcome,
              d.get("votes_for") if is_resolution else None, d.get("votes_against") if is_resolution else None,
-             d.get("votes_abstain") if is_resolution else None, supersedes),
+             d.get("votes_abstain") if is_resolution else None, supersedes, *source),
         ).fetchone()["id"]
         conn.execute("DELETE FROM decision_dissents WHERE decision_id = %s", (decision_id,))
         for x in d.get("dissents") or []:
@@ -198,6 +213,17 @@ def _write_decisions(conn: psycopg.Connection, meeting_id: int, decisions: list[
         conn.execute("DELETE FROM decisions WHERE id = ANY(%s)", (stale,))
 
 
+def _source(conn: psycopg.Connection, meeting_id: int, stamp: str | None, what: str, warnings: list[str]) -> tuple[int, int] | None:
+    """(transcript_id, seq) of the statement a decision or Action Item cites by its [mm:ss] stamp.
+    A meeting without an attached transcript has nothing to cite: the stamp is ignored, not warned about."""
+    if not stamp or not conn.execute("SELECT 1 FROM transcripts WHERE meeting_id = %s", (meeting_id,)).fetchone():
+        return None
+    found = segment_at(conn, meeting_id, stamp)
+    if found is None:
+        warnings.append(f"{what}: 근거 발언 시각 '{stamp}'에 해당하는 transcript 발언을 찾지 못함")
+    return found
+
+
 def _write_action_items(conn: psycopg.Connection, meeting_id: int, code: str, items: list[dict[str, Any]], *,
                         keep_unlisted: bool, created: list[str], warnings: list[str]) -> None:
     rows = conn.execute("SELECT id, code, text FROM action_items WHERE meeting_id = %s ORDER BY id", (meeting_id,)).fetchall()
@@ -214,6 +240,7 @@ def _write_action_items(conn: psycopg.Connection, meeting_id: int, code: str, it
             warnings.append(f"Action Item {n}: 기한 '{a.get('due')}'을 읽을 수 없음 (YYYY-MM-DD)")
             due = None
         owner_person, owner_unit = resolve_owner(conn, a.get("owner"), created)
+        source = _source(conn, meeting_id, a.get("source_time"), f"Action Item {n}", warnings) or (None, None)
         item_code = (a.get("id") or "").strip()
         if not item_code:
             same = by_text.get(" ".join(a["text"].split()).lower())
@@ -222,18 +249,20 @@ def _write_action_items(conn: psycopg.Connection, meeting_id: int, code: str, it
         if item_code in existing:
             listed.add(item_code)
             conn.execute(
-                """UPDATE action_items SET text = %s, owner_person_id = %s, owner_unit_id = %s, due_date = %s, updated_at = now()
+                """UPDATE action_items SET text = %s, owner_person_id = %s, owner_unit_id = %s, due_date = %s, updated_at = now(),
+                          source_transcript_id = coalesce(%s, source_transcript_id),
+                          source_seq = CASE WHEN %s::bigint IS NULL THEN source_seq ELSE %s END
                    WHERE id = %s""",
-                (a["text"], owner_person, owner_unit, due, existing[item_code]),
+                (a["text"], owner_person, owner_unit, due, source[0], source[0], source[1], existing[item_code]),
             )
             continue
         if item_code:
             warnings.append(f"Action Item {n}: id '{item_code}'는 이 회의에 없어 새 항목으로 저장")
         new_code = f"{code}-A{next_item_number(conn, meeting_id, code)}"
         conn.execute(
-            """INSERT INTO action_items (code, meeting_id, text, owner_person_id, owner_unit_id, due_date)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
-            (new_code, meeting_id, a["text"], owner_person, owner_unit, due),
+            """INSERT INTO action_items (code, meeting_id, text, owner_person_id, owner_unit_id, due_date, source_transcript_id, source_seq)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+            (new_code, meeting_id, a["text"], owner_person, owner_unit, due, *source),
         )
         listed.add(new_code)
     if not keep_unlisted:
@@ -259,6 +288,8 @@ def save_minutes(
     meeting_id: str | None = None,
     finalize: bool = False,
     correction_reason: str | None = None,
+    transcript_id: str | None = None,
+    flag_reviews: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not viewer.can_write:
         return _fail("다른 Agent System이 보낸 요청으로는 회의 기록을 바꿀 수 없습니다. 이 시스템의 사용자가 직접 요청해야 합니다.")
@@ -275,6 +306,12 @@ def save_minutes(
     decisions, action_items, attendees = decisions or [], action_items or [], attendees or []
     warnings: list[str] = []
     created: list[str] = []
+    transcript = None
+    if transcript_id and transcript_id.strip():
+        try:
+            transcript = fetch_transcript(transcript_id)
+        except TranscriptUnavailable as e:
+            warnings.append(f"transcript를 연결하지 못함: {e}")
 
     with store.connect() as conn:
         if meeting_id:
@@ -289,6 +326,8 @@ def save_minutes(
             mid, code, was = row["id"], row["code"], row["minutes_status"]
             if was == "final" and not (correction_reason or "").strip():
                 return _fail("이미 확정된 회의록입니다. 정정하려면 정정 사유(correction_reason)를 함께 보내야 합니다.")
+            if was == "final" and not can_confirm(conn, viewer, mid):
+                return _fail(confirm_denied())
             clock = row["starts_at"].astimezone(KST).timetz() if row["starts_at"] else DEFAULT_MEETING_TIME
             starts = datetime.combine(day, clock.replace(tzinfo=None), KST)
             if was == "final":
@@ -310,8 +349,12 @@ def save_minutes(
                 (code, title, datetime.combine(day, DEFAULT_MEETING_TIME, KST), location, topics or [], classification, viewer.email),
             ).fetchone()["id"]
 
+        # Judged on the participants as they were: a call cannot name its requester secretary and finalize at once.
+        confirmer = can_confirm(conn, viewer, mid)
         if attendees:
             _write_participants(conn, mid, attendees, created)
+        # After the participants, so speaker labels find the people just named; before the decisions that cite it.
+        attached = attach_transcript(conn, mid, transcript, viewer, warnings) if transcript else None
         _write_decisions(conn, mid, decisions, viewer, created, warnings)
         _write_action_items(conn, mid, code, action_items, keep_unlisted=was == "final", created=created, warnings=warnings)
 
@@ -327,13 +370,28 @@ def save_minutes(
                 (summary, body, mid),
             )
 
+        scan_minutes(conn, mid, code)
+        if attached:
+            scan_transcript(conn, mid, attached)
+        if flag_reviews:
+            if confirmer:
+                apply_reviews(conn, mid, flag_reviews, viewer, warnings)
+            else:
+                warnings.append("Compliance 검토 결과는 반영하지 않았습니다: " + confirm_denied())
+
         missing = _missing_for_final(conn, mid)
         for line in missing:
             warnings.append(line)
+        open_flags = open_flag_count(conn, mid)
         finalized = False
         if finalize and was != "final":
-            if missing:
+            if not confirmer:
+                warnings.append("확정하지 않고 초안으로 저장했습니다. " + confirm_denied())
+            elif missing:
                 warnings.append("담당자 · 기한이 빠진 Action Item이 있어 확정하지 않고 초안으로 저장했습니다.")
+            elif open_flags:
+                warnings.append(f"Compliance 검토가 끝나지 않은 항목 {open_flags}건이 있어 확정하지 않고 초안으로 저장했습니다 "
+                                "(flag_reviews로 cleared 또는 acknowledged를 보내면 확정할 수 있습니다).")
             else:
                 conn.execute(
                     "UPDATE minutes SET status = 'final', finalized_by = %s, finalized_at = now() WHERE meeting_id = %s",
@@ -341,6 +399,13 @@ def save_minutes(
                 )
                 finalized = True
         record = minutes_record(conn, mid)
+        mails = []
+        if finalized or was == "final":
+            mails = queue_minutes_mail(conn, mid, record, viewer, corrected=was == "final")
+            warnings.extend(unit_owned(conn, mid))
+        flags = flags_of(conn, mid)
+        transcripts = [r["source_ref"] for r in conn.execute(
+            "SELECT source_ref FROM transcripts WHERE meeting_id = %s AND source_ref IS NOT NULL ORDER BY id", (mid,))]
 
     return {
         "saved": True,
@@ -350,6 +415,9 @@ def save_minutes(
         "finalized": finalized,
         "corrected": was == "final",
         "warnings": warnings,
+        "compliance_flags": flags,
+        "transcripts": transcripts,
+        "mail_queued": mails,
         "new_directory_entries": created,
         "record": record,
     }

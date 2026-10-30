@@ -74,6 +74,7 @@ def test_group_registry_content():
         "run_action_item_tracking": ("tool", {"meeting"}),
         "update_action_item": ("tool", {"meeting"}),
         "run_meeting_schedule": ("tool", {"meeting"}),
+        "manage_mail_outbox": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
@@ -208,6 +209,21 @@ def test_group_super_may_delegate_to_its_own_specialists(scripted, meeting_db):
     assert events[1] == {**events[1], "from": "group_super", "to": "meeting"}
     assert events[4]["result"]["meetings"][0]["title"] == "그룹 투자심의위원회 사전회의"
     assert all(e["system"] == "group" and not e.get("relayed") for e in events)
+
+
+def test_group_super_skips_a_specialist_the_user_may_not_use(scripted):
+    """principal.agents (the gateway's permission table) leaves advisory out: the delegation is skipped, not run, and the answer goes on."""
+    scripted([
+        _call("delegate_to_advisory_agent", 1, task="브라이트셀 CFO 관점 인수 검토"),
+        AIMessage("회의 기준만 정리했습니다. 인수 타당성 검토는 권한이 없어 빠졌습니다."),
+    ])
+    principal = {"email": "secretary@example.com", "groups": ["secretary"], "clearance": 3, "agents": ["meeting", "news"]}
+    body = {"request": "브라이트셀 인수 타당성까지 정리해 줘", "principal": principal}
+    with TestClient(group_app).stream("POST", "/api/agents/group-super/run", json=body) as res:
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    assert [e["type"] for e in events] == ["agent_start", "delegation_skipped", "agent_end", "done"]
+    assert events[1] == {**events[1], "from": "group_super", "to": "advisory", "reason": "permission"}
+    assert "권한이 없어 빠졌습니다" in events[2]["response"]
 
 
 def test_group_specialist_direct_chat_endpoints(scripted):

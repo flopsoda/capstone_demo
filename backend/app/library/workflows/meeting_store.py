@@ -3,8 +3,10 @@
 A system binds its store with MeetingStore(schema, seed); that system's Tools read and write
 only that schema. The connection string comes from MEETINGS_DATABASE_URL. In deployment each
 system connects with its own DB role, which has no access to the other system's schema.
-On first use the schema (meeting_schema.sql) is created when missing and, while it has no
-meetings, seeded from the system's fixture file (data/meetings.json).
+On first use the schema (meeting_schema.sql, version 1) is created when missing, the numbered
+migrations in meeting_migrations/ (NNN_name.sql) it has not had yet are applied in order and
+recorded in its schema_migrations table, and, while it has no meetings (no staff directory), its
+meetings (staff directory) are seeded from the system's fixture file (data/meetings.json).
 
 Who is asking (`Viewer`) is decided by the Tool layer from the run — never from model
 arguments — and every query filters by it in SQL, before anything is read
@@ -32,6 +34,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 
 SCHEMA_FILE = Path(__file__).with_name("meeting_schema.sql")
+MIGRATIONS_DIR = Path(__file__).with_name("meeting_migrations")
 KST = timezone(timedelta(hours=9), "KST")  # no DST in Korea; dates and "overdue" are Korean dates
 DEFAULT_MEETING_TIME = time(10, 0)
 
@@ -73,6 +76,38 @@ def viewer_for(principal: Any | None, origin: str | None) -> Viewer:
     if principal is None:
         return Viewer(None, "", frozenset(), anonymous_clearance(), can_write)
     return Viewer(principal.email, principal.name or "", frozenset(principal.groups), principal.clearance, can_write)
+
+
+def confirm_groups() -> frozenset[str] | None:
+    """Groups whose members may finalize or correct minutes, review flagged statements, resend, cancel
+    or re-address outgoing mail and accept inbound task requests, on any meeting they can see
+    (MEETINGS_CONFIRM_GROUPS, comma-separated; "*" = every user who can write, for local demos)."""
+    raw = os.environ.get("MEETINGS_CONFIRM_GROUPS", "secretary,executive").strip()
+    if raw == "*":
+        return None
+    return frozenset(g.strip() for g in raw.split(",") if g.strip())
+
+
+def can_confirm(conn: psycopg.Connection, viewer: Viewer, meeting_id: int | None) -> bool:
+    """A confirm group member, or the meeting's own chair / secretary (matched by email)."""
+    if not viewer.can_write:
+        return False
+    groups = confirm_groups()
+    if groups is None or viewer.groups & groups:
+        return True
+    if meeting_id is None or not viewer.email:
+        return False
+    return conn.execute(
+        """SELECT 1 FROM meeting_participants mp JOIN people p ON p.id = mp.person_id
+           WHERE mp.meeting_id = %s AND mp.role IN ('chair', 'secretary') AND lower(p.email) = lower(%s)""",
+        (meeting_id, viewer.email),
+    ).fetchone() is not None
+
+
+def confirm_denied() -> str:
+    groups = confirm_groups() or frozenset()
+    return ("회의록 확정 · 정정, Compliance 검토, 메일 재발송 · 취소 · 주소 정정, 업무 요청 접수는 그 회의의 의장 · 간사"
+            + (f" 또는 {' · '.join(sorted(groups))} 그룹" if groups else "") + "만 할 수 있습니다.")
 
 
 # Same rule as gateway shared/access.retrieval_filter, for the meetings row aliased `m`.
@@ -127,9 +162,40 @@ class MeetingStore:
                     conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
                 if conn.execute("SELECT to_regclass(%s) AS t", (f"{self.schema}.meetings",)).fetchone()["t"] is None:
                     conn.execute(SCHEMA_FILE.read_text(encoding="utf-8"))
-                if self.seed is not None and conn.execute("SELECT count(*) AS n FROM meetings").fetchone()["n"] == 0:
-                    seed_fixture(conn, json.loads(self.seed.read_text(encoding="utf-8")))
+                migrate(conn)
+                if self.seed is not None:
+                    fixture = json.loads(self.seed.read_text(encoding="utf-8"))
+                    if conn.execute("SELECT count(*) AS n FROM meetings").fetchone()["n"] == 0:
+                        seed_fixture(conn, fixture)
+                    if not conn.execute("SELECT 1 FROM staff_directory LIMIT 1").fetchone():
+                        seed_directory(conn, fixture.get("directory", []))
             self._ready = True
+
+
+def migrations() -> list[tuple[int, str, Path]]:
+    """(version, name, file) of meeting_migrations/NNN_name.sql, in order. Version 1 is meeting_schema.sql."""
+    found = []
+    for path in sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql")):
+        found.append((int(path.name[:3]), path.stem[4:], path))
+    return found
+
+
+def migrate(conn: psycopg.Connection) -> list[int]:
+    """Applies the migrations this schema has not had, in order, in the caller's transaction."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS schema_migrations (
+               version int PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())"""
+    )
+    conn.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'meeting_schema') ON CONFLICT DO NOTHING")
+    applied = {r["version"] for r in conn.execute("SELECT version FROM schema_migrations")}
+    done = []
+    for version, name, path in migrations():
+        if version in applied:
+            continue
+        conn.execute(path.read_text(encoding="utf-8"))
+        conn.execute("INSERT INTO schema_migrations (version, name) VALUES (%s, %s)", (version, name))
+        done.append(version)
+    return done
 
 
 # ---------------------------------------------------------------------------
@@ -185,18 +251,45 @@ def split_label(label: str) -> tuple[str, str | None]:
     return (m.group(1).strip(), m.group(2).strip()) if m else (label.strip(), None)
 
 
+# Words in a label's parentheses that say what the person does at this meeting, not their job title.
+_ROLE_WORDS = {"의장": "chair", "간사": "secretary", "배석": "observer", "선택참석": "optional"}
+# A courtesy suffix after the name ("정전략 실장", "한상우 위원") is not part of the name.
+_COURTESY = re.compile(r"\s+(님|실장|위원|위원장|팀장|본부장|부장|차장|과장|대리|이사|상무|전무|부사장|사장|대표|교수|변호사|회계사)$")
+
+
+def _squash(text: str | None) -> str:
+    return re.sub(r"\s+", "", text or "").lower()
+
+
+def parse_person_label(label: str) -> tuple[str, str | None, str | None]:
+    """(name, title, meeting role) of a label: "김회장 (의장)" → chair with no title,
+    "박지훈 (K전자 CFO, 간사)" → title "K전자 CFO" and secretary, "정전략 실장" → name 정전략."""
+    name, inside = split_label(label)
+    role, parts = None, []
+    for part in (inside or "").split(","):
+        word = part.strip()
+        if _squash(word) in _ROLE_WORDS:
+            role = role or _ROLE_WORDS[_squash(word)]
+        elif word:
+            parts.append(word)
+    return _COURTESY.sub("", name).strip() or name, ", ".join(parts) or None, role
+
+
 def find_person(conn: psycopg.Connection, label: str) -> int | None:
-    name, title = split_label(label)
-    row = conn.execute(
-        "SELECT id FROM people WHERE lower(display_name) = lower(%s) AND (%s::text IS NULL OR title = %s) ORDER BY id LIMIT 1",
-        (name, title, title),
-    ).fetchone()
-    return row["id"] if row else None
+    """The person a label names: same name, and when the label has a title, the same title — or one that
+    contains or is contained in it ("K전자 CFO" ~ "CFO")."""
+    name, title, _ = parse_person_label(label)
+    rows = conn.execute("SELECT id, title FROM people WHERE lower(display_name) = lower(%s) ORDER BY id", (name,)).fetchall()
+    if title:
+        rows = [r for r in rows if r["title"] == title] or [
+            r for r in rows if r["title"] and (_squash(r["title"]) in _squash(title) or _squash(title) in _squash(r["title"]))
+        ]
+    return rows[0]["id"] if rows else None
 
 
 def person_id(conn: psycopg.Connection, label: str, created: list[str], *, title: str | None = None) -> int:
     """Existing person by name (and title, if the label has one); otherwise a new directory entry."""
-    name, label_title = split_label(label)
+    name, label_title, _ = parse_person_label(label)
     title = title or label_title
     found = find_person(conn, f"{name} ({title})" if title else name)
     if found is not None:
@@ -297,3 +390,13 @@ def seed_fixture(conn: psycopg.Connection, data: dict[str, Any]) -> None:
                 (f"{m['id']}-A{n}", meeting, a["text"], owner_person, owner_unit, parse_date(a.get("due")), status,
                  starts + timedelta(days=7) if status == "done" else None),
             )
+
+
+def seed_directory(conn: psycopg.Connection, entries: list[dict[str, Any]]) -> None:
+    """The fixture's staff · contacts directory (name, email; optional title, department, organization, external)."""
+    for e in entries:
+        conn.execute(
+            """INSERT INTO staff_directory (name, title, department, organization, email, is_external)
+               VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (email) DO NOTHING""",
+            (e["name"], e.get("title"), e.get("department"), e.get("organization"), e["email"], bool(e.get("external"))),
+        )

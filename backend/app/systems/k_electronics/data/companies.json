@@ -26,6 +26,7 @@
         "post_acquisition_integration_months": [12, 18],
         "time_to_market_gain_months": [24, 30],
         "core_team": "창업자 CTO 중심의 핵심 설계팀",
+        "retention_target": "창업자 CTO 및 핵심 설계팀",
         "ip_dispute": {
           "counterparty": "코어NPU",
           "subject": "NPU 메모리 구조 특허",

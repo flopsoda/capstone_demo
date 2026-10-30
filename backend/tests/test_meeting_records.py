@@ -152,6 +152,30 @@ def test_schedule_create_with_carry_over_then_list_and_cancel():
     assert out["saved"] and out["meeting_id"] == "MTG-2026-11-04-01"
 
 
+def test_carry_over_takes_open_issues_of_a_held_meeting_not_its_whole_agenda():
+    meeting_schedule(store=STORE, viewer=SECRETARY, action="create", title="1차 검토", starts_at="2026-10-26 14:00",
+                     agenda=["가격 범위", "실사 착수"], today=TODAY)
+    save(meeting_id="MTG-2026-10-26-01", title="1차 검토", date="2026-10-26", action_items=[])  # one open issue
+    held = meeting_schedule(store=STORE, viewer=SECRETARY, action="create", title="2차 검토", starts_at="2026-11-02 10:00",
+                            carry_over_from="MTG-2026-10-26-01", today=TODAY)
+    assert [a["title"] for a in held["meeting"]["agenda"]] == ["최대 고객사와의 장기 계약 갱신 여부"]
+    # A meeting that never took place passes on everything it had planned.
+    meeting_schedule(store=STORE, viewer=SECRETARY, action="cancel", meeting_id="MTG-2026-11-02-01", today=TODAY)
+    again = meeting_schedule(store=STORE, viewer=SECRETARY, action="create", title="2차 검토 (재)", starts_at="2026-11-04 10:00",
+                             carry_over_from="MTG-2026-11-02-01", today=TODAY)
+    assert [a["title"] for a in again["meeting"]["agenda"]] == ["최대 고객사와의 장기 계약 갱신 여부"]
+
+
+def test_schedule_attendee_labels_reuse_people_and_set_roles():
+    save()  # registers 김민수 (CEO), 박지훈 (CFO), 이서연 (CTO)
+    out = meeting_schedule(store=STORE, viewer=SECRETARY, action="create", title="인수 검토회의", starts_at="2026-11-03 14:00",
+                           attendees=["김민수 (의장)", "박지훈 (K전자 CFO, 간사)", "이서연 이사"], today=TODAY)
+    assert out["ok"], out
+    assert out["new_directory_entries"] == []  # role words, a longer title and a courtesy suffix are the same people
+    roles = {p["name"]: p["role"] for p in out["meeting"]["participants"]}
+    assert roles == {"김민수 (CEO)": "chair", "박지훈 (CFO)": "secretary", "이서연 (CTO)": "required"}
+
+
 def test_viewer_comes_from_the_run_not_from_the_model():
     assert viewer_for(None, "direct").clearance == 4  # tests: anonymous clearance 4
     p = Principal(email="staff@example.com", name="박지훈", groups=("staff",), clearance=2)

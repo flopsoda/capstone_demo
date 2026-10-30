@@ -20,6 +20,7 @@ from .tools.delegate_to_advisory_agent import delegate_to_advisory_agent
 from .tools.delegate_to_meeting_agent import delegate_to_meeting_agent
 from .tools.delegate_to_news_agent import delegate_to_news_agent
 from .tools.request_k_electronics_review import request_k_electronics_review
+from .tools.manage_mail_outbox import manage_mail_outbox
 from .tools.run_company_risk_news_analysis import run_company_risk_news_analysis
 from .tools.run_action_item_tracking import run_action_item_tracking
 from .tools.run_meeting_context_retrieval import run_meeting_context_retrieval
@@ -51,6 +52,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(run_action_item_tracking, frozenset({MEETING})),
     Capability(update_action_item, frozenset({MEETING})),
     Capability(run_meeting_schedule, frozenset({MEETING})),
+    Capability(manage_mail_outbox, frozenset({MEETING})),
     # News Agent (Group's article store)
     Capability(EXTERNAL_RISK_ANALYSIS, frozenset({NEWS})),
     Capability(run_company_risk_news_analysis, frozenset({NEWS})),

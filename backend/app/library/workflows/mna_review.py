@@ -110,6 +110,9 @@ _FLAG_KEYWORDS: dict[str, tuple[str, ...]] = {
     "key_personnel": ("cto", "핵심인력", "핵심 인력", "핵심 설계", "이탈", "retention", "근속"),
 }
 _CEILING_WORDS = ("초과", "이하", "상한", "기준", "넘")
+# "2조 원 초과 건은 본회의 상정"처럼 금액이 심의 · 보고 경로를 정하는 기준이면 가격 상한이 아니다.
+_ESCALATION_WORDS = ("상정", "안건", "본회의", "심의", "보고")
+_PRICE_WORDS = ("가격", "타당성", "상한", "협상", "인수가")
 
 
 def extract_context_signals(context: str | None) -> dict[str, Any]:
@@ -120,9 +123,13 @@ def extract_context_signals(context: str | None) -> dict[str, Any]:
     ceiling: float | None = None
     for m in re.finditer(r"(\d+(?:\.\d+)?)\s*조", text):
         window = text[m.end() : m.end() + 14]
-        if any(w in window for w in _CEILING_WORDS):
-            ceiling = float(m.group(1))
-            break
+        if not any(w in window for w in _CEILING_WORDS):
+            continue
+        clause = re.split(r"[.,;·\n]", text[m.end() : m.end() + 40], maxsplit=1)[0]
+        if any(w in clause for w in _ESCALATION_WORDS) and not any(w in clause for w in _PRICE_WORDS):
+            continue
+        ceiling = float(m.group(1))
+        break
 
     ttm_years: int | None = None
     if any(k in lower for k in ("time-to-market", "시장 진입", "단축", "ttm")):
@@ -238,7 +245,8 @@ def _business_value(c: dict, s: dict) -> Assessment:
         "사업 추진 가치",
         "positive",
         f"매출 {f['revenue_label']}, 3년 CAGR {_pct(f['revenue_cagr_3y'])}의 고성장 사업",
-        [f"{f['fiscal_year']}년 매출 {f['revenue_label']}", f"3년 CAGR {_pct(f['revenue_cagr_3y'])}", f"영업이익률 {_pct(f['operating_margin'])} (아직 적자)"],
+        [f"{f['fiscal_year']}년 매출 {f['revenue_label']}", f"3년 CAGR {_pct(f['revenue_cagr_3y'])}",
+         f"영업이익률 {_pct(f['operating_margin'])}{' (아직 적자)' if f['operating_margin'] < 0 else ''}"],
     )
 
 
@@ -269,12 +277,14 @@ def _valuation(c: dict, s: dict) -> Assessment:
 
 def _profitability(c: dict, s: dict) -> Assessment:
     f = c["financials"]
+    loss = f["operating_margin"] < 0
     return _a(
         "profitability",
         "수익성",
         "concern",
-        f"고성장(CAGR {_pct(f['revenue_cagr_3y'])})이나 영업이익률 {_pct(f['operating_margin'])}로 적자",
-        ["인수 후 일정 기간 손익 부담 지속 가능성", "흑자 전환 시점이 가격 정당화의 전제"],
+        f"고성장(CAGR {_pct(f['revenue_cagr_3y'])})이나 영업이익률 {_pct(f['operating_margin'])}로 {'적자' if loss else '이익률이 낮음'}",
+        ["인수 후 일정 기간 손익 부담 지속 가능성",
+         "흑자 전환 시점이 가격 정당화의 전제" if loss else "이익률 개선 여부가 가격 정당화의 전제"],
         level="MEDIUM",
     )
 
@@ -296,32 +306,47 @@ def _customer_concentration(c: dict, s: dict) -> Assessment:
     )
 
 
+def _has_ip_dispute(ip: dict) -> bool:
+    """The company store writes "없음" when no dispute is pending."""
+    return bool(ip) and ip.get("counterparty") not in (None, "", "없음")
+
+
+def _retention_target(c: dict) -> str:
+    t = c["technology"]
+    return t.get("retention_target") or t["core_team"]
+
+
 def _financial_downside(c: dict, s: dict) -> Assessment:
     cust, ip = c["customers"]["largest"], c["technology"]["ip_dispute"]
+    margin = c["financials"]["operating_margin"]
+    dispute = _has_ip_dispute(ip)
+    risks = ["최대 고객 이탈"] + (["특허소송"] if dispute else []) + (["적자 지속"] if margin < 0 else [])
+    evidence = [f"{cust['name']} 이탈 시 매출 {_pct(cust['revenue_share'])} 노출"]
+    if dispute:
+        evidence.append(f"{ip['counterparty']} 특허소송 잠재손실 미산정 ({ip['status']})")
+    if margin < 0:
+        evidence.append(f"영업이익률 {_pct(margin)}로 추가 자금 소요 가능")
     return _a(
         "financial_downside",
         "재무적 downside",
         "concern",
-        "최대 고객 이탈·특허소송·적자 지속이 겹칠 경우 가치 훼손 폭이 큼",
-        [
-            f"{cust['name']} 이탈 시 매출 {_pct(cust['revenue_share'])} 노출",
-            f"{ip['counterparty']} 특허소송 잠재손실 미산정 ({ip['status']})",
-            f"영업이익률 {_pct(c['financials']['operating_margin'])}로 추가 자금 소요 가능",
-        ],
+        f"{'·'.join(risks)}이 {'겹칠' if len(risks) > 1 else '현실화될'} 경우 가치 훼손 폭이 큼",
+        evidence,
         level="MEDIUM",
-        condition=f"{ip['counterparty']} 특허소송 잠재손실 검증",
+        condition=f"{ip['counterparty']} 특허소송 잠재손실 검증" if dispute else None,
     )
 
 
 def _deal_terms(c: dict, s: dict) -> Assessment:
     high = c["valuation"]["fair_value_high_trillion_krw"]
+    target = _retention_target(c)
     return _a(
         "deal_terms",
         "거래 조건",
         "neutral",
         "가격 상한과 핵심인력 유지를 거래 조건에 연계할 필요",
-        [f"기준가격 {_trillion(high)} 이하를 협상 출발점으로 설정", "핵심 설계팀 retention을 earn-out·락업 등 조건으로 구조화"],
-        condition="창업자 CTO 및 핵심 설계팀 retention 조건 확보",
+        [f"기준가격 {_trillion(high)} 이하를 협상 출발점으로 설정", f"{target} retention을 earn-out·락업 등 조건으로 구조화"],
+        condition=f"{target} retention 조건 확보",
     )
 
 
@@ -339,15 +364,17 @@ def _key_talent_retention(c: dict, s: dict) -> Assessment:
         "key_talent_retention",
         "핵심 기술인력 유지",
         "concern",
-        "핵심 설계팀이 이탈하면 인수로 얻는 기술 가치가 사라짐",
+        "핵심 인력이 이탈하면 인수로 얻는 기술 가치가 사라짐",
         evidence,
         level="HIGH",
-        condition="창업자 CTO 및 핵심 설계팀 retention 조건 확보",
+        condition=f"{_retention_target(c)} retention 조건 확보",
     )
 
 
 def _ip_risk(c: dict, s: dict) -> Assessment:
     ip = c["technology"]["ip_dispute"]
+    if not _has_ip_dispute(ip):
+        return _a("ip_risk", "IP / 특허 리스크", "neutral", "진행 중인 특허 분쟁 없음", [ip.get("status") or "확인된 분쟁 없음"])
     evidence = [f"{ip['counterparty']}가 제기한 {ip['subject']} 분쟁 ({ip['status']})"]
     if "legal_dispute" in s.get("confirmed_risks", []):
         evidence.append("요청 맥락에서 소송 리스크가 확인됨")

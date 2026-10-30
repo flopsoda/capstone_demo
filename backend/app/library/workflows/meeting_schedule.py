@@ -2,7 +2,8 @@
 
 The system's own calendar of meetings (no external calendar sync): list upcoming meetings,
 create one with its agenda (optionally carrying over what an earlier meeting deferred or
-left unresolved), change it, or cancel it. Minutes are later written onto the same meeting
+left unresolved), change it, or cancel it — each queues a notice to the participants for
+approval (outbox.py). Minutes are later written onto the same meeting
 id with save_meeting_minutes. Not agent-visible; no LangChain dependency.
 """
 
@@ -25,9 +26,11 @@ from .meeting_store import (
     new_meeting_code,
     parse_date,
     parse_datetime,
+    parse_person_label,
     person_id,
     today_kst,
 )
+from .outbox import queue_schedule_mail
 
 ACTIONS = ("list", "create", "update", "cancel")
 UPCOMING_DAYS = 30
@@ -72,11 +75,14 @@ def _meeting(conn: psycopg.Connection, meeting_id: int) -> dict[str, Any]:
 
 
 def _add_participants(conn: psycopg.Connection, meeting_id: int, names: list[str], created: list[str]) -> None:
+    """Participants by label; "(의장)" · "(간사)" in a label sets that meeting role."""
     for name in names:
         if name and name.strip():
+            role = parse_person_label(name)[2] or "required"
             conn.execute(
-                "INSERT INTO meeting_participants (meeting_id, person_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-                (meeting_id, person_id(conn, name, created)),
+                """INSERT INTO meeting_participants (meeting_id, person_id, role) VALUES (%s, %s, %s)
+                   ON CONFLICT (meeting_id, person_id) DO UPDATE SET role = EXCLUDED.role WHERE EXCLUDED.role <> 'required'""",
+                (meeting_id, person_id(conn, name, created), role),
             )
 
 
@@ -96,14 +102,16 @@ def _add_agenda(conn: psycopg.Connection, meeting_id: int, titles: list[str], ca
 
 
 def _carry_over(conn: psycopg.Connection, viewer: Viewer, code: str) -> list[tuple[str, int | None, str | None]] | None:
-    """Deferred agenda items and unresolved issues of an earlier meeting, as new agenda entries."""
+    """Deferred agenda items and unresolved issues of an earlier meeting, as new agenda entries. Once a meeting
+    was held its minutes say what stayed open (issues), so its still-'planned' items count as discussed."""
     source = conn.execute(
-        f"SELECT m.id FROM meetings m WHERE m.code = %(code)s AND {VISIBLE}", {"code": code.strip(), **viewer.scope()}
+        f"SELECT m.id, m.status FROM meetings m WHERE m.code = %(code)s AND {VISIBLE}", {"code": code.strip(), **viewer.scope()}
     ).fetchone()
     if source is None:
         return None
+    statuses = ["deferred"] if source["status"] == "held" else ["deferred", "planned"]
     deferred = conn.execute(
-        "SELECT id, title FROM agenda_items WHERE meeting_id = %s AND status IN ('deferred', 'planned') ORDER BY seq", (source["id"],)
+        "SELECT id, title FROM agenda_items WHERE meeting_id = %s AND status = ANY(%s) ORDER BY seq", (source["id"], statuses)
     ).fetchall()
     issues = conn.execute(
         "SELECT seq, statement FROM decisions WHERE meeting_id = %s AND kind = 'issue' AND resolved_by_id IS NULL ORDER BY seq",
@@ -193,18 +201,23 @@ def meeting_schedule(
             ).fetchone()["id"]
             _add_participants(conn, mid, attendees or [], created)
             _add_agenda(conn, mid, agenda or [], carried)
-            return {"ok": True, "action": action, "meeting": _meeting(conn, mid), "new_directory_entries": created}
+            mails = queue_schedule_mail(conn, mid, action, viewer)
+            return {"ok": True, "action": action, "meeting": _meeting(conn, mid), "mail_queued": mails, "new_directory_entries": created}
 
         if not meeting_id:
             return _fail(action, "바꿀 회의의 meeting_id가 필요합니다.")
         row = conn.execute(
-            f"SELECT m.id, m.status FROM meetings m WHERE m.code = %(code)s AND {VISIBLE} FOR UPDATE",
+            f"SELECT m.id, m.status, m.starts_at, m.ends_at FROM meetings m WHERE m.code = %(code)s AND {VISIBLE} FOR UPDATE",
             {"code": meeting_id.strip(), **viewer.scope()},
         ).fetchone()
         if row is None:
             return _fail(action, f"회의 '{meeting_id}'를 찾을 수 없거나 열람 권한이 없습니다.")
         if row["status"] not in ("scheduled", "postponed"):
             return _fail(action, f"이미 '{row['status']}' 상태인 회의는 일정 변경 · 취소 대상이 아닙니다.")
+        if start_ts and end_ts is None and row["ends_at"] is not None:
+            end_ts = start_ts + (row["ends_at"] - row["starts_at"])  # 시작만 옮기면 회의 길이는 그대로
+        if end_ts and start_ts is None and end_ts <= row["starts_at"]:
+            return _fail(action, "종료 시각이 시작 시각보다 뒤여야 합니다.")
         if action == "cancel":
             conn.execute("UPDATE meetings SET status = 'cancelled', updated_at = now() WHERE id = %s", (row["id"],))
         else:
@@ -216,4 +229,6 @@ def meeting_schedule(
             )
             _add_participants(conn, row["id"], attendees or [], created)
             _add_agenda(conn, row["id"], agenda or [], [])
-        return {"ok": True, "action": action, "meeting": _meeting(conn, row["id"]), "new_directory_entries": created}
+        mails = queue_schedule_mail(conn, row["id"], action, viewer)
+        return {"ok": True, "action": action, "meeting": _meeting(conn, row["id"]), "mail_queued": mails,
+                "new_directory_entries": created}
