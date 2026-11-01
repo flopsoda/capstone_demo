@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 import psycopg
 
-from .meeting_store import Viewer, find_person
+from .meeting_store import Viewer, find_person, unnamed_speaker
 
 TRANSCRIPT_ID = re.compile(r"^TR-\d{8}-[0-9A-F]{6}$")
 _CLOCK = re.compile(r"^\s*\[?\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\s*\]?\s*$")
@@ -83,7 +83,8 @@ def attach_transcript(conn: psycopg.Connection, meeting_id: int, data: dict[str,
         conn.execute(
             """INSERT INTO transcript_segments (transcript_id, seq, start_s, end_s, speaker_label, speaker_score, person_id, text)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-            (tid, seq, float(t["start"]), float(t["end"]), speaker, t.get("score"), find_person(conn, speaker), str(t.get("text") or "")),
+            (tid, seq, float(t["start"]), float(t["end"]), speaker, t.get("score"),
+             None if unnamed_speaker(speaker) else find_person(conn, speaker), str(t.get("text") or "")),
         )
     return tid
 

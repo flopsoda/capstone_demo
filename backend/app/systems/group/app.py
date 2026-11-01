@@ -90,6 +90,8 @@ class DeskRequest(Identified):
     classification: int | None = None
     kind: str | None = None  # report: minutes(회의록) · report(회의 결과 보고서)
     owner: str | None = None  # items: 담당 지정
+    query: str | None = None  # minutes: 검색어
+    offset: int | None = None  # minutes: 몇 번째부터
     due: str | None = None  # items: 기한 지정 (YYYY-MM-DD)
 
 
@@ -138,6 +140,12 @@ def desk_schedule(body: DeskRequest) -> dict[str, Any]:
 @app.post("/api/desk/meeting")
 def desk_meeting(body: DeskRequest) -> dict[str, Any]:
     return _desk(body, lambda v: meeting_desk.meeting(store=MEETING_STORE, viewer=v, meeting_id=body.meeting_id))
+
+
+@app.post("/api/desk/minutes")
+def desk_minutes(body: DeskRequest) -> dict[str, Any]:
+    return _desk(body, lambda v: meeting_desk.minutes_list(store=MEETING_STORE, viewer=v, query=body.query, status=body.status,
+                                                           offset=body.offset))
 
 
 @app.post("/api/desk/report", response_model=None)

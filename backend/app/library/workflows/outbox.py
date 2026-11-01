@@ -37,6 +37,7 @@ from .meeting_store import (
     confirm_denied,
     kst_date,
     kst_minute,
+    unnamed_speaker,
 )
 
 log = logging.getLogger("agents")
@@ -45,7 +46,6 @@ ACTIONS = ("list", "resend", "reject", "set_address")
 AGENT = "agent"  # approved_by of mail the agent queued ready to send
 MAX_ATTEMPTS = 5
 STALE_DAYS = 3  # mail not sent within this many days (no mail server yet) is dropped, not sent late
-UNIDENTIFIED = "미확인 화자"  # speakers the transcript could not name get no mail
 REMINDER_DAYS_BEFORE = (3, 1, 0)
 OVERDUE_EVERY_DAYS = 7  # overdue reminders: the day after the due date, then weekly
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -105,8 +105,9 @@ def address_of(conn: psycopg.Connection, person_id: int) -> tuple[str, str | Non
 def queue(conn: psycopg.Connection, *, kind: str, meeting_id: int, person_id: int, subject: str, body: str,
           created_by: str | None, action_item_id: int | None = None, dedupe_key: str | None = None) -> int | None:
     """One mail to a directory entry, ready to send once its address is found; None when `dedupe_key` was
-    queued before or the recipient is a speaker the transcript could not name."""
-    if conn.execute("SELECT 1 FROM people WHERE id = %s AND display_name LIKE %s", (person_id, UNIDENTIFIED + "%")).fetchone():
+    queued before or the recipient is a voice the transcript could not name ("화자 A")."""
+    who = conn.execute("SELECT display_name FROM people WHERE id = %s", (person_id,)).fetchone()
+    if who and unnamed_speaker(who["display_name"]):
         return None
     label, email = address_of(conn, person_id)
     row = conn.execute(

@@ -114,6 +114,22 @@ def test_desk_assigns_owner_and_due_and_mails_the_owner_once_the_minutes_are_fin
     assert desk("items", item_id=item, owner="김민수")["mail_queued"] == []  # 같은 배정은 다시 보내지 않음
 
 
+def test_desk_finds_minutes_by_words_and_status(desk):
+    save_minutes(store=STORE, viewer=WRITER, **{**MINUTES, "body": None, "topics": ["재고", "협력사"]})
+    other = save_minutes(store=STORE, viewer=WRITER, **{**MINUTES, "title": "뉴로엣지 인수 점검", "date": "2026-10-20", "body": None,
+                                                        "summary": "가격 상한을 정했다.", "action_items": [], "topics": ["M&A"]})
+    every = desk("minutes")
+    assert [m["title"] for m in every["minutes"][:2]] == ["공급망 점검회의", "뉴로엣지 인수 점검"]  # 최근 순 (그 뒤는 fixture)
+    assert every["counts"]["total"] == len(every["minutes"]) and every["more"] is False
+    assert every["minutes"][1]["id"] == other["meeting_id"]
+    found = desk("minutes", query="협력사 재고")  # 낱말 모두 (주제에서)
+    assert [m["title"] for m in found["minutes"]] == ["공급망 점검회의"] and found["counts"]["draft"] == 1
+    assert desk("minutes", query=other["meeting_id"], status="final")["minutes"] == []  # 초안이라 확정 목록에 없음
+    assert [m["status"] for m in desk("minutes", query=other["meeting_id"], status="draft")["minutes"]] == ["draft"]
+    assert desk("minutes", query="100%")["minutes"] == []  # 검색어의 %는 글자 그대로
+    assert "error" in desk("minutes", status="held")
+
+
 def test_desk_without_a_user_sees_nothing(desk, monkeypatch):
     monkeypatch.setenv("MEETINGS_ANONYMOUS_CLEARANCE", "0")
     save_minutes(store=STORE, viewer=WRITER, **MINUTES)

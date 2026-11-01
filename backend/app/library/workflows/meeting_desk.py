@@ -20,6 +20,8 @@ from .outbox import manage_outbox
 
 UPCOMING_DAYS = 14
 MINUTES_LIMIT = 60
+MINUTES_PAGE = 15
+MINUTES_STATUSES = ("draft", "final")
 ROLE_ORDER = ("chair", "secretary", "required", "optional", "observer")
 VIEWS = ("mine", "all", "overdue")
 
@@ -66,6 +68,49 @@ def overview(*, store: MeetingStore, viewer: Viewer, today: date | None = None) 
                      "version": r["version"], "classification": r["classification"], "open_flags": r["open_flags"],
                      "decisions": r["decisions"], "items": r["items"]} for r in minutes],
         "my_items": items,
+    }
+
+
+def _like(word: str) -> str:
+    return "%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def minutes_list(*, store: MeetingStore, viewer: Viewer, query: str | None = None, status: str | None = None,
+                 offset: int | None = 0) -> dict[str, Any]:
+    """회의록 찾기: 회의명 · 회의 id · 주제 · 요약에 검색어(띄어 쓴 낱말 모두)가 든 회의록을 최근 순으로 한 쪽씩.
+    초안 · 확정으로 거를 수 있고, 같은 검색어의 초안 · 확정 건수를 함께 돌려준다."""
+    if status and status not in MINUTES_STATUSES:
+        return {"error": "status는 draft(초안) 또는 final(확정)입니다."}
+    offset = max(0, int(offset or 0))
+    clauses, params = [VISIBLE], {**viewer.scope()}
+    for i, word in enumerate((query or "").split()[:5]):
+        clauses.append(f"""(m.title ILIKE %(w{i})s OR m.code ILIKE %(w{i})s OR mi.summary ILIKE %(w{i})s
+                          OR array_to_string(m.topics, ' ') ILIKE %(w{i})s)""")
+        params[f"w{i}"] = _like(word)
+    where = " AND ".join(clauses)
+    only = "AND mi.status = %(status)s" if status else ""
+    with store.connect() as conn:
+        counts = conn.execute(
+            f"""SELECT count(*) AS total, count(*) FILTER (WHERE mi.status = 'draft') AS draft,
+                       count(*) FILTER (WHERE mi.status = 'final') AS final
+                FROM meetings m JOIN minutes mi ON mi.meeting_id = m.id WHERE {where}""",
+            params,
+        ).fetchone()
+        rows = conn.execute(
+            f"""SELECT m.code, m.title, m.starts_at, m.ends_at, m.classification, mi.status, mi.version,
+                       (SELECT count(*) FROM compliance_flags f WHERE f.meeting_id = m.id AND f.status = 'open') AS open_flags
+                FROM meetings m JOIN minutes mi ON mi.meeting_id = m.id
+                WHERE {where} {only}
+                ORDER BY m.starts_at DESC, m.id DESC LIMIT %(limit)s OFFSET %(offset)s""",
+            {**params, "status": status, "limit": MINUTES_PAGE + 1, "offset": offset},
+        ).fetchall()
+    return {
+        "counts": dict(counts),
+        "offset": offset,
+        "more": len(rows) > MINUTES_PAGE,
+        "minutes": [{"id": r["code"], "title": r["title"], "date": kst_date(r["starts_at"]), "time": time_label(r["starts_at"], r["ends_at"]),
+                     "status": r["status"], "version": r["version"], "classification": r["classification"],
+                     "open_flags": r["open_flags"]} for r in rows[:MINUTES_PAGE]],
     }
 
 

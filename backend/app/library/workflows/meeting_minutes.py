@@ -44,6 +44,7 @@ from .meeting_store import (
     parse_time_of_day,
     person_id,
     resolve_owner,
+    unnamed_speaker,
 )
 from .outbox import queue_minutes_mail, unit_owned
 from .transcripts import TranscriptUnavailable, attach_transcript, fetch_transcript, segment_at
@@ -127,13 +128,17 @@ def minutes_record(conn: psycopg.Connection, meeting_id: int) -> dict[str, Any]:
 
 def _missing_for_final(conn: psycopg.Connection, meeting_id: int) -> list[str]:
     rows = conn.execute(
-        "SELECT code, text, owner_person_id, owner_unit_id, due_date FROM action_items WHERE meeting_id = %s AND status <> 'cancelled' ORDER BY id",
+        """SELECT a.code, a.text, a.owner_person_id, a.owner_unit_id, a.due_date, p.display_name AS owner_name
+           FROM action_items a LEFT JOIN people p ON p.id = a.owner_person_id
+           WHERE a.meeting_id = %s AND a.status <> 'cancelled' ORDER BY a.id""",
         (meeting_id,),
     ).fetchall()
     missing = []
     for r in rows:
         if r["owner_person_id"] is None and r["owner_unit_id"] is None:
             missing.append(f"{r['code']} '{r['text']}': 담당자 없음")
+        elif unnamed_speaker(r["owner_name"]):  # "화자 A": nobody to send the task to yet
+            missing.append(f"{r['code']} '{r['text']}': 담당 '{r['owner_name']}'의 실제 담당자 지정 필요")
         if r["due_date"] is None:
             missing.append(f"{r['code']} '{r['text']}': 기한 없음")
     return missing
@@ -165,7 +170,7 @@ def _write_decisions(conn: psycopg.Connection, meeting_id: int, decisions: list[
             warnings.append(f"결정 {seq}: 알 수 없는 종류 '{kind}' → decision으로 저장")
             kind = "decision"
         speaker = (d.get("speaker") or "").strip() or None
-        speaker_id = find_person(conn, speaker) if speaker else None
+        speaker_id = find_person(conn, speaker) if speaker and not unnamed_speaker(speaker) else None
         label = None if speaker_id else speaker
         if kind in ("criterion", "opinion") and not speaker:
             label = UNKNOWN_SPEAKER

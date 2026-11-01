@@ -434,6 +434,24 @@ def test_the_agent_finds_addresses_itself_and_never_guesses(meeting_db, director
     }  # and nothing for the unidentified speaker
 
 
+def test_unnamed_voices_stay_labels_and_need_a_real_owner(meeting_db, directory):
+    people = [{"name": "김민수", "title": "CEO", "role": "chair"}, {"name": "이서연", "role": "secretary"},
+              {"name": "화자 A"}, {"name": "화자 B"}]
+    said = [{"kind": "opinion", "speaker": "화자 B", "statement": "재고를 더 늘려야 합니다"}]
+    task = {"text": "협력사별 재고 현황 보고", "owner": "화자 A", "due": "2026-10-28"}
+    draft = save(attendees=people, decisions=said, action_items=[task], finalize=True)
+    assert not draft["finalized"] and any("'화자 A'의 실제 담당자 지정 필요" in w for w in draft["warnings"])
+    final = save(meeting_id=draft["meeting_id"], finalize=True, attendees=people, decisions=said,
+                 action_items=[{**task, "owner": "박지훈"}])
+    assert final["finalized"]
+    assert not [m for m in final["mail_queued"] if m["to"].startswith("화자")]  # a voice has no mailbox
+    other = save(title="다른 회의", attendees=[{"name": "화자 A"}], decisions=said, action_items=[])
+    with STORE.connect() as conn:
+        rows = conn.execute("SELECT speaker_id, speaker_label FROM decisions WHERE statement LIKE '재고를 더%%' ORDER BY id").fetchall()
+        assert [(r["speaker_id"], r["speaker_label"]) for r in rows] == [(None, "화자 B"), (None, "화자 B")]  # never one person
+    assert other["saved"]
+
+
 def test_reminders_before_and_after_the_due_date(meeting_db, directory):
     draft = save()
     save(meeting_id=draft["meeting_id"], finalize=True)  # 박지훈's item is due 2026-10-28

@@ -205,7 +205,7 @@ Advisory Agent  → run_mna_review
     `approved`(`approved_by = 'agent'`)로 쌓이고 배경 작업이 발송한다. 받는 주소는 `people.email` → gateway 디렉터리(`DIRECTORY_URL`, Bearer `INTERNAL_API_KEY`)에서 이름이 정확히 한 명인
     로그인 등록 이메일 → 임직원 · 외부 연락처 `staff_directory`(system fixture `data/meetings.json`의 `directory`로 seed; 이름이 같고 직함이 맞는 한 명, 이름 없이 역할로만 기록된 사람은
     "외부 자문위원 (OO회계법인)"처럼 그 기관에서 그 역할을 가진 한 명) 순으로 찾고, 찾은 주소는 `people.email`에 남긴다. 주소를 추측하지 않는다: 아무 데서도 못 찾으면 `needs_address`로 두고
-    매일 아침 다시 찾는다. "미확인 화자"에게는 메일을 만들지 않는다. 사람은 실패한 메일 다시 보내기(`resend`) · 안 보낸 메일 취소(`reject`) · 주소 정정(`set_address`, 바로 다시 보냄)만 한다.
+    매일 아침 다시 찾는다. 목소리가 등록되지 않은 발언자("화자 A" · "화자 B" …, 예전 변환본은 "미확인 화자 N")에게는 메일을 만들지 않고, 그런 라벨이 담당인 할 일은 실제 담당자를 정해야 확정된다. 사람은 실패한 메일 다시 보내기(`resend`) · 안 보낸 메일 취소(`reject`) · 주소 정정(`set_address`, 바로 다시 보냄)만 한다.
     부서 담당 Action Item은 주소가 없어 배정 메일을 만들지 않고 그렇게 알린다.
   - **배경 작업.** `jobs.start_meeting_jobs`(app lifespan, `MEETINGS_BACKGROUND_JOBS=1`일 때만): 매분 발송 대기 메일을 SMTP(`SMTP_*`, 미설정이면 대기)로 발송(5회 실패하면 failed,
     발송 대기가 된 지 3일이 지난 메일은 늦게 보내지 않고 failed — 메일 서버를 나중에 설정했을 때 지난 안내가 한꺼번에 나가지 않도록),

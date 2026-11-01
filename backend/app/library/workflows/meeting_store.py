@@ -291,6 +291,16 @@ def parse_person_label(label: str) -> tuple[str, str | None, str | None]:
     return _COURTESY.sub("", name).strip() or name, ", ".join(parts) or None, role
 
 
+# A voice the speech service could not match to an enrolled voiceprint: "화자 A", "화자 B", … in the order the voices
+# first speak (one letter, one voice, within a recording). Older transcripts said "미확인 화자 1".
+_UNNAMED = re.compile(r"화자 [A-Z]{1,2}|미확인 화자(?: \d+)?")
+
+
+def unnamed_speaker(label: str | None) -> bool:
+    """A transcript label that names no one: a voice of one recording, not a person to link or mail."""
+    return bool(label) and _UNNAMED.fullmatch(label.strip()) is not None
+
+
 def find_person(conn: psycopg.Connection, label: str) -> int | None:
     """The person a label names: same name, and when the label has a title, the same title — or one that
     contains or is contained in it ("K전자 CFO" ~ "CFO")."""
