@@ -11,6 +11,8 @@
 
 기존 Agent와 Workflow Tool을 최대한 재활용하여 인수가격 변경, 위험 조건 변화, 경영자 Persona 종합 평가 기능을 구현하는 것을 목표로 한다.
 
+본 문서는 기존 M&A 경영자문 Workflow의 구조와 개선 이전의 평가 로직을 분석한 결과이다. 이후 진행한 평가 로직 수정 및 검증 결과는 `02_evaluation_fix.md`에 별도로 정리하였다.
+
 ## 2. 기존 시스템 구조
 
 현재 시스템은 LangGraph 기반 AI Agent와 규칙 기반 M&A 평가 Workflow로 구성되어 있다.
