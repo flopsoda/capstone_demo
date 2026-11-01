@@ -309,4 +309,4 @@ M&A What-if 시나리오 분석 기능을 구현하여 사용자가 인수가격
 
 ---
 
-**검증 범위:** 로컬 개발 환경에서 자동 테스트 18개 통과 및 브라이트셀·뉴로엣지의 M&A 평가 Workflow 실행 확인. 전체 Workflow 검증은 'review_acquisition()' 함수를 CFO 관점으로 직접 실행한 결과이며, 실제 LangGraph Agent 및 Super Agent 연동 테스트는 포함하지 않음.
+**검증 범위:** 로컬 개발 환경에서 자동 테스트 18개 통과 및 브라이트셀·뉴로엣지의 M&A 평가 Workflow 실행 확인. 전체 Workflow 검증은 `review_acquisition()` 함수를 CFO 관점으로 직접 실행한 결과이며, 실제 LangGraph Agent 및 Super Agent 연동 테스트는 포함하지 않음.
