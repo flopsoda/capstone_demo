@@ -490,12 +490,18 @@ def _ip_risk(c: dict, s: dict) -> Assessment:
 
 def _integration(c: dict, s: dict) -> Assessment:
     t = c["technology"]
+    core_team = t["core_team"]
+    integration_months = t["post_acquisition_integration_months"]
+
     return _a(
         "integration",
         "기술 통합 가능성",
         "neutral",
-        f"통합 기간 {_months(t['post_acquisition_integration_months'])} 예상, 설계 조직의 독립성 유지가 전제",
-        [f"인수 후 통합 {_months(t['post_acquisition_integration_months'])}", "핵심 설계팀 유지 여부가 통합 일정의 선행 조건"],
+        f"통합 기간 {_months(integration_months)} 예상, {core_team}의 안정적 유지가 전제",
+        [
+            f"인수 후 통합 {_months(integration_months)}",
+            f"{core_team} 유지 여부가 통합 일정의 선행 조건",
+        ],
     )
 
 

@@ -12,6 +12,7 @@ from app.library.workflows.mna_review import _ip_risk
 from app.library.workflows.mna_review import _business_value
 from app.library.workflows.mna_review import _financial_downside
 from app.library.workflows.mna_review import _deal_terms, _key_talent_retention
+from app.library.workflows.mna_review import _integration
 
 # The workflow is system-neutral; these tests run it over K Electronics' company store.
 review_acquisition = partial(_review_acquisition, path=DATA_DIR / "companies.json")
@@ -281,3 +282,26 @@ def test_company_specific_talent_and_deal_terms(core_team, fair_value):
     assert deal["verdict"] == "neutral"
     assert talent["verdict"] == "concern"
 
+@pytest.mark.parametrize(
+    "core_team",
+    [
+        "창업자 CTO 중심의 핵심 설계팀",
+        "공정 개발 총괄 중심의 핵심 공정팀",
+    ],
+)
+def test_integration_company_specific_team(core_team):
+    """기업별 핵심인력이 기술 통합 평가에 반영되는지 확인한다."""
+    company = {
+        "technology": {
+            "core_team": core_team,
+            "post_acquisition_integration_months": [12, 18],
+        }
+    }
+
+    result = _integration(company, {})
+
+    assert result["criterion"] == "integration"
+    assert result["verdict"] == "neutral"
+    assert core_team in result["finding"]
+    assert core_team in result["evidence"][1]
+    assert "12~18개월" in result["finding"]
