@@ -1,10 +1,7 @@
 # M&A 경영자문 Agent Workflow 확장 개발 계획
 
-**작성일:** 2026-10-31  
 **프로젝트:** C-Level 경영지원 AI 멀티 에이전트  
 **담당 분야:** 경영자문 Agent  
-**개발 저장소:** Hanyul-ny/Capstone_teamproject  
-**개발 브랜치:** feature/advisory-agent
 
 ## 1. 개발 개요
 
