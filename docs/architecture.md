@@ -189,9 +189,15 @@ Advisory Agent  → run_mna_review
   `create`의 `carry_over_from`은 이전 회의의 보류 안건과 미결 쟁점(`issue`)을 새 회의 안건으로 이월한다. 시각은 한국 시간이며 `list`는 `today`(요일 포함)를 준다.
   예약된 회의의 회의록은 같은 id로 `save_meeting_minutes`에 쓴다.
 - `backend/app/library/tools/run_company_risk_news_analysis.py`: `make_run_company_risk_news_analysis(path)` → `@tool("run_company_risk_news_analysis")`, 인자 `query: str, company: str, topics: list[str] | None`.
-- `backend/app/library/workflows/company_risk_news_analysis.py`: 순수 함수 `analyze_company_risk_news(..., path=...)`가 주어진 기사 store(K: `data/news.json`, 가상 기사 5건)를 조회한다.
-  `company`를 기사 `companies` alias와 대조해 대상 기업 기사만 남기고, `query`/`topics`에서 리스크 category 키워드(`customer_concentration`, `legal_dispute`, `key_personnel`, `labor_dispute`)를 찾아 좁힌 뒤 HIGH → MEDIUM → LOW, 최신순으로 정렬한다. 키워드가 없으면 그 기업의 모든 리스크를 돌려준다.
-  반환은 dict (`matched`, `risks[]`에 `category, label, level, headline, summary, key_facts, source{id,date,name}`). 실제 뉴스 API / 검색 / RAG로 바꿀 때는 이 함수 본문만 교체하면 Tool · Agent · K Super 계약은 그대로다.
+- `backend/app/library/workflows/company_risk_news_analysis.py`: 순수 함수 `analyze_company_risk_news(..., path=..., collected=...)`가 기사 store 두 개를 함께 조회한다: 가상 fixture(`data/news.json`, K 8건)와 수집 store(`data/collected/news.json`, 없으면 빈 것으로 본다).
+  `company`를 기사 `companies` alias와 대조해 대상 기업 기사만 남기고, `query`/`topics`에서 리스크 category 키워드(`customer_concentration`, `legal_dispute`, `key_personnel`, `labor_dispute`, `regulatory`, `market_reaction`, `operations`)를 찾아 좁힌다. 키워드가 없으면 그 기업의 모든 리스크를 돌려준다.
+  같은 사안의 후속 보도(`issue` 필드가 같거나, 없으면 같은 category · 같은 `companies` 집합. 수집 기사는 여기에 더해 기업명을 뺀 제목이 비슷해야 한다. 단 `market_reaction`은 한 주제를 여러 표현으로 쓰므로 3일 안의 보도를 한 사안으로 본다)는 리스크 하나로 묶는다: 수준은 보도 중 가장 높은 것, 대표 보도(`headline` · `summary` · `source`)는 그 수준의 최신 보도, `key_facts`는 모든 보도의 사실(최대 6개).
+  정렬은 HIGH → MEDIUM → LOW, 같은 수준이면 대표 보도 최신순. `"risk": null`인 기사는 리스크가 아닌 우호적 보도로 `positive_signals`에 따로 담는다.
+  반환은 dict (`matched` = 리스크 수, `risks[]`에 `category, label, level, headline, summary, key_facts, source{id,date,name,url?}` + `report_count, outlet_count, first_reported, last_reported, trend`(단일 보도 / 확대 / 완화 / 지속; 수집 기사는 매체마다 표현이 달라 완화로 보지 않는다), 규칙으로 분류한 수집 기사가 3곳 이상 매체에 실리면 수준을 한 단계 올리고 `escalated_by_coverage`로 표시, `timeline[]`(오래된 순), `check_points[]`(리스크 종류별 확인 사항), `positive_signals[]`: 같은 이야기는 하나로 묶고 `outlet_count`가 큰 순, `outlet_tone[]`: 매체별 부정·긍정·중립 기사 수와 논조 — 우호/비우호/중립, 기사 2건 미만은 판단 보류).
+  뉴스는 공개 자료라 호출 사용자(principal)에 따라 결과가 달라지지 않는다. store 파일은 바뀌면 다시 읽는다(수집기가 backend 실행 중에 쓸 수 있음).
+- `backend/app/library/workflows/news_collection.py`: 실제 뉴스를 모으는 고정 절차. Agent-visible이 아니며 CLI로 실행한다(`python -m app.library.workflows.news_collection --data-dir <system data>`).
+  관심 기업(system의 `companies.json` + `--company`) → 네이버 뉴스 검색 API(`NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET`) 또는 키가 없으면 Google 뉴스 RSS → 기사마다 category · level · key_facts 라벨(설정된 LLM, 없거나 답이 쓸 수 없으면 키워드 규칙) → `data/collected/news.json`에 fixture와 같은 모양으로 병합(같은 링크, 같은 매체의 거의 같은 제목은 건너뜀. 다른 매체의 같은 기사는 보도 수를 세기 위해 남김. 제목에 기업명이 없는 기사는 지나가는 언급으로 보고 중립(`sentiment: neutral`), `--keep-days`보다 오래된 기사는 삭제).
+  수집 store는 실제 기사이므로 Git에 넣지 않는다(`.gitignore`). 한 기업의 수집 실패는 나머지를 멈추지 않는다.
 - `backend/app/library/tools/run_mna_review.py`: `make_run_mna_review(path)` → `@tool("run_mna_review")`, 인자 `query: str, company: str, persona: str = "CEO", context: str | None`.
 - `backend/app/library/workflows/mna_review.py`: 순수 함수 `review_acquisition(..., path=...)`이 주어진 기업 store(K: `data/companies.json`, 가상 기업 1건: 재무·가치·고객·기술·전략)를 읽는다.
   - **persona는 Agent가 아니라 평가 관점 parameter**다. `PERSONAS` 표가 CEO(전략 적합성 · Time-to-Market · 리스크/기회 균형 · 사업 추진 가치),
@@ -590,7 +596,8 @@ LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`http
 | --- | --- | --- |
 | `backend/tests/test_workflow.py` | 아니오 (테스트 DB) | 회의 조회 workflow — 회의 저장소 seed 위에서 기존 검색 결과 그대로, 등급 필터(대외비 회의는 사내 사용자에게 읽히지 않음), id · 기간 조회 |
 | `backend/tests/test_meeting_records.py` | 아니오 (테스트 DB) | 회의록 초안 → 확정(담당 · 기한 없으면 확정 안 됨) → 정정(사유 필수, snapshot, Action Item 유지), 쓰기 권한(등급 · A2A), 진행 조회(지연 순 · 건수 · 담당 · 기간 · 키워드), 갱신 이력과 후보, 일정 예약 · 이월 · 취소, viewer가 run의 principal에서 오는지, system별 저장소 분리, 저장소 없음 → 오류 결과 |
-| `backend/tests/test_news_workflow.py` | 아니오 | 뉴스 리스크 workflow (기업 alias, category 필터, 정렬) |
+| `backend/tests/test_news_workflow.py` | 아니오 | 뉴스 리스크 workflow (기업 alias, category 필터, 정렬, 후속 보도 묶기 · 추세, 확인 사항, 우호적 보도, 수집 store 함께 읽기) |
+| `backend/tests/test_news_collection.py` | 아니오 (네트워크 · LLM 없이 가짜 응답) | 뉴스 수집: Google RSS · 네이버 응답 파싱, 규칙 · LLM 라벨(잘못된 행은 규칙으로), 중복 · 기간 병합, 수집 → 분석 연결, 한 기업 실패 시 계속 |
 | `backend/tests/test_mna_review_workflow.py` | 아니오 | M&A 검토 workflow (persona별 항목 순서 · 우려 · 조건 순서, 같은 권고와 조건 집합, context 신호, 모르는 기업/persona) |
 | `backend/tests/test_capabilities.py` | 아니오 | Registry 내용(kind, allowed_agents), Tool 정의가 source of truth, Agent가 Registry subset을 쓰는지, Skill이 system prompt에 들어가는지 |
 | `backend/tests/test_k_super.py` | 아니오 | `route_on_tool_calls`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model(`agent_core.get_chat_model` patch) + stub 위임 Tool로 만든 그래프(`k_super.build_k_super` patch)로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
@@ -613,8 +620,8 @@ LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`http
 | Group Super | REAL (Group system + Group UI) | 같음 |
 | A2A | REAL: Group Tool → K `/api/a2a/run` HTTP, 최종 응답만 Agent에 전달, lifecycle은 관찰용 relay. Group UI가 Group backend를 쓴다 | 같음 |
 | Meeting 데이터 | Postgres 회의 저장소(system별 schema, fixture로 seed). 회의록 · 결정 · Action Item · 진행 이력 · 일정. 키워드 점수 조회 | + 녹음 transcript 저장과 보존 기간 삭제, 의미 검색(임베딩) |
-| 사용자 맥락 | 요청 body의 `principal`(gateway가 보냄)을 run이 들고 Tool이 읽음. 미팅 Tool만 사용 | 다른 Tool(뉴스 · 자문 자료 등급)도 같은 규칙 |
-| News 데이터 | `data/news.json` 고정 fixture를 키워드로 조회 | 실제 뉴스 API / 검색 / RAG (`analyze_company_risk_news` 본문만 교체) |
+| 사용자 맥락 | 요청 body의 `principal`(gateway가 보냄)을 run이 들고 Tool이 읽음. 미팅 Tool만 사용 (뉴스는 공개 자료) | 자문 자료 등급도 같은 규칙 |
+| News 데이터 | `data/news.json` 가상 fixture + 수집기(`news_collection`)가 채우는 `data/collected/news.json`을 함께 조회, 후속 보도를 사안 단위로 묶음 | 실제 뉴스 API / 검색 / RAG (`analyze_company_risk_news` 본문만 교체) |
 | Advisory 데이터 | `data/companies.json` 고정 fixture + 결정적 규칙 evaluator | 실제 재무 모델 / 밸류에이션 / 실사 데이터 (evaluator만 교체) |
 | Workflow 결과 렌더링 | `toolResultBlocks`가 Tool 이름별 `switch` (meeting, news, advisory 전용 렌더) | Tool이 늘어나도 frontend가 Tool별 지식을 과도하게 갖지 않는 방식 (미결정) |
 | 상위 Agent로의 결과 전달 | 최종 응답 문자열만 `ToolMessage`. Advisory에 필요한 이전 결과는 K Super가 쓴 `task` 문장으로만 전달. 종합도 K Super가 history의 텍스트만 보고 쓴다 | 필요 시 범용 `artifacts` / `context` 구조 (미결정) |

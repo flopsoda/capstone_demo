@@ -53,6 +53,13 @@ npm run build    # tsc + vite build
 #                                   Group backend의 /api/events(SSE)를 구독해 전체 Agent Graph · Step 1~8 · 협업 세션을 실제 이벤트로만 보여준다
 ```
 
+실제 뉴스 수집 (선택, backend/에서). 결과는 `data/collected/news.json`(Git 제외)에 쌓이고 뉴스 Tool이 fixture와 함께 읽습니다:
+
+```bash
+.venv/bin/python -m app.library.workflows.news_collection --data-dir app/systems/k_electronics/data --company 삼성전자 --days 7
+# NAVER_CLIENT_ID / NAVER_CLIENT_SECRET이 .env에 있으면 네이버 뉴스 API, 없으면 Google 뉴스 RSS. LLM 키가 없거나 --no-llm이면 키워드 규칙으로 분류
+```
+
 backend 테스트:
 
 ```bash
@@ -154,7 +161,8 @@ backend/
         meeting_minutes.py           회의록 초안 저장 · 확정(담당 · 기한 검사) · 확정본 정정(사유 + 이전 버전 snapshot)
         action_items.py              Action Item 진행 조회(지연 순, 상태별 건수) · 갱신(이력 기록)
         meeting_schedule.py          회의 일정 조회 · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소
-        company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(path) 조회
+        company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(fixture + 수집분) 조회, 후속 보도를 사안으로 묶음
+        news_collection.py           실제 뉴스 수집 CLI: 네이버 API / Google 뉴스 RSS → LLM·규칙 라벨 → data/collected/news.json
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
     systems/
       group/                         Group agent system (SYSTEM = "group") — `uvicorn app.systems.group.app:app --port 8001`
