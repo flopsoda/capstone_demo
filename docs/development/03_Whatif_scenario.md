@@ -1,190 +1,193 @@
 # 03. M&A What-if 시나리오 분석 기능 개발
 
-## 1. 개발 개요
-
 - **개발 주제:** M&A 경영자문 Agent의 What-if 시나리오 분석 기능 확장
 - **개발 목적:** 사용자 지정 인수 조건에 따른 M&A 타당성 재평가 및 변경 전후 결과 비교
 
-### 개발 배경
+## 1. 개발 목적
 
-기존 M&A 경영자문 Workflow는 기업 데이터에 저장된 인수가격, 영업이익률, 고객 의존도 등을 기준으로 인수 타당성을 평가했다.
+기존 M&A 경영자문 Workflow는 `companies.json`에 저장된 기업 정보를 기준으로 인수 타당성을 평가했다.
 
-하지만 사용자가 기존 데이터와 다른 인수가격을 제시하더라도 이를 직접 반영하여 재평가하는 기능은 제공하지 않았다.
+따라서 사용자가 인수가격, 영업이익률, 고객 의존도 등의 조건을 변경하더라도 변경된 조건을 적용한 평가 결과와 기존 결과를 비교하기 어려웠다.
 
-이에 따라 사용자가 인수가격 등 주요 조건을 직접 변경하고, 기존 평가와 변경된 평가의 차이를 비교할 수 있도록 What-if 시나리오 분석 기능을 개발했다.
+이번 개발에서는 기존 M&A 평가 로직을 재사용하면서 다음 기능을 추가했다.
 
-## 2. 주요 개발 내용
+- 사용자가 지정한 인수 조건을 반영하는 What-if 시나리오 분석
+- 변경 전후 평가 결과, 위험 수준, 최종 인수 권고 비교
+- CEO·CFO·CTO 관점에 따른 변경 항목 정렬
+- 변경 전후 인수 진행 조건 비교
+- 기존 경영자문 Tool 및 UI 반환 형식과의 호환성 유지
 
-### 2.1. 인수가격 변경 및 비교 기능
+## 2. 수정 및 추가 파일
 
-**구현 함수**
-- `apply_price_scenario()`
-- `compare_price_scenarios()`
-
-사용자가 제시한 새로운 인수가격을 기업 데이터 복사본에 적용하고, 기존 가격과 변경 가격에 대한 평가 결과를 비교하도록 구현했다.
-
-예를 들어 뉴로엣지의 인수가격을 2.8조 원에서 2.2조 원으로 변경하면, 기존의 높은 가격 위험이 완화되는지 확인할 수 있다.
-
-### 2.2. 수익성 및 고객 의존도 변경 기능
-
-**구현 함수**
-- `apply_profitability_scenario()`
-- `apply_customer_scenario()`
-
-인수가격 외에도 영업이익률과 최대 고객 매출 비중을 변경할 수 있도록 확장했다.
-
-- 영업이익률: -8.2% → +5%
-- 최대 고객 매출 비중: 46% → 25%
-
-입력값 검증을 추가하여 허용 범위를 벗어난 수치나 유효하지 않은 값이 전달되면 오류를 발생시키도록 구현했다.
-
-### 2.3. 복수 조건 기반 전체 M&A 평가 비교
-
-**구현 함수**
-- `compare_mna_scenarios()`
-
-인수가격, 영업이익률, 고객 의존도를 동시에 변경할 수 있도록 구현했다.
-
-기존 `mna_review.py`의 `evaluate_all()`과 `recommend()`를 재사용하여 변경 전후 전체 평가 결과와 최종 인수 권고를 비교한다.
-
-주요 비교 항목은 다음과 같다.
-
-- 평가 항목별 판단(`verdict`)
-- 위험 수준(`level`)
-- 판단 근거(`finding`)
-- 최종 인수 권고(`recommendation`)
-
-원본 기업 데이터의 변경을 방지하기 위해 `deepcopy()`를 사용했다.
-
-### 2.4. CEO·CFO·CTO 관점별 결과 정렬
-
-**구현 함수**
-- `compare_persona_scenarios()`
-
-기존 `PERSONAS` 설정을 재사용하여 경영진 관점에 따라 중요한 평가 항목을 우선 표시하도록 구현했다.
-
-- CEO: 전략적 적합성, 시장 진입 속도, 위험과 기회 균형 등
-- CFO: 인수가격, 수익성, 고객 집중도 등
-- CTO: 기술 적합성, 핵심인력 유지, 특허 위험 등
-
-동일한 시나리오에는 기존 평가 규칙을 동일하게 적용하며, Persona에 따라 변경 항목의 표시 우선순위를 조정한다.
-
-### 2.5. 변경 전후 인수 권고 조건 비교
-
-기존 What-if 결과에 인수 진행 조건을 비교하는 기능을 추가했다.
-
-**추가 반환 항목**
-
-| 반환값 | 설명 |
+| 파일 | 수정 목적 |
 |---|---|
-| `before_conditions` | 기존 인수 진행 조건 |
+| `backend/app/library/workflows/mna_scenario.py` | What-if 시나리오 분석 Workflow 신규 구현 |
+| `backend/app/library/tools/run_mna_review.py` | 기존 M&A Tool에 What-if 기능 연결 및 UI 호환성 개선 |
+| `backend/app/library/skills/mna_feasibility_review.py` | 자연어 변경 조건을 Tool에 전달하도록 호출 지침 확장 |
+| `backend/tests/test_mna_scenario.py` | 신규 기능 및 기존 기능 호환성 검증 |
+
+기존 `mna_review.py`의 평가 함수와 `evaluate_all()`, `recommend()`를 재사용했다.
+
+공용 LangGraph 실행 구조, Super Agent, A2A 통신, 프론트엔드 UI 코드는 수정하지 않았다.
+
+## 3. 주요 개발 내용
+
+### 3.1. What-if 시나리오 분석 Workflow 추가
+
+**파일:** `mna_scenario.py`
+
+| 함수 | 기능 |
+|---|---|
+| `apply_price_scenario()` | 변경된 인수가격을 기업 데이터에 적용 |
+| `compare_price_scenarios()` | 변경 전후 가격 적정성 평가 비교 |
+| `apply_profitability_scenario()` | 변경된 영업이익률 적용 |
+| `apply_customer_scenario()` | 변경된 최대 고객 매출 비중 적용 |
+| `compare_mna_scenarios()` | 하나 이상의 조건을 변경하고 전체 M&A 평가 결과 비교 |
+| `compare_persona_scenarios()` | CEO·CFO·CTO별 중요 평가 항목 우선 정렬 |
+
+기존 `evaluate_all()`을 통해 변경 전후 평가를 수행하고, `recommend()`로 각각의 최종 인수 권고를 산출하도록 구현했다.
+
+주요 비교 정보는 다음과 같다.
+
+- `assumptions`: 변경 조건
+- `changes`: 평가가 변경된 항목과 변경 전후 판단·위험 수준·근거
+- `before_recommendation`: 기존 인수 권고
+- `after_recommendation`: 변경 후 인수 권고
+
+입력값 유효성 검사를 추가했으며, `deepcopy()`를 사용해 변경된 조건이 원본 기업 데이터에 영향을 주지 않도록 했다.
+
+### 3.2. 인수 진행 조건 비교 기능 추가
+
+**파일:** `mna_scenario.py`
+
+기존 평가에서는 인수 진행에 필요한 조건을 생성했으나, 시나리오 변경으로 어떤 조건이 없어지거나 추가되는지 직접 비교하는 기능은 없었다.
+
+이를 개선하기 위해 다음 반환 항목을 추가했다.
+
+| 항목 | 기능 |
+|---|---|
+| `before_conditions` | 변경 전 인수 진행 조건 |
 | `after_conditions` | 변경 후 인수 진행 조건 |
-| `removed_conditions` | 변경 후 제거된 조건 |
-| `added_conditions` | 변경 후 새롭게 추가된 조건 |
+| `removed_conditions` | 변경으로 제거된 조건 |
+| `added_conditions` | 변경으로 새롭게 추가된 조건 |
 
-이를 통해 특정 위험이 개선되었더라도 핵심인력 유지 등의 조건이 여전히 필요한지 확인할 수 있도록 했다.
+평가 항목별 `condition`을 수집하고 중복을 제거하도록 구현했다.
 
-### 2.6. 경영자문 Agent Tool 연결
+예를 들어 인수가격을 낮춰 가격 관련 위험이 완화되면 해당 가격 협상 조건은 제거될 수 있지만, 핵심인력 유지나 고객 계약 검증 조건은 계속 유지될 수 있다.
 
-**수정 파일:** `backend/app/library/tools/run_mna_review.py`
+### 3.3. 기존 M&A Tool 확장
 
-기존 `run_mna_review` Tool을 확장하여 What-if 분석에 필요한 입력 파라미터를 추가했다.
+**파일:** `run_mna_review.py`
 
-- `asking_trillion_krw`
-- `operating_margin`
-- `revenue_share`
+기존 Tool은 기업명, Persona, 회의·뉴스 맥락 등을 입력받아 일반 M&A 평가를 실행하는 구조였다.
 
-조건 변경 요청이 없는 경우 기존 `review_acquisition()`을 실행하고, 변경 조건이 있는 경우 `compare_persona_scenarios()`를 실행하도록 분기했다.
+이번에는 기존 Tool에 다음 선택적 파라미터를 추가했다.
 
-이를 통해 기존 M&A 평가 기능과 새로운 What-if 분석 기능을 동일한 Tool 인터페이스에서 사용할 수 있도록 구성했다.
+| 파라미터 | 의미 |
+|---|---|
+| `asking_trillion_krw` | 변경할 인수가격(조 원) |
+| `operating_margin` | 변경할 영업이익률 |
+| `revenue_share` | 변경할 최대 고객 매출 비중 |
 
-### 2.7. Agent Skill 지침 개선
+**변경된 처리 방식**
 
-**수정 파일:** `backend/app/library/skills/mna_feasibility_review.py`
+- 변경 조건이 없으면 기존 `review_acquisition()` 호출
+- 변경 조건이 있으면 `compare_persona_scenarios()` 호출
+- What-if 결과에는 `mode="what_if"`를 포함해 일반 평가와 구분
 
-사용자의 자연어 질문에서 변경 조건을 파악하고 Tool 인자로 전달할 수 있도록 Skill 지침을 확장했다.
+기존 `run_mna_review` Tool 이름과 필수 인자를 유지하여 기존 Agent 호출 방식을 변경하지 않도록 했다.
 
-주요 내용은 다음과 같다.
+### 3.4. 경영자문 Skill 지침 확장
 
-- 인수가격 단위는 조 원으로 전달
-- 영업이익률과 고객 의존도는 비율로 변환
-- 여러 조건을 하나의 Tool 호출에 전달
-- 일반 평가와 What-if 분석 요청 구분
-- 변경 전후 위험 및 권고 결과 설명
+**파일:** `mna_feasibility_review.py`
 
-단, 자연어 질문에 대한 실제 Tool Calling 정확도는 추후 LLM 연동 테스트에서 검증할 예정이다.
+경영자문 Agent가 자연어 질문에서 변경 조건을 파악하고 Tool의 선택적 인자로 전달할 수 있도록 지침을 추가했다.
 
-## 3. 주요 분석 사례
+주요 변경 사항은 다음과 같다.
 
-**분석 대상: 뉴로엣지**
+- 가격은 조 원 단위로 전달
+- 영업이익률과 고객 매출 비중은 소수 비율로 변환
+- 여러 변경 조건을 하나의 Tool 호출에 전달
+- 일반 M&A 평가와 What-if 요청을 구분
+- 변경 전후 위험 및 권고 결과를 설명하도록 안내
 
-| 항목 | 기존 조건 | 변경 조건 |
-|---|---|---|
-| 인수가격 | 2.8조 원 | 2.2조 원 |
-| 영업이익률 | -8.2% | +5% |
-| 최대 고객 매출 비중 | 46% | 25% |
-| 가격 위험 | HIGH | 완화 |
-| 수익성 평가 | concern | positive |
-| 고객 집중 위험 | HIGH | MEDIUM |
-| 최종 인수 권고 | CONDITIONAL_PROCEED | CONDITIONAL_PROCEED |
+실제 LLM이 해당 지침에 따라 정확하게 Tool을 호출하는지는 후속 테스트가 필요하다.
 
-인수가격과 재무 조건이 개선되면서 일부 위험 수준은 낮아졌으나, 핵심인력 유지 등 다른 위험이 남아 있어 최종 권고는 조건부 진행으로 유지되었다.
+### 3.5. 기존 UI 반환 형식 호환성 개선
 
-이를 통해 최종 권고의 변화뿐만 아니라 개별 위험 요소의 개선 여부도 확인할 수 있도록 했다.
+**파일:** `run_mna_review.py`
+
+**발견한 문제**
+
+기존 프론트엔드의 `src/live/agentEvents.ts`는 `run_mna_review` 결과에서 `inputs`, `assessments`, `recommendation`, `recommendation_label`, `conditions` 등을 사용한다.
+
+그러나 최초 What-if 결과에는 변경 전후 비교 전용 필드만 존재하여, 기존 UI가 결과를 표시할 때 필드 누락으로 오류가 발생할 가능성이 있었다.
+
+**수정 내용**
+
+공용 프론트엔드 파일은 수정하지 않고, `run_mna_review.py`에서 변경 후 기업 데이터를 기반으로 기존 UI가 사용하는 필드를 추가했다.
+
+| 추가 필드 | 반환 내용 |
+|---|---|
+| `inputs` | 변경된 기업 데이터의 평가 입력 정보 |
+| `assessments` | 선택한 Persona의 변경 후 평가 항목 |
+| `recommendation` | 변경 후 최종 인수 권고 |
+| `recommendation_label` | 권고 결과의 한글 표시명 |
+| `conditions` | 변경 후 인수 진행 조건 |
+
+이를 위해 기존 `summarize_inputs()`, `evaluate_all()`, `PERSONAS`, `RECOMMENDATION_LABELS`를 재사용했다.
+
+기존 What-if 비교 정보는 그대로 유지하면서 기존 UI가 요구하는 반환 형식도 제공하도록 확장했다.
+
+현재 기존 UI에는 변경 후 평가 결과를 표시할 수 있도록 데이터를 제공하며, 변경 전후 비교 결과는 별도 필드로 유지한다.
+
+실제 웹 UI 렌더링은 아직 검증하지 않았다.
 
 ## 4. 테스트 및 검증
 
 **테스트 파일**
-- `backend/tests/test_mna_review_workflow.py`
-- `backend/tests/test_mna_scenario.py`
+- `tests/test_mna_review_workflow.py`
+- `tests/test_mna_scenario.py`
 
-**테스트 내용**
-- 인수가격 변경 및 원본 데이터 보존
-- 유효하지 않은 입력값 처리
-- 영업이익률·고객 의존도 변경
-- 복수 조건 동시 적용
-- 전체 M&A 평가 및 권고 비교
-- CEO·CFO·CTO 관점 처리
-- 기존 M&A Tool 호환성
-- What-if Tool 호출 및 결과 반환
-- 변경 전후 인수 권고 조건 비교
+**검증 내용**
+- 인수가격, 영업이익률, 고객 의존도 변경
+- 복수 조건 동시 적용 및 원본 데이터 보존
+- 잘못된 입력값 처리
+- 변경 전후 평가·권고·인수 조건 비교
+- CEO·CFO·CTO Persona 처리
+- 기존 일반 M&A Tool 기능 유지
+- What-if Tool 호출 및 반환값 검증
+- 기존 UI에서 사용하는 필드 반환 확인
 
-**최종 테스트 결과**
+**테스트 실행**
 
-```text
-48 passed
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_mna_review_workflow.py tests/test_mna_scenario.py -q
 ```
 
-기존 평가 테스트와 신규 What-if 테스트를 포함하여 총 48개 테스트가 정상 통과했다.
+**최종 결과: `49 passed`**
 
-단, 본 테스트는 Python Workflow 및 Tool 호출 검증이며 실제 LLM의 Tool Calling과 UI 동작까지 검증한 것은 아니다.
+기존 평가 및 신규 시나리오 테스트가 모두 통과했다.
 
-## 5. 변경 및 추가 파일
+추가로 기존 UI가 요구하는 반환 필드를 검증하는 테스트를 작성하여, What-if 분석 시에도 해당 필드가 제공되는 것을 확인했다.
 
-| 파일 | 작업 내용 |
-|---|---|
-| `backend/app/library/workflows/mna_scenario.py` | 신규 What-if 분석 Workflow 구현 |
-| `backend/app/library/tools/run_mna_review.py` | 시나리오 분석 Tool 연결 |
-| `backend/app/library/skills/mna_feasibility_review.py` | What-if 분석 Skill 지침 확장 |
-| `backend/tests/test_mna_scenario.py` | 시나리오 분석 자동 테스트 추가 |
+단, 실제 브라우저 렌더링과 LLM Tool Calling은 검증 범위에 포함되지 않았다.
 
-기존 `mna_review.py`의 평가 규칙은 재사용하여 변경에 따른 영향 범위를 최소화했다.
+## 5. 개발 결과 및 향후 작업
 
-## 6. 남은 작업
+이번 개발을 통해 기존 고정 데이터 기반 M&A 평가를 사용자 지정 조건 기반의 What-if 분석으로 확장했다.
 
-1. Ollama Cloud 모델별 Tool Calling 정확도 및 응답 품질 비교
-2. 실제 경영자문 Agent 실행 테스트
-3. 변경 조건이 자연어에서 정확하게 추출되는지 검증
-4. Open WebUI 또는 팀 웹 UI에서 통합 테스트
-5. 테스트 결과에 따른 오류 수정
-6. 개인 프로젝트의 최종 개발 내용을 팀 작업 브랜치에 반영
+사용자는 인수가격, 수익성, 고객 의존도를 변경하고, 기존 평가와 변경된 평가의 차이 및 인수 권고 조건의 변화를 비교할 수 있다.
 
-## 7. 개발 결과 및 의의
+기존 LangGraph 및 Agent 구조를 유지하면서 경영자문 Workflow와 Tool, Skill을 확장했으며, 공용 UI 코드를 수정하지 않고 기존 반환 형식과의 호환성을 개선했다.
 
-이번 개발을 통해 기존의 고정 데이터 기반 M&A 평가 Workflow를 사용자 지정 조건 기반의 What-if 분석으로 확장했다.
+**남은 작업**
+- CEO·CFO·CTO 관점별 평가 결과와 공통 위험을 통합하는 종합 평가 기능
+- 회의·뉴스 맥락(`context`)의 What-if 평가 반영
+- Ollama 모델별 Tool Calling 및 실제 Agent 실행 테스트
+- 웹 UI와 Super Agent 통합 테스트
 
-사용자는 인수가격, 영업이익률, 고객 의존도 등의 주요 조건을 변경하여 기존 평가와 새로운 평가의 차이를 비교할 수 있다.
+본 기능은 변경 조건을 기존 규칙에 적용하여 평가 결과를 비교하는 기능이며, 실제 미래 재무실적을 예측하는 모델은 아니다.
 
-또한 기존 경영자문 Tool 및 Skill에 새로운 분석 기능을 연결하여 향후 자연어 기반 시나리오 분석에 활용할 수 있는 구조를 마련했다.
+**검증 범위:** 로컬 Python 자동 테스트 49개 통과. 실제 LLM 및 웹 UI 통합 동작은 미검증.
 
-다만 현재 분석은 사전에 정의한 평가 규칙을 사용하며 실제 미래 실적을 예측하는 모델은 아니다. 실제 AI Agent 및 웹 UI 환경에서의 동작 검증은 후속 개발 과제로 남아 있다.
