@@ -182,7 +182,7 @@
 
 기존 LangGraph 및 Agent 구조를 유지하면서 경영자문 Workflow와 Tool, Skill을 확장했으며, 공용 UI 코드를 수정하지 않고 기존 반환 형식과의 호환성을 개선했다.
 
-**다음 작업**
+**다음 개발 단계**
 
 1. **CEO·CFO·CTO 관점별 평가 결과 정리**
    - 기존 `evaluate_all()`과 Persona별 평가 기준 재사용
