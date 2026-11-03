@@ -52,8 +52,13 @@ def group_super_run(body: RunRequest) -> StreamingResponse:
 def meeting_run(body: RunRequest) -> StreamingResponse:
     """Direct user → Group Meeting Agent (group-level meeting records). Streams events.
     A recording's transcript in the request is corrected first (tools/correct_transcript)."""
-    return ndjson_run(lambda: run_meeting_agent(TRANSCRIPT_CORRECTION.prepare(body.request), invocation="direct"),
-                      new_run(system=SYSTEM, root_agent="meeting", **run_identity(body)))
+    def run() -> str:
+        prepared = TRANSCRIPT_CORRECTION.prepare(body.request)
+        answer = run_meeting_agent(prepared, invocation="direct")
+        TRANSCRIPT_CORRECTION.check_saved(prepared)  # a recording's minutes must really be saved
+        return answer
+
+    return ndjson_run(run, new_run(system=SYSTEM, root_agent="meeting", **run_identity(body)))
 
 
 @app.post("/api/agents/news/run")

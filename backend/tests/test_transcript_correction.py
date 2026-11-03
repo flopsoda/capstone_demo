@@ -113,6 +113,7 @@ def test_prepare_corrects_the_current_request_and_says_what_changed(fixer, monke
     out, events = run_prepare(fixer, REQUEST)
     assert "사용자: [00:01] 화자 A: 에젠드 (지난 녹음)" in out  # 이전 대화는 그대로
     assert "[00:01] 화자 A: 에이전트를 만들려고\n\n[자동 교정] " in out and "변환본 1줄 중 1줄 교정" in out
+    assert out.rstrip().endswith("저장했다고 쓰지 않는다.") and "save_meeting_minutes를 호출해" in out  # 모델이 마지막에 읽는 지시
     assert [e["type"] for e in events] == ["tool_start", "tool_end"]
     assert events[0]["args"] == {"transcript_id": TID, "lines": 1, "auto": True} and events[0]["tool"] == "correct_transcript"
     assert events[1]["result"]["auto"] and events[1]["result"]["failed"] == []
@@ -146,6 +147,45 @@ def test_the_tool_corrects_the_kept_transcript(fixer, monkeypatch):
 
     monkeypatch.setattr(ct, "fetch_transcript", missing)
     assert tool.invoke({"transcript_id": TID}) == {"error": "없음"}
+
+
+class Rows:
+    """가짜 회의 저장소: transcripts에 그 녹음이 있는지만 답한다."""
+
+    def __init__(self, saved):
+        self.saved = saved
+
+    def connect(self):
+        saved = self.saved
+
+        class Result:
+            def fetchone(self):
+                return {"one": 1} if saved else None
+
+        class Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, sql, params):
+                return Result()
+
+        return Conn()
+
+
+def test_check_saved_reports_minutes_that_were_only_claimed(fixer, monkeypatch):
+    monkeypatch.setattr(ct, "ask_model", Model([]))
+    asked, _ = run_prepare(fixer, REQUEST.replace("녹음 파일: 회의.m4a", "회의록 초안을 써 줘. 녹음 파일: 회의.m4a"))
+    with pytest.raises(ct.AgentError, match="실제로 저장되지 않았습니다"):
+        ct.TranscriptCorrection(Rows(saved=False), fixer.glossary_path, agent="meeting").check_saved(asked)
+    ct.TranscriptCorrection(Rows(saved=True), fixer.glossary_path, agent="meeting").check_saved(asked)  # 저장됨: 그대로
+    ct.TranscriptCorrection(NoStore(), fixer.glossary_path, agent="meeting").check_saved(asked)  # 확인할 수 없으면 막지 않음
+    # 회의록을 달라는 요청이 아니면(발언 속의 "회의록"은 세지 않음), 녹음이 없으면 확인하지 않는다
+    other, _ = run_prepare(fixer, REQUEST.replace("에젠드 를 만들 려고", "회의록 얘기"))
+    ct.TranscriptCorrection(Rows(saved=False), fixer.glossary_path, agent="meeting").check_saved(other)
+    ct.TranscriptCorrection(Rows(saved=False), fixer.glossary_path, agent="meeting").check_saved("회의록 보여 줘")
 
 
 def test_the_group_glossary_loads():

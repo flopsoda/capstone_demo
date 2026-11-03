@@ -14,6 +14,11 @@ make_transcript_correction(store, glossary_path, agent). Two entry points over o
 The prepare step reports as tool_start / tool_end of correct_transcript (args.auto = true) like a call the
 agent made, so the chat and the monitors show it without a new event type. TRANSCRIPT_CORRECTION=0 turns
 the automatic step off (the tool stays).
+
+The note ends with the instruction to save through save_meeting_minutes: placed after the transcript it is
+the last thing the model reads (gemma4 wrote the minutes as text and claimed they were saved without calling
+the Tool on 3 of 3 long recordings; with this line it called it on 3 of 3). check_saved then makes sure the
+recording really became minutes, so a model that says it saved without saving is reported as an error.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool, tool
 
 from ...runtime.agent_core import message_text
-from ...runtime.events import emit
+from ...runtime.events import AgentError, emit
 from ...runtime.llm import get_chat_model
 from ..workflows.compliance import clock
 from ..workflows.meeting_store import MeetingStore
@@ -40,6 +45,9 @@ from ..workflows.transcripts import TranscriptUnavailable, fetch_transcript
 log = logging.getLogger(__name__)
 
 TOOL_NAME = "correct_transcript"
+NOTE_MARK = "[자동 교정"  # both notes start so: the request carried a recording's transcript
+SAVE = ("이제 save_meeting_minutes를 호출해 회의록 초안을 저장하고(transcript_id도 함께), 그 결과로 답한다. "
+        "Tool로 저장하지 않았으면 저장했다고 쓰지 않는다.")
 CURRENT = "[현재 요청]\n"  # the gateway puts earlier turns before this; only the current request is corrected
 
 
@@ -54,11 +62,11 @@ def ask_model(system: str, user: str) -> str:
 def note(result: Correction, transcript_id: str | None) -> str:
     """What the agent reads after the corrected transcript."""
     if not result.failed:
-        return f"[자동 교정] 녹음 변환본의 잘못 들린 말을 고쳤습니다 — {result.summary()}. 원래 변환본은 그대로 보관되어 있습니다."
+        return f"[자동 교정] 녹음 변환본의 잘못 들린 말을 고쳤습니다 — {result.summary()}. 원래 변환본은 그대로 보관되어 있습니다. {SAVE}"
     retry = (f'회의록을 쓰기 전에 {TOOL_NAME}(transcript_id="{transcript_id}")를 한 번 호출해 돌려받은 lines로 쓰고, '
              "그것도 실패하면 이 변환본으로 쓴다." if transcript_id else "다시 교정할 수 없으니 이 변환본으로 쓴다.")
     return (f"[자동 교정 실패] 녹음 변환본의 모델 교정이 끝나지 않았습니다 — {result.summary()}. "
-            f"고정 치환만 적용된 줄이 있습니다. {retry} 답변에서 교정하지 못한 부분이 있다고 밝힌다.")
+            f"고정 치환만 적용된 줄이 있습니다. {retry} 답변에서 교정하지 못한 부분이 있다고 밝힌다. {SAVE}")
 
 
 @dataclass
@@ -104,6 +112,26 @@ class TranscriptCorrection:
               "result": {"auto": True, "summary": result.summary(), "changed": result.changed, "failed": result.failed}})
         corrected = f"{fixed}\n\n{note(result, transcript_id)}"
         return f"{head}{sep}{corrected}" if sep else corrected
+
+    def check_saved(self, prepared: str) -> None:
+        """After the agent answered a recording's minutes request: was that transcript saved as minutes?
+        AgentError when not — the answer may say it was saved (a model can write the minutes as text)."""
+        current = prepared.rpartition(CURRENT)[2]
+        found = TRANSCRIPT_ID.search(current)
+        rows, at = split(current)
+        lines = set(at)
+        asked = "\n".join(r for i, r in enumerate(rows) if i not in lines).split(NOTE_MARK)[0]  # the request, not the meeting's words
+        if not found or NOTE_MARK not in current or "회의록" not in asked:
+            return  # not a recording, or the request was not for minutes
+        try:
+            with self.store.connect() as conn:
+                saved = conn.execute("SELECT 1 FROM transcripts WHERE source_ref = %s", (found.group(1),)).fetchone()
+        except Exception:  # no store: nothing to check against
+            log.warning("transcript correction: cannot check the saved minutes", exc_info=True)
+            return
+        if not saved:
+            raise AgentError(self.agent, "회의록이 실제로 저장되지 않았습니다 (이 녹음으로 save_meeting_minutes가 성공하지 않음). "
+                                         "위 답변의 회의록 번호는 없는 번호입니다. 같은 요청을 다시 보내 주세요.")
 
     def correct(self, transcript_id: str) -> dict[str, Any]:
         try:
