@@ -279,3 +279,12 @@ def test_transcript_correction_knows_who_checked_in_then_the_directory(meeting_d
         names = known_names(conn, s["code"])
         directory = known_names(conn)
     assert names[0] == "최유진" and directory and set(directory) <= set(names)  # 출석한 사람 먼저, 그다음 임직원 디렉터리
+
+
+
+def test_check_in_turned_off_links_no_session(recording, monkeypatch):
+    s = attendance.open_session(store=STORE, viewer=UPLOADER, source_name="회의.m4a")
+    attendance.join(store=STORE, viewer=YUJIN, code=s["code"], token=s["token"])
+    monkeypatch.setenv("CHECKIN_ENABLED", "0")
+    out = save(checkin_code=s["code"])
+    assert out["saved"] and not any(p.get("checked_in") for p in out["attendance"]["people"])

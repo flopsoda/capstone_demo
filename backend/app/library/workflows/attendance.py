@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import os
 import re
 import secrets
 import time
@@ -47,6 +48,11 @@ SESSION_HOURS = 3  # 출석 확인을 연 뒤 받는 시간
 LINK_HOURS = 12  # 출석 확인 코드 없이 녹음 회의록을 저장하면, 이 시간 안에 같은 사람이 연 출석 확인을 붙인다
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CODE = re.compile(r"^CHK-[A-Z2-9]{6}$")
+
+
+def checkin_enabled() -> bool:
+    """CHECKIN_ENABLED=0 turns QR check-in off (the gateway refuses check-in; saved minutes link no session)."""
+    return os.environ.get("CHECKIN_ENABLED", "1").strip().lower() not in ("0", "off", "false", "no")
 RECALL_ITEMS = 8
 RECALL_ISSUES = 5
 
@@ -188,6 +194,8 @@ def join(*, store: MeetingStore, viewer: Viewer, code: str | None, token: str | 
 def link_session(conn: psycopg.Connection, meeting_id: int, viewer: Viewer, code: str | None, *,
                  from_recording: bool, warnings: list[str]) -> int | None:
     """이 회의에 붙일 출석 확인: 요청에 적힌 코드, 없으면 (녹음으로 쓰는 회의록일 때) 같은 사람이 최근 연 것."""
+    if not checkin_enabled():
+        return None
     if conn.execute("SELECT 1 FROM checkin_sessions WHERE meeting_id = %s", (meeting_id,)).fetchone() and not code:
         return None  # 이미 붙어 있음
     me = (viewer.email or "").lower()
