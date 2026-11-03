@@ -62,6 +62,32 @@ def fetch_transcript(ref: str, *, client: httpx.Client | None = None) -> dict[st
     return res.json()
 
 
+VOICE_RESULTS = ("learned", "already_enrolled", "too_short", "expired", "unavailable")
+
+
+def learn_voice(ref: str, label: str, *, user_id: str | None, email: str, name: str, consent_at: datetime,
+                client: httpx.Client | None = None) -> str:
+    """After a person is confirmed as `label` ('화자 C') of transcript `ref` and agreed at check-in: the speech service
+    keeps that voice as their voiceprint, so later recordings name them. One of VOICE_RESULTS."""
+    base = os.environ.get("SPEECH_SERVICE_URL", "").rstrip("/")
+    if not base or not user_id:
+        return "unavailable"
+    headers = {"Authorization": f"Bearer {os.environ.get('SPEECH_API_KEY', '')}"}
+    body = {"transcript_id": ref, "speaker": label, "user_sub": user_id, "email": email, "display_name": name,
+            "consent_at": consent_at.isoformat()}
+    try:
+        http = client or httpx.Client(timeout=10.0)
+        try:
+            res = http.post(f"{base}/internal/voiceprints/learn", json=body, headers=headers)
+        finally:
+            if client is None:
+                http.close()
+        result = res.json().get("result") if res.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        return "unavailable"
+    return result if result in VOICE_RESULTS else "unavailable"
+
+
 def attach_transcript(conn: psycopg.Connection, meeting_id: int, data: dict[str, Any], viewer: Viewer,
                       warnings: list[str]) -> int | None:
     """Copies a fetched transcript into the meeting; returns its row id (None if it belongs to another meeting)."""

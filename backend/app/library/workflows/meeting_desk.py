@@ -4,6 +4,7 @@
 버튼으로 처리하는 화면(gateway의 /meetings/)이 system app의 /api/desk/* 를 거쳐 이 함수들을 부른다.
 같은 저장소 · 같은 권한 규칙(VISIBLE · can_confirm · can_write)을 쓰고, 조회 · 검토는 미팅 Tool이 쓰는
 workflow 함수를 그대로 부른다. 새로 둔 것은 여러 회의를 한 번에 보는 조회(overview · open_flags)뿐이다.
+출석 확인(QR) · 참석자 확인 · '각자' 할 일 나누기는 attendance.py.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from . import attendance as attendance_flow
 from .action_items import track_action_items, update_action_item
 from .compliance import apply_reviews, flag_ref, flags_of
 from .meeting_context_retrieval import retrieve_meeting_context
@@ -206,4 +208,43 @@ def meeting(*, store: MeetingStore, viewer: Viewer, meeting_id: str | None, toda
             (mid, list(ROLE_ORDER)),
         ).fetchall()
         return {"meeting": found["meetings"][0], "participants": [{"name": r["name"], "role": r["role"]} for r in people],
-                "flags": flags_of(conn, mid), "can_confirm": can_confirm(conn, viewer, mid)}
+                "flags": flags_of(conn, mid), "can_confirm": can_confirm(conn, viewer, mid),
+                "attendance": attendance_flow.attendance_view(conn, mid), "recall": attendance_flow.recall(conn, mid, viewer, today),
+                "can_edit": viewer.can_write}
+
+
+CHECKIN_ACTIONS = ("open", "status", "close", "join")
+
+
+def checkin(*, store: MeetingStore, viewer: Viewer, action: str, code: str | None = None, token: str | None = None,
+            voice_consent: bool | None = None, source_name: str | None = None) -> dict[str, Any]:
+    """출석 확인: 녹음을 올린 화면이 열고(open) QR 상태를 묻고(status) 닫는다(close). 휴대폰은 출석한다(join)."""
+    if action == "open":
+        return attendance_flow.open_session(store=store, viewer=viewer, source_name=source_name)
+    if action == "status":
+        return attendance_flow.session_status(store=store, viewer=viewer, code=code)
+    if action == "close":
+        return attendance_flow.close_session(store=store, viewer=viewer, code=code)
+    if action == "join":
+        return attendance_flow.join(store=store, viewer=viewer, code=code, token=token, voice_consent=voice_consent)
+    return {"ok": False, "error": f"action은 {', '.join(CHECKIN_ACTIONS)} 중 하나여야 합니다."}
+
+
+ATTENDANCE_ACTIONS = ("assign", "add", "remove")
+
+
+def attendance(*, store: MeetingStore, viewer: Viewer, action: str, meeting_id: str | None, speaker: str | None = None,
+               person: dict[str, Any] | None = None) -> dict[str, Any]:
+    """회의 카드의 참석자 확인: 목소리 라벨의 이름 정하기(assign) · 참석자 더하기(add) · 빼기(remove)."""
+    if action == "assign":
+        return attendance_flow.assign_speaker(store=store, viewer=viewer, meeting_id=meeting_id, speaker=speaker, person=person)
+    if action == "add":
+        return attendance_flow.add_attendee(store=store, viewer=viewer, meeting_id=meeting_id, person=person)
+    if action == "remove":
+        return attendance_flow.remove_attendee(store=store, viewer=viewer, meeting_id=meeting_id, person=person)
+    return {"ok": False, "error": f"action은 {', '.join(ATTENDANCE_ACTIONS)} 중 하나여야 합니다."}
+
+
+def split_item(*, store: MeetingStore, viewer: Viewer, item_id: str | None) -> dict[str, Any]:
+    """'각자' 하는 할 일 → 참석자마다 한 건."""
+    return attendance_flow.split_item(store=store, viewer=viewer, item_id=item_id)

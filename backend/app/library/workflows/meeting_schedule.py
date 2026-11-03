@@ -82,7 +82,7 @@ def _add_participants(conn: psycopg.Connection, meeting_id: int, names: list[str
             conn.execute(
                 """INSERT INTO meeting_participants (meeting_id, person_id, role) VALUES (%s, %s, %s)
                    ON CONFLICT (meeting_id, person_id) DO UPDATE SET role = EXCLUDED.role WHERE EXCLUDED.role <> 'required'""",
-                (meeting_id, person_id(conn, name, created), role),
+                (meeting_id, person_id(conn, name, created, meeting_id=meeting_id), role),
             )
 
 

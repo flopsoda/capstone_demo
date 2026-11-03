@@ -22,6 +22,7 @@ from .tools.delegate_to_news_agent import delegate_to_news_agent
 from .tools.request_k_electronics_review import request_k_electronics_review
 from .tools.manage_mail_outbox import manage_mail_outbox
 from .tools.run_company_risk_news_analysis import run_company_risk_news_analysis
+from .tools.correct_transcript import correct_transcript
 from .tools.run_action_item_tracking import run_action_item_tracking
 from .tools.run_meeting_context_retrieval import run_meeting_context_retrieval
 from .tools.run_meeting_schedule import run_meeting_schedule
@@ -48,6 +49,7 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(MEETING_MINUTES_WRITING, frozenset({MEETING})),
     Capability(MEETING_FOLLOW_UP, frozenset({MEETING})),
     Capability(run_meeting_context_retrieval, frozenset({MEETING})),
+    Capability(correct_transcript, frozenset({MEETING})),
     Capability(save_meeting_minutes, frozenset({MEETING})),
     Capability(run_action_item_tracking, frozenset({MEETING})),
     Capability(update_action_item, frozenset({MEETING})),

@@ -156,7 +156,7 @@ Workflow Tool은 **Agent가 아니다**.
 
 ```text
 Meeting Agent   → run_meeting_context_retrieval · save_meeting_minutes · run_action_item_tracking · update_action_item · run_meeting_schedule
-                  · manage_mail_outbox · run_task_requests (K만)
+                  · manage_mail_outbox · run_task_requests (K만) · correct_transcript (Group만)
 News Agent      → run_company_risk_news_analysis
 Advisory Agent  → run_mna_review
 ```
@@ -191,7 +191,7 @@ Advisory Agent  → run_mna_review
   예약된 회의의 회의록은 같은 id로 `save_meeting_minutes`에 쓴다.
 - **회의 후속 기능 (2026-10-28, 11장 결정 14~19).**
   - **schema migration.** `meeting_schema.sql`이 version 1이고, `library/workflows/meeting_migrations/NNN_name.sql`을 `MeetingStore`가 처음 연결할 때 순서대로 적용해
-    schema마다 `schema_migrations`에 남긴다 (`002_delivery_and_review.sql`: `transcripts.source_ref`, `compliance_flags`, `outbox`, `task_requests`; `003_outbox_reject_without_address.sql`: 주소 없는 메일도 반려 가능; `004_autonomous_mail.sql`: `staff_directory`, 승인 대기 메일을 발송 대기로). 적용된 파일은 고치지 않고 다음 번호를 추가한다.
+    schema마다 `schema_migrations`에 남긴다 (`002_delivery_and_review.sql`: `transcripts.source_ref`, `compliance_flags`, `outbox`, `task_requests`; `003_outbox_reject_without_address.sql`: 주소 없는 메일도 반려 가능; `004_autonomous_mail.sql`: `staff_directory`, 승인 대기 메일을 발송 대기로; `005_attendance.sql`: 회의별 목소리 라벨 `people.speaker_meeting_id`, 출석 확인 `checkin_sessions` · `checkin_attendees`, `meeting_participants.checked_in_at`). 적용된 파일은 고치지 않고 다음 번호를 추가한다.
   - **확정 권한.** 회의록 확정 · 정정, Compliance 검토, 메일 재발송 · 취소 · 주소 정정, 업무 요청 접수는 `meeting_store.can_confirm`: 그 회의의 의장 · 간사(참석자 role, `people.email` = 요청자 email)
     또는 `MEETINGS_CONFIRM_GROUPS`(기본 `secretary,executive`, 로컬 데모는 `*`) 그룹. 참석자 판단은 그 호출의 참석자 변경 **전** 상태로 한다. 권한이 없으면 초안으로 저장하고 `warnings`로 알린다 (정정은 거부).
   - **Compliance.** `compliance.py`의 결정적 규칙(미공개 중요정보 · 담합 · 부정청탁 · 회계 부정 · 기록 은폐 · 부당노동행위 · 개인정보)이 회의록 요약 · 본문 · 결정과 연결된 transcript 발언을 검사해
@@ -207,6 +207,22 @@ Advisory Agent  → run_mna_review
     "외부 자문위원 (OO회계법인)"처럼 그 기관에서 그 역할을 가진 한 명) 순으로 찾고, 찾은 주소는 `people.email`에 남긴다. 주소를 추측하지 않는다: 아무 데서도 못 찾으면 `needs_address`로 두고
     매일 아침 다시 찾는다. 목소리가 등록되지 않은 발언자("화자 A" · "화자 B" …, 예전 변환본은 "미확인 화자 N")에게는 메일을 만들지 않고, 그런 라벨이 담당인 할 일은 실제 담당자를 정해야 확정된다. 사람은 실패한 메일 다시 보내기(`resend`) · 안 보낸 메일 취소(`reject`) · 주소 정정(`set_address`, 바로 다시 보냄)만 한다.
     부서 담당 Action Item은 주소가 없어 배정 메일을 만들지 않고 그렇게 알린다.
+  - **출석 확인 · 참석자 확인 (2026-11-03, `attendance.py`).** 녹음만으로는 말하지 않은 참석자를 알 수 없다. 회의지원 채팅에 녹음을 올리면 화면이 출석 확인(`CHK-…`)을 열고
+    30초마다 바뀌는 코드(HMAC)를 담은 QR을 띄운다. 참석자가 휴대폰으로 찍으면 gateway가 로그인 계정(이메일 · 이름 · Keycloak id)으로 출석시킨다 (지금 코드와 직전 3개까지 유효, 3시간 뒤 마감).
+    회의록 요청 문장에 그 코드가 들어가고 `save_meeting_minutes(checkin_code=)`가 받는다 (없으면 같은 사람이 12시간 안에 연 출석 확인). 출석한 계정은 말하지 않았어도 참석자(`attended`, `checked_in_at`)가 되고,
+    모델이 이름으로만 적은 같은 이름의 사람은 그 계정으로 합친다. 저장 결과의 `attendance`(출석 · 발언 여부, 이름 모를 목소리, 말하지 않은 참석자, 목소리 하나 · 조용한 출석자 하나일 때의 추정)를 보고 모델이 사용자에게 묻는다.
+    목소리 라벨("화자 A")은 그 회의 안에서만 한 사람이다 (`people.speaker_meeting_id`; 005가 기존에 공유되던 라벨을 회의마다 나눴다). 회의 카드에서 라벨의 이름을 정하면(`assign`) 그 회의의 발언 · 발언자 · 담당 · 참석자와
+    회의록 글의 라벨이 그 사람으로 바뀌고, 그 사람이 출석할 때 목소리 학습에 동의했으면 speech-service가 그 목소리를 voiceprint로 익힌다(`transcripts.learn_voice`). 확정된 회의록은 정정으로만 바꾼다.
+    담당이 없는 '각자' 할 일은 참석자마다 한 건으로 나눈다(`split`). `recall`은 이번 참석자들이 이전 회의에서 맡아 아직 열린 일과 같은 사람들이 있던 회의의 미결 쟁점이다 (저장 결과와 회의 카드).
+  - **녹음 변환본 교정 (2026-11-03, `transcript_correction.py`, `library/tools/correct_transcript.py`).** 음성 인식은 용어 · 이름을 잘못 듣고("에젠드")
+    한국어 띄어쓰기를 깨뜨린다. Group의 `/api/agents/meeting/run`은 Meeting Agent가 요청을 읽기 전에 `TRANSCRIPT_CORRECTION.prepare`를 돌린다:
+    요청의 `[현재 요청]` 부분에 있는 변환본 줄(`[mm:ss] 화자: …`)만 ① 고정 치환(`data/transcript_glossary.json`의 replacements) ② 모델 교정
+    (30줄씩 · 앞뒤 3줄 맥락 · 용어와 이름 목록 = 이 녹음의 출석자 + 임직원 디렉터리, 고친 줄만 JSON으로)으로 고치고, 변환본 뒤에 "[자동 교정] …"을 붙인다.
+    문장을 다시 쓴 교정(원문 글자의 60% 미만이 남거나 길이가 30% 넘게 바뀜)은 버린다. 모델 호출이 실패하거나 답을 읽을 수 없는 구간은 치환만 남기고
+    "[자동 교정 실패] …"로 알리며, Skill은 그때 `correct_transcript(transcript_id)`를 한 번 불러(speech-service에 보관된 원문을 다시 교정) 그 결과로 쓰게 한다.
+    교정 단계는 `correct_transcript`의 tool_start / tool_end(`args.auto = true`)로 보고된다 (새 이벤트 타입 없음; gateway는 고친 줄 수 · 예 · 실패 구간을 단계에 표시).
+    원래 변환본은 speech-service와 `transcript_segments`에 그대로 남는다. `TRANSCRIPT_CORRECTION=0`이면 자동 단계를 끈다 (Tool은 남음).
+    Super Agent 위임 경로(`run_meeting_agent`의 delegation)에는 변환본이 오지 않으므로 이 단계가 없다.
   - **배경 작업.** `jobs.start_meeting_jobs`(app lifespan, `MEETINGS_BACKGROUND_JOBS=1`일 때만): 매분 발송 대기 메일을 SMTP(`SMTP_*`, 미설정이면 대기)로 발송(5회 실패하면 failed,
     발송 대기가 된 지 3일이 지난 메일은 늦게 보내지 않고 failed — 메일 서버를 나중에 설정했을 때 지난 안내가 한꺼번에 나가지 않도록),
     매일 `MEETINGS_DAILY_HOUR`(9시 KST)부터 기한 알림 · 주소 재조회 · 만료 transcript 삭제. schema별 advisory lock.
@@ -302,6 +318,7 @@ systems/k_electronics/
 | `run_action_item_tracking` | tool | `meeting` | `make_run_action_item_tracking(MEETING_STORE)` → `library/workflows/action_items.track_action_items` |
 | `update_action_item` | tool | `meeting` | `make_update_action_item(MEETING_STORE)` → `library/workflows/action_items.update_action_item` |
 | `run_meeting_schedule` | tool | `meeting` | `make_run_meeting_schedule(MEETING_STORE)` → `library/workflows/meeting_schedule.meeting_schedule` |
+| `correct_transcript` | tool | `meeting` (Group) | `make_transcript_correction(MEETING_STORE, data/transcript_glossary.json, agent="meeting").tool` → `library/workflows/transcript_correction.correct_lines` |
 | `external_risk_analysis` | skill | `news` | `library/skills/external_risk_analysis.py` |
 | `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(data/news.json)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
@@ -448,7 +465,8 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 
 K system에도 같은 모양의 `POST /api/agents/{meeting,news,advisory}/run`이 있다 (K 데이터).
 
-Group system에는 Agent를 거치지 않는 **회의 업무 화면용** `POST /api/desk/{overview,mail,flags,items,meeting,schedule,report}`도 있다 (2026-10-30, `library/workflows/meeting_desk`).
+Group system에는 Agent를 거치지 않는 **회의 업무 화면용** `POST /api/desk/{overview,mail,flags,items,meeting,schedule,report,minutes,checkin,attendance}`도 있다 (2026-10-30, `library/workflows/meeting_desk`;
+`checkin` open · status · close · join과 `attendance` assign · add · remove, `items`의 `action: split`은 2026-11-03, `library/workflows/attendance`). `meeting`은 `attendance` · `recall`도 준다.
 `report` `{meeting_id, kind: minutes|report}`는 저장된 회의록으로 만든 **회의록(양식) · 회의 결과 보고서(개조식) PDF**를 돌려준다 (`library/workflows/meeting_report`, fpdf2 + 나눔 글꼴;
 양식은 data.go.kr에 공개된 공공데이터전략위원회 회의록 · 회의 결과를 따름). 같은 PDF가 회의록 메일에 첨부되고, 의장 · 간사 메일에는 결과 보고서도 붙는다.
 배포에서는 이 desk API를 Open WebUI 채팅 안의 회의 카드가 부른다 (gateway가 회의 Tool 결과로 답변 끝에 카드 블록을 붙이고 Open WebUI 스크립트가 그림). 회의록 저장 Tool은 회의 시각(start_time · end_time)도 받는다.

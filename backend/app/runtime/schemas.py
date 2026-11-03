@@ -17,6 +17,7 @@ class Principal(BaseModel):
     clearance: int = Field(ge=0, le=4, description="0 none · 1 공개 · 2 사내 · 3 대외비 · 4 극비")
     agents: tuple[str, ...] | None = Field(
         default=None, description="Specialist ids (meeting · news · advisory) the user may use, from the gateway's permission table; None = not restricted")
+    user_id: str | None = Field(default=None, description="The user's Keycloak id when the gateway knows it (meeting check-in: whose voiceprint)")
 
 
 class Identified(BaseModel):

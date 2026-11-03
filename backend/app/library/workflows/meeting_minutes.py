@@ -8,6 +8,9 @@ minutes_revisions and keeps every existing Action Item (they are closed with upd
 not deleted). A recording's transcript is attached by its speech-service id (transcripts.py);
 decisions and Action Items may point at the statement they came from by its [mm:ss] stamp.
 Finalizing or correcting queues the minutes and assignment mail for approval (outbox.py).
+People who checked in with the QR shown while the recording was uploaded become attendees, silent ones
+included (attendance.py); the result tells the model who checked in, which voices still need a name and
+what earlier meetings left open for these attendees.
 
 The model supplies the content; ids, codes, validation, the directory lookups and the
 access check are deterministic here. Not agent-visible; no LangChain dependency.
@@ -21,6 +24,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
+from .attendance import apply_checkins, attendance_view, link_session, recall
 from .compliance import apply_reviews, flags_of, open_flag_count, scan_minutes, scan_transcript
 from .meeting_store import (
     DEFAULT_MEETING_TIME,
@@ -152,7 +156,7 @@ def _write_participants(conn: psycopg.Connection, meeting_id: int, attendees: li
             role = "required"
         if role == "required":
             role = parse_person_label(a["name"])[2] or role
-        pid = person_id(conn, a["name"], created, title=a.get("title"))
+        pid = person_id(conn, a["name"], created, title=a.get("title"), meeting_id=meeting_id)
         attended = a.get("attended", True)
         conn.execute(
             """INSERT INTO meeting_participants (meeting_id, person_id, role, rsvp, attended) VALUES (%s, %s, %s, 'accepted', %s)
@@ -205,7 +209,7 @@ def _write_decisions(conn: psycopg.Connection, meeting_id: int, decisions: list[
             position = x.get("position") if x.get("position") in POSITIONS else "against"
             conn.execute(
                 "INSERT INTO decision_dissents (decision_id, person_id, position, reason) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                (decision_id, person_id(conn, x["name"], created), position, x.get("reason")),
+                (decision_id, person_id(conn, x["name"], created, meeting_id=meeting_id), position, x.get("reason")),
             )
         if d.get("resolves"):
             issue = find_decision(conn, d["resolves"], viewer)
@@ -247,7 +251,7 @@ def _write_action_items(conn: psycopg.Connection, meeting_id: int, code: str, it
         except ValueError:
             warnings.append(f"Action Item {n}: 기한 '{a.get('due')}'을 읽을 수 없음 (YYYY-MM-DD)")
             due = None
-        owner_person, owner_unit = resolve_owner(conn, a.get("owner"), created)
+        owner_person, owner_unit = resolve_owner(conn, a.get("owner"), created, meeting_id)
         source = _source(conn, meeting_id, a.get("source_time"), f"Action Item {n}", warnings) or (None, None)
         item_code = (a.get("id") or "").strip()
         if not item_code:
@@ -300,6 +304,7 @@ def save_minutes(
     flag_reviews: list[dict[str, Any]] | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
+    checkin_code: str | None = None,
 ) -> dict[str, Any]:
     if not viewer.can_write:
         return _fail("다른 Agent System이 보낸 요청으로는 회의 기록을 바꿀 수 없습니다. 이 시스템의 사용자가 직접 요청해야 합니다.")
@@ -377,6 +382,9 @@ def save_minutes(
         attached = attach_transcript(conn, mid, transcript, viewer, warnings) if transcript else None
         _write_decisions(conn, mid, decisions, viewer, created, warnings)
         _write_action_items(conn, mid, code, action_items, keep_unlisted=was == "final", created=created, warnings=warnings)
+        # Last, so a name the model wrote for someone who checked in is merged into that account.
+        link_session(conn, mid, viewer, checkin_code, from_recording=transcript is not None, warnings=warnings)
+        apply_checkins(conn, mid)
 
         if was is None:
             conn.execute(
@@ -424,6 +432,8 @@ def save_minutes(
             mails = queue_minutes_mail(conn, mid, record, viewer, corrected=was == "final")
             warnings.extend(unit_owned(conn, mid))
         flags = flags_of(conn, mid)
+        attendance = attendance_view(conn, mid)
+        carried = recall(conn, mid, viewer)
         transcripts = [r["source_ref"] for r in conn.execute(
             "SELECT source_ref FROM transcripts WHERE meeting_id = %s AND source_ref IS NOT NULL ORDER BY id", (mid,))]
 
@@ -439,5 +449,7 @@ def save_minutes(
         "transcripts": transcripts,
         "mail_queued": mails,
         "new_directory_entries": created,
+        "attendance": attendance,
+        "recall": carried,
         "record": record,
     }

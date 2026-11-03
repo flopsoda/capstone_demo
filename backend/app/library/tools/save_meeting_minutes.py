@@ -90,6 +90,7 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
         flag_reviews: list[FlagReview] | None = None,
         start_time: str | None = None,
         end_time: str | None = None,
+        checkin_code: str | None = None,
     ) -> dict[str, Any]:
         """회의록을 회의 기록 저장소에 저장한다. 처음에는 초안(draft)으로 저장하고, 사용자가 확인하면 같은 meeting_id로
     다시 호출하며 finalize=true로 확정한다. 담당자나 기한이 빠진 Action Item, 검토되지 않은 Compliance 항목(compliance_flags의 open)이
@@ -97,6 +98,9 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
     확정된 회의록은 correction_reason과 함께 보낼 때만 정정되며, 이전 버전은 이력으로 남는다.
     확정 · 정정하면 참석자 회의록 메일과 담당자 업무 배정 메일을 Agent가 주소를 찾아 바로 보낸다 (mail_queued).
     결과의 meeting_id · Action Item id · compliance_flags를 사용자에게 알려 준다.
+    녹음을 올릴 때 QR로 출석한 사람은 말하지 않았어도 참석자로 들어간다. 결과의 attendance(출석 · 발언 여부, 이름을 정해야 할
+    목소리 unknown_speakers, 말하지 않은 참석자 silent, 추정 suggestion)와 recall(이번 참석자들이 이전 회의에서 맡아 아직 열린 일,
+    미결 쟁점)을 보고 사용자에게 확인할 것을 묻는다.
 
     Args:
         title: 회의명 (예: "AI 반도체 전략회의").
@@ -116,6 +120,7 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
         flag_reviews: Compliance 검토 결과 — 사용자(간사)가 각 항목에 대해 판단을 말했을 때만.
         start_time: 회의 시작 시각 HH:MM (한국 시간). 녹음 시각이나 회의에서 밝힌 시각만. 예약된 회의는 비워 두면 예약 시각을 쓴다.
         end_time: 회의 종료 시각 HH:MM (한국 시간). start_time과 같은 기준.
+        checkin_code: 요청에 적힌 출석 확인 코드 (예: "CHK-7F3K2Q"). 그 QR로 출석한 사람을 참석자로 넣는다.
     """
         viewer = current_viewer()
         return store_call(lambda: save_minutes(
@@ -123,7 +128,7 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
             decisions=plain(decisions or []), action_items=plain(action_items or []), attendees=plain(attendees or []),
             topics=topics, body=body, classification=classification, location=location, meeting_id=meeting_id,
             finalize=finalize, correction_reason=correction_reason, transcript_id=transcript_id,
-            flag_reviews=plain(flag_reviews or []), start_time=start_time, end_time=end_time,
+            flag_reviews=plain(flag_reviews or []), start_time=start_time, end_time=end_time, checkin_code=checkin_code,
         ))
 
     return save_meeting_minutes

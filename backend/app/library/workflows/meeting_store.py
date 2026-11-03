@@ -55,6 +55,7 @@ class Viewer:
     groups: frozenset[str]
     clearance: int  # 0 none · 1 공개 · 2 사내 · 3 대외비 · 4 극비
     can_write: bool
+    user_id: str | None = None  # Keycloak user id, when the gateway knows it (QR check-in → voiceprint key)
 
     def scope(self) -> dict[str, Any]:
         return {"clearance": self.clearance, "groups": sorted(self.groups)}
@@ -75,7 +76,8 @@ def viewer_for(principal: Any | None, origin: str | None) -> Viewer:
     can_write = origin != "a2a"
     if principal is None:
         return Viewer(None, "", frozenset(), anonymous_clearance(), can_write)
-    return Viewer(principal.email, principal.name or "", frozenset(principal.groups), principal.clearance, can_write)
+    return Viewer(principal.email, principal.name or "", frozenset(principal.groups), principal.clearance, can_write,
+                  getattr(principal, "user_id", None))
 
 
 def confirm_groups() -> frozenset[str] | None:
@@ -301,11 +303,19 @@ def unnamed_speaker(label: str | None) -> bool:
     return bool(label) and _UNNAMED.fullmatch(label.strip()) is not None
 
 
-def find_person(conn: psycopg.Connection, label: str) -> int | None:
+def find_person(conn: psycopg.Connection, label: str, meeting_id: int | None = None) -> int | None:
     """The person a label names: same name, and when the label has a title, the same title — or one that
-    contains or is contained in it ("K전자 CFO" ~ "CFO")."""
+    contains or is contained in it ("K전자 CFO" ~ "CFO"). A voice label ("화자 A") names one entry of one
+    meeting (people.speaker_meeting_id): only that meeting's, never another recording's same letter."""
+    if unnamed_speaker(label):
+        if meeting_id is None:
+            return None
+        row = conn.execute("SELECT id FROM people WHERE display_name = %s AND speaker_meeting_id = %s ORDER BY id LIMIT 1",
+                           (label.strip(), meeting_id)).fetchone()
+        return row["id"] if row else None
     name, title, _ = parse_person_label(label)
-    rows = conn.execute("SELECT id, title FROM people WHERE lower(display_name) = lower(%s) ORDER BY id", (name,)).fetchall()
+    rows = conn.execute("SELECT id, title FROM people WHERE lower(display_name) = lower(%s) AND speaker_meeting_id IS NULL ORDER BY id",
+                        (name,)).fetchall()
     if title:
         rows = [r for r in rows if r["title"] == title] or [
             r for r in rows if r["title"] and (_squash(r["title"]) in _squash(title) or _squash(title) in _squash(r["title"]))
@@ -313,8 +323,16 @@ def find_person(conn: psycopg.Connection, label: str) -> int | None:
     return rows[0]["id"] if rows else None
 
 
-def person_id(conn: psycopg.Connection, label: str, created: list[str], *, title: str | None = None) -> int:
-    """Existing person by name (and title, if the label has one); otherwise a new directory entry."""
+def person_id(conn: psycopg.Connection, label: str, created: list[str], *, title: str | None = None,
+              meeting_id: int | None = None) -> int:
+    """Existing person by name (and title, if the label has one); otherwise a new directory entry.
+    A voice label gets an entry of `meeting_id` alone (see find_person)."""
+    if unnamed_speaker(label):
+        found = find_person(conn, label, meeting_id)
+        if found is not None:
+            return found
+        return conn.execute("INSERT INTO people (display_name, speaker_meeting_id) VALUES (%s, %s) RETURNING id",
+                            (label.strip(), meeting_id)).fetchone()["id"]
     name, label_title, _ = parse_person_label(label)
     title = title or label_title
     found = find_person(conn, f"{name} ({title})" if title else name)
@@ -326,11 +344,15 @@ def person_id(conn: psycopg.Connection, label: str, created: list[str], *, title
     ).fetchone()["id"]
 
 
-def resolve_owner(conn: psycopg.Connection, label: str | None, created: list[str]) -> tuple[int | None, int | None]:
-    """(person_id, org_unit_id) for an Action Item owner label; a label nobody has is registered."""
+def resolve_owner(conn: psycopg.Connection, label: str | None, created: list[str],
+                  meeting_id: int | None = None) -> tuple[int | None, int | None]:
+    """(person_id, org_unit_id) for an Action Item owner label; a label nobody has is registered.
+    `meeting_id`: the meeting the item belongs to, which a voice label ("화자 A") is scoped to."""
     if not label or not label.strip():
         return None, None
     label = label.strip()
+    if unnamed_speaker(label):
+        return person_id(conn, label, created, meeting_id=meeting_id), None
     unit = conn.execute("SELECT id FROM org_units WHERE lower(name) = lower(%s)", (label,)).fetchone()
     if unit:
         return None, unit["id"]

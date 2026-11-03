@@ -70,6 +70,7 @@ def test_group_registry_content():
         "meeting_minutes_writing": ("skill", {"meeting"}),
         "meeting_follow_up": ("skill", {"meeting"}),
         "run_meeting_context_retrieval": ("tool", {"meeting"}),
+        "correct_transcript": ("tool", {"meeting"}),
         "save_meeting_minutes": ("tool", {"meeting"}),
         "run_action_item_tracking": ("tool", {"meeting"}),
         "update_action_item": ("tool", {"meeting"}),
@@ -81,6 +82,7 @@ def test_group_registry_content():
         "run_mna_review": ("tool", {"advisory"}),
     }
     assert set(a2a_tool.request_k_electronics_review.args) == {"request"}
+    assert set(group_registry.get_capability("correct_transcript").impl.args) == {"transcript_id"}
     for name in ("delegate_to_meeting_agent", "delegate_to_news_agent", "delegate_to_advisory_agent"):
         assert set(group_registry.get_capability(name).impl.args) == {"task"}
 

@@ -23,6 +23,7 @@ from .agents.advisory import run_advisory_agent
 from .agents.group_super import run_group_super
 from .agents.meeting import run_meeting_agent
 from .agents.news import run_news_agent
+from .tools.correct_transcript import TRANSCRIPT_CORRECTION
 
 app = FastAPI(title="Group agent system", version="0.5.0")
 # Observer streams end on shutdown so uvicorn --reload can restart; the meeting store's mail /
@@ -49,8 +50,10 @@ def group_super_run(body: RunRequest) -> StreamingResponse:
 
 @app.post("/api/agents/meeting/run")
 def meeting_run(body: RunRequest) -> StreamingResponse:
-    """Direct user → Group Meeting Agent (group-level meeting records). Streams events."""
-    return ndjson_run(lambda: run_meeting_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="meeting", **run_identity(body)))
+    """Direct user → Group Meeting Agent (group-level meeting records). Streams events.
+    A recording's transcript in the request is corrected first (tools/correct_transcript)."""
+    return ndjson_run(lambda: run_meeting_agent(TRANSCRIPT_CORRECTION.prepare(body.request), invocation="direct"),
+                      new_run(system=SYSTEM, root_agent="meeting", **run_identity(body)))
 
 
 @app.post("/api/agents/news/run")
@@ -93,6 +96,12 @@ class DeskRequest(Identified):
     query: str | None = None  # minutes: 검색어
     offset: int | None = None  # minutes: 몇 번째부터
     due: str | None = None  # items: 기한 지정 (YYYY-MM-DD)
+    code: str | None = None  # checkin: 출석 확인 코드 (CHK-…)
+    token: str | None = None  # checkin join: QR의 30초 코드
+    voice_consent: bool | None = None  # checkin join: 이 회의 녹음에서 목소리를 익혀도 되는지 (None = 그대로)
+    source_name: str | None = None  # checkin open: 함께 올린 녹음 파일 이름
+    speaker: str | None = None  # attendance assign: 목소리 라벨 ('화자 C')
+    person: dict[str, Any] | None = None  # attendance: {name, email, user_id} (gateway가 회사 계정으로 확인)
 
 
 def _desk(body: DeskRequest, call: Callable[[Viewer], dict[str, Any]]) -> dict[str, Any]:
@@ -124,6 +133,8 @@ def desk_flags(body: DeskRequest) -> dict[str, Any]:
 
 @app.post("/api/desk/items")
 def desk_items(body: DeskRequest) -> dict[str, Any]:
+    if body.item_id and body.action == "split":
+        return _desk(body, lambda v: meeting_desk.split_item(store=MEETING_STORE, viewer=v, item_id=body.item_id))
     if body.item_id:
         return _desk(body, lambda v: meeting_desk.update_item(store=MEETING_STORE, viewer=v, item_id=body.item_id,
                                                               status=body.status, note=body.note, owner=body.owner, due=body.due))
@@ -140,6 +151,18 @@ def desk_schedule(body: DeskRequest) -> dict[str, Any]:
 @app.post("/api/desk/meeting")
 def desk_meeting(body: DeskRequest) -> dict[str, Any]:
     return _desk(body, lambda v: meeting_desk.meeting(store=MEETING_STORE, viewer=v, meeting_id=body.meeting_id))
+
+
+@app.post("/api/desk/checkin")
+def desk_checkin(body: DeskRequest) -> dict[str, Any]:
+    return _desk(body, lambda v: meeting_desk.checkin(store=MEETING_STORE, viewer=v, action=body.action, code=body.code, token=body.token,
+                                                      voice_consent=body.voice_consent, source_name=body.source_name))
+
+
+@app.post("/api/desk/attendance")
+def desk_attendance(body: DeskRequest) -> dict[str, Any]:
+    return _desk(body, lambda v: meeting_desk.attendance(store=MEETING_STORE, viewer=v, action=body.action, meeting_id=body.meeting_id,
+                                                         speaker=body.speaker, person=body.person))
 
 
 @app.post("/api/desk/minutes")

@@ -142,7 +142,7 @@ def update_action_item(
     code = (item_id or "").strip()
     with store.connect() as conn:
         row = conn.execute(
-            f"""SELECT a.id, a.status, a.due_date, {OWNER_LABEL} AS owner FROM action_items a JOIN meetings m ON m.id = a.meeting_id
+            f"""SELECT a.id, a.meeting_id, a.status, a.due_date, {OWNER_LABEL} AS owner FROM action_items a JOIN meetings m ON m.id = a.meeting_id
                 LEFT JOIN people p ON p.id = a.owner_person_id LEFT JOIN org_units u ON u.id = a.owner_unit_id
                 WHERE upper(a.code) = upper(%(code)s) AND {VISIBLE} FOR UPDATE OF a""",
             {"code": code, **viewer.scope()},
@@ -172,7 +172,7 @@ def update_action_item(
             values.append(new_due)
             changes.append(f"기한 {row['due_date'] or '없음'} → {new_due}")
         if owner:
-            owner_person, owner_unit = resolve_owner(conn, owner, created)
+            owner_person, owner_unit = resolve_owner(conn, owner, created, row["meeting_id"])
             sets.append("owner_person_id = %s, owner_unit_id = %s")
             values += [owner_person, owner_unit]
             changes.append(f"담당 {row['owner'] or '없음'} → {owner.strip()}")

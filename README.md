@@ -151,7 +151,8 @@ backend/
       skills/                        specialist_delegation, meeting_context_analysis, meeting_minutes_writing, meeting_follow_up, inbound_task_requests, external_risk_analysis, mna_feasibility_review (Skill 본문)
       tools/                         run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory;
                                      run_meeting_context_retrieval, save_meeting_minutes, run_action_item_tracking, update_action_item, run_meeting_schedule,
-                                     manage_mail_outbox, run_task_requests — make_<tool>(store) factory
+                                     manage_mail_outbox, run_task_requests — make_<tool>(store) factory;
+                                     correct_transcript — make_transcript_correction(store, glossary, agent): 회의 Agent 앞의 녹음 변환본 교정 + 다시 교정하는 Tool
                                      (Tool 이름 · 설명 · schema의 source of truth); meeting_access.py — 요청자(viewer)를 run에서 읽음; delegation.py — make_delegate_tool(name, description, from, to, run)
       workflows/
         meeting_store.py             회의 저장소: MeetingStore(schema, seed) — Postgres 연결 · schema 생성(meeting_schema.sql) · migration · fixture seed · 등급 필터(VISIBLE)

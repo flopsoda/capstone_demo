@@ -53,6 +53,8 @@ def sign(principal: Principal, key: str, *, ttl_seconds: int = 1800, now: float 
               "name": principal.name, "groups": list(principal.groups), "clearance": principal.clearance}
     if principal.agents is not None:
         claims["agents"] = list(principal.agents)
+    if principal.user_id:
+        claims["user_id"] = principal.user_id
     header = _b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     payload = _b64encode(json.dumps(claims, ensure_ascii=False).encode())
     return f"{header}.{payload}.{_b64encode(_mac(key, f'{header}.{payload}'))}"
@@ -78,7 +80,8 @@ def verify(token: str, key: str, *, now: float | None = None) -> Principal:
     agents = claims.get("agents")
     try:
         return Principal(email=claims["sub"], name=claims.get("name") or "", groups=tuple(claims.get("groups") or ()),
-                         clearance=claims["clearance"], agents=tuple(agents) if isinstance(agents, list) else None)
+                         clearance=claims["clearance"], agents=tuple(agents) if isinstance(agents, list) else None,
+                         user_id=claims.get("user_id") or None)
     except (KeyError, ValueError) as e:
         raise PrincipalRejected("principal_token의 사용자 정보가 올바르지 않습니다.") from e
 

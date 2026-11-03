@@ -206,7 +206,7 @@ def task_requests(
                 (mid, f"{source}의 업무 요청 {row['code']}을 접수했다: {row['title']}", row["detail"], viewer.email, viewer.email),
             )
             target = {"id": mid, "code": code}
-        owner_person, owner_unit = resolve_owner(conn, owner_label, created)
+        owner_person, owner_unit = resolve_owner(conn, owner_label, created, target["id"])
         item_code = f"{target['code']}-A{next_item_number(conn, target['id'], target['code'])}"
         text = row["title"] + (f" ({row['detail']})" if row["detail"] else "")
         item_id = conn.execute(
