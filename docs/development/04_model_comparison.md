@@ -785,7 +785,7 @@ Gemma 31B는 주요 Tool Calling 기능을 정상적으로 수행하면서도, �
 .\.venv\Scripts\python.exe -c "from app.systems.k_electronics.agents.advisory import run_advisory_agent; print(run_advisory_agent('뉴로엣지 인수 타당성을 CFO 관점에서 평가해 줘.', invocation='delegation'))"
 ```
 
-### 12.3 GPT-OSS Tool Calling 오류 개선 후 회귀 테스트
+### 12.2 GPT-OSS Tool Calling 오류 개선 후 회귀 테스트
 
 ```powershell
 .\.venv\Scripts\python.exe -c "from app.systems.k_electronics.agents.advisory import run_advisory_agent; print(run_advisory_agent('테스트기업XYZ의 인수 타당성을 CFO 관점에서 평가해 줘.', invocation='delegation'))"
