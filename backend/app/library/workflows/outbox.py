@@ -2,7 +2,8 @@
 
 Workflows queue mail here: minutes to the participants and assignments to the owners when minutes
 are finalized or corrected, notices when a scheduled meeting is created, changed or cancelled,
-and due-date reminders (queued by the daily job). The agent finds each recipient's address itself
+and due-date reminders (queued by the daily job). Assignment and reminder mail carries buttons with which the
+owner reports progress without logging in (mail_actions). The agent finds each recipient's address itself
 (people.email, else the email registered at login found by name — directory.lookup_email — else
 the staff · contacts directory) and queues the mail ready to go (approved by 'agent'); no person
 approves it. The delivery job sends it over SMTP (SMTP_HOST …, see deliver_approved). Mail to
@@ -26,6 +27,7 @@ from typing import Any
 
 import psycopg
 
+from . import mail_actions
 from .directory import lookup_email
 from .meeting_store import (
     OPEN_STATUSES,
@@ -448,7 +450,7 @@ def deliver_approved(conn: psycopg.Connection, *, limit: int = 20, connect=_conn
         (f"{STALE_DAYS}일 안에 보내지 못해 발송하지 않음 (필요하면 다시 보내기)", STALE_DAYS),
     )
     rows = conn.execute(
-        """SELECT id, kind, meeting_id, person_id, to_name, to_email, subject, body, attempts FROM outbox
+        """SELECT id, kind, meeting_id, action_item_id, person_id, to_name, to_email, subject, body, attempts FROM outbox
            WHERE status = 'approved' ORDER BY id LIMIT %s FOR UPDATE SKIP LOCKED""",
         (limit,),
     ).fetchall()
@@ -467,7 +469,15 @@ def deliver_approved(conn: psycopg.Connection, *, limit: int = 20, connect=_conn
             msg = EmailMessage()
             msg["From"], msg["To"], msg["Subject"] = cfg["sender"], Address(display_name=r["to_name"], addr_spec=r["to_email"]), r["subject"]
             msg["Date"], msg["Message-ID"] = formatdate(localtime=True), make_msgid(domain="navitech")
-            msg.set_content(r["body"])
+            # 업무 배정 · 기한 알림 · 독촉 메일에는 담당자가 바로 진행 상황을 알리는 버튼 (mail_actions)
+            urls = (mail_actions.links(r["action_item_id"], r["person_id"])
+                    if r["kind"] in ("assignment", "reminder") and r["action_item_id"] and r["person_id"] else None)
+            if urls:
+                main = r["body"].removesuffix(FOOTER)
+                msg.set_content(main + mail_actions.text_block(urls) + FOOTER)
+                msg.add_alternative(mail_actions.html_mail(main, urls, FOOTER), subtype="html")
+            else:
+                msg.set_content(r["body"])
             if r["kind"] == "minutes":
                 for name, content in _documents(conn, r, rendered):
                     msg.add_attachment(content, maintype="application", subtype="pdf", filename=name)

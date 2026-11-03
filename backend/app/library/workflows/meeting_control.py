@@ -7,7 +7,8 @@ what the agent saw and did. Nothing here is stored anew; it is read from what th
            정상 ok
   screen   the decision in force (the latest, with what it replaced), its premises, open / late Action Items, the next
            meeting, and the subject's meetings in order (for zooming in)
-  log      recordings turned into drafts, minutes confirmed, decisions changed, premises shaken by news, mail sent
+  log      recordings turned into drafts, minutes confirmed, decisions changed, premises shaken by news, mail sent,
+           Action Items whose status changed (and progress the owners reported from their mail)
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from datetime import date
 from typing import Any
 
 from .decision_watch import EFFECT_LABEL, WATCHED_KINDS
+from .mail_actions import ITEM_LABEL, VIA
 from .meeting_store import KST, PERSON_LABEL, VISIBLE, MeetingStore, Viewer, decision_ref, kst_date, kst_minute, time_label, today_kst
 from .subjects import fill_missing
 
@@ -82,6 +84,13 @@ def control(*, store: MeetingStore, viewer: Viewer, today: date | None = None) -
         recordings = conn.execute(
             "SELECT t.meeting_id, t.source_name, t.duration_s, t.created_at FROM transcripts t WHERE t.meeting_id = ANY(%s)", (ids,),
         ).fetchall()
+        reports = conn.execute(  # 할 일의 상태가 바뀐 때와 담당자가 메일로 알린 때 (누가: 그 이메일의 사람)
+            """SELECT a.meeting_id, a.text, u.old_status, u.new_status, u.note, u.at,
+                       coalesce((SELECT p.display_name FROM people p WHERE lower(p.email) = lower(u.by_email) LIMIT 1), u.by_email) AS who
+                FROM action_item_updates u JOIN action_items a ON a.id = u.action_item_id
+                WHERE a.meeting_id = ANY(%s) AND (u.new_status IS DISTINCT FROM u.old_status OR u.note LIKE %s) ORDER BY u.at""",
+            (ids, f"{VIA}%"),
+        ).fetchall()
         progress = {r["meeting_id"]: r for r in conn.execute(
             """SELECT a.meeting_id, count(*) AS total, count(*) FILTER (WHERE a.status = 'done') AS done,
                       count(*) FILTER (WHERE a.status = ANY(%(open)s) AND a.due_date < %(today)s) AS overdue
@@ -92,11 +101,15 @@ def control(*, store: MeetingStore, viewer: Viewer, today: date | None = None) -
         owned = conn.execute(
             """SELECT a.code, a.text, a.status, a.due_date, a.meeting_id, a.owner_person_id, a.owner_unit_id,
                       p.display_name, p.title, p.email, (p.is_external OR coalesce(sd.is_external, false)) AS is_external,
-                      u.name AS unit, sd.department, sd.organization
+                      u.name AS unit, sd.department, sd.organization, lu.note AS last_note, lu.at AS last_at, lu.who AS last_by
                FROM action_items a LEFT JOIN people p ON p.id = a.owner_person_id LEFT JOIN org_units u ON u.id = a.owner_unit_id
                LEFT JOIN LATERAL (SELECT s.department, s.organization, s.is_external FROM staff_directory s
                                   WHERE (p.email IS NOT NULL AND lower(s.email) = lower(p.email)) OR s.name = p.display_name
                                   ORDER BY (lower(s.email) = lower(coalesce(p.email, ''))) DESC LIMIT 1) sd ON true
+               LEFT JOIN LATERAL (SELECT x.note, x.at, coalesce((SELECT q.display_name FROM people q WHERE lower(q.email) = lower(x.by_email)
+                                                                 LIMIT 1), x.by_email) AS who
+                                  FROM action_item_updates x WHERE x.action_item_id = a.id AND x.note IS NOT NULL
+                                  ORDER BY x.at DESC, x.id DESC LIMIT 1) lu ON true
                WHERE a.meeting_id = ANY(%s) AND a.status <> 'cancelled' ORDER BY a.due_date NULLS LAST, a.id""",
             (ids,),
         ).fetchall()
@@ -190,6 +203,12 @@ def control(*, store: MeetingStore, viewer: Viewer, today: date | None = None) -
             for d in decided[m["id"]]:
                 if d["replaces"]:
                     event(m["finalized_at"], m["id"], "change", f"결정 변경 — {d['replaces']} → {_short(d['statement'], 46)}")
+    for r in reports:
+        by_mail = (r["note"] or "").startswith(VIA)
+        reason = (r["note"] or "").removeprefix(VIA).lstrip(": ").strip() if by_mail else ""
+        event(r["at"], r["meeting_id"], "report",
+              f"진행 보고 — {r['who'] or '누군가'}: {ITEM_LABEL.get(r['new_status'], r['new_status'])} · {_short(r['text'], 30)}"
+              + (" (메일)" if by_mail else "") + (f" — {_short(reason, 40)}" if reason else ""))
     for sg in signals:
         event(sg["created_at"], sg["meeting_id"], "signal",
               f"{EFFECT_LABEL[sg['effect']]} — {_short(sg['premise'], 34)} ← {sg['source_name']} \"{_short(sg['headline'], 34)}\"")
@@ -232,7 +251,9 @@ def _owners(owned, by_id, today: date) -> list[dict[str, Any]]:
         due = a["due_date"]
         row["items"].append({"id": a["code"], "text": a["text"], "status": a["status"], "due": due.isoformat() if due else None,
                              "overdue": bool(due and due < today and a["status"] in OPEN_ITEM), "subject": m["subject"],
-                             "meeting": {"id": m["code"], "title": m["title"], "date": kst_date(m["starts_at"])}})
+                             "meeting": {"id": m["code"], "title": m["title"], "date": kst_date(m["starts_at"])},
+                             # 마지막 기록 (담당자가 메일로 알린 메모, 독촉 · 기한 변경 등)
+                             "last": {"note": a["last_note"], "at": kst_minute(a["last_at"]), "by": a["last_by"]} if a["last_note"] else None})
     out = []
     for row in people.values():
         items = row["items"]

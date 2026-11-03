@@ -167,6 +167,7 @@ backend/
         transcripts.py               speech-service에서 transcript id로 가져와 복사 · [mm:ss] 근거 발언 연결 · 만료 삭제
         meeting_report.py            회의록(양식) · 회의 결과 보고서(개조식) PDF — 회의 업무 화면 내려받기 · 회의록 메일 첨부
         outbox.py                    메일 발송함: 회의록 · 업무 배정 · 회의 안내 · 기한 알림 생성, 주소 자동 탐색(로그인 이메일 → 임직원 연락처), 자동 SMTP 발송, 재발송 · 취소 · 주소 정정
+        mail_actions.py              메일로 진행 보고: 업무 배정 · 기한 알림 메일의 완료 · 진행 중 · 막힘 버튼(서명된 30일 링크, 로그인 없음) → /api/mail-action
         directory.py                 메일 받는 사람의 등록 이메일 조회 (gateway 내부 API)
         jobs.py                      배경 작업: 메일 발송(매분) · 기한 알림 · 주소 재조회 · 만료 transcript 삭제(매일) · 결정 감시(10분마다 새 기사)
         decision_watch.py            결정의 전제 · 조건 감시: 새 기사 × 전제 → broken | at_risk 판정(chat model) · 알림 메일, 결정 검토(금액 비교 · 재검토 회의안)

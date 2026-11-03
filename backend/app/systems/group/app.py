@@ -11,8 +11,9 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 
-from ...library.workflows import decision_watch, meeting_control, meeting_desk, meeting_report
+from ...library.workflows import decision_watch, mail_actions, meeting_control, meeting_desk, meeting_report
 from ...library.workflows.jobs import start_meeting_jobs
 from ...library.workflows.meeting_store import StoreUnavailable, Viewer, viewer_for
 from ...runtime.api import ndjson_run, run_identity, shutdown_signal, sse_events
@@ -196,6 +197,22 @@ def desk_control(body: DeskRequest) -> dict[str, Any]:
 def desk_minutes(body: DeskRequest) -> dict[str, Any]:
     return _desk(body, lambda v: meeting_desk.minutes_list(store=MEETING_STORE, viewer=v, query=body.query, status=body.status,
                                                            offset=body.offset))
+
+
+class MailActionRequest(BaseModel):
+    token: str
+    status: str | None = None
+    note: str | None = None
+
+
+@app.post("/api/mail-action")
+def mail_action(body: MailActionRequest) -> dict[str, Any]:
+    """업무 배정 · 기한 알림 메일의 버튼 (gateway /meetings/act/…): 로그인 대신 메일의 서명된 링크로 담당자를 정한다.
+    status 없이 부르면 그 업무를 보여 주고, 있으면 진행 상황을 남긴다 (library/workflows/mail_actions)."""
+    try:
+        return mail_actions.act(store=MEETING_STORE, token=body.token, status=body.status, note=body.note)
+    except StoreUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @app.post("/api/desk/report", response_model=None)

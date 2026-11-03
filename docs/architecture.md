@@ -207,6 +207,13 @@ Advisory Agent  → run_mna_review
     "외부 자문위원 (OO회계법인)"처럼 그 기관에서 그 역할을 가진 한 명) 순으로 찾고, 찾은 주소는 `people.email`에 남긴다. 주소를 추측하지 않는다: 아무 데서도 못 찾으면 `needs_address`로 두고
     매일 아침 다시 찾는다. 목소리가 등록되지 않은 발언자("화자 A" · "화자 B" …, 예전 변환본은 "미확인 화자 N")에게는 메일을 만들지 않고, 그런 라벨이 담당인 할 일은 실제 담당자를 정해야 확정된다. 사람은 실패한 메일 다시 보내기(`resend`) · 안 보낸 메일 취소(`reject`) · 주소 정정(`set_address`, 바로 다시 보냄)만 한다.
     부서 담당 Action Item은 주소가 없어 배정 메일을 만들지 않고 그렇게 알린다.
+  - **메일로 진행 보고 (2026-11-04, `mail_actions.py`).** 업무 배정 · 기한 알림 · 독촉 메일은 HTML로도 보내고 **완료 · 진행 중 · 막힘** 버튼을 붙인다 (텍스트 본문에는 같은 링크).
+    버튼은 gateway의 로그인 없는 화면 `MEETINGS_ACTION_URL/<token>?s=<상태>`를 연다 (Group만 이 값을 가짐; 없거나 `PRINCIPAL_SIGNING_KEY`가 없으면 버튼 없이 보냄).
+    token = 할 일 id · 받는 사람(person id) · 만료(30일) + `PRINCIPAL_SIGNING_KEY`에서 파생한 키의 HMAC — 회사 계정이 없는 외부 담당자도 쓸 수 있게 하려는 것이다.
+    링크를 여는 것(GET)은 할 일을 보여 주기만 하고(회사 메일의 보안 검사가 링크를 미리 열기 때문, RFC 8058의 원클릭 구독 취소와 같은 이유), 화면에서 '보내기'(POST)를 눌러야
+    gateway → `POST /api/mail-action {token, status, note}` → `mail_actions.act`가 상태를 바꾸고 `action_item_updates`에 그 담당자의 이메일로 "메일로 보고: 메모"를 남긴다.
+    막힘은 메모(이유)가 있어야 하고, 할 일의 담당이 바뀌면 이전 담당자의 링크는 쓸 수 없다. 관제의 활동에는 상태 변경과 메일 보고가 "진행 보고 — 누가: 상태 · 할 일 (메일) — 메모"로 보인다.
+    회신 메일을 읽어 반영하는 것(메일 수신)은 아직 없다.
   - **출석 확인 · 참석자 확인 (2026-11-03, `attendance.py`).** 녹음만으로는 말하지 않은 참석자를 알 수 없다. 회의지원 채팅에 녹음을 올리면 화면이 출석 확인(`CHK-…`)을 열고
     30초마다 바뀌는 코드(HMAC)를 담은 QR을 띄운다. 참석자가 휴대폰으로 찍으면 gateway가 로그인 계정(이메일 · 이름 · Keycloak id)으로 출석시킨다 (지금 코드와 직전 3개까지 유효, 3시간 뒤 마감).
     회의록 요청 문장에 그 코드가 들어가고 `save_meeting_minutes(checkin_code=)`가 받는다 (없으면 같은 사람이 12시간 안에 연 출석 확인). 출석한 계정은 말하지 않았어도 참석자(`attended`, `checked_in_at`)가 되고,
@@ -234,7 +241,7 @@ Advisory Agent  → run_mna_review
   - **주제와 관제 (2026-11-03, `subjects.py`, `meeting_control.py`).** 회의마다 주제(`meetings.subject`, 예: 천안 신공장 · 뉴로엣지 인수)가 있다: 저장할 때 Agent가 준 이름, 이어지는 회의(carry over)의 주제,
     쓰고 있는 주제와 회의명 단어 일치, 아니면 회의명에서 '회의 · 검토 · 준비' 같은 말을 뺀 것 순서. 007 전에 저장된 회의는 관제를 처음 열 때 같은 규칙으로 정한다 (`fill_missing`, 오래된 회의부터).
     `meeting_control.control()`은 회사의 모든 회의를 한 화면으로: 주제마다 상태(alarm 이상 · warn 주의 · ok, 이유 · 지금 유효한 결정 · 다음 회의), 회의 목록(진행 중 · 기록 대기(지난 날짜에 예약된 채 회의록이 없음) · 예정 · 완료, 녹음 · 회의록 · 결정 · 분공 진행 · 메일),
-    담당자별 할 일(같은 email · 이름은 한 사람, 소속은 `staff_directory`), 날짜별 활동(녹음 → 초안 → 확정 · 결정 변경 · 신호 · 메일)을 준다.
+    담당자별 할 일(같은 email · 이름은 한 사람, 소속은 `staff_directory`, 할 일마다 마지막 기록 — 메일 보고 · 독촉 등), 날짜별 활동(녹음 → 초안 → 확정 · 결정 변경 · 신호 · 메일 · 진행 보고)을 준다.
   - **업무 요청 (A2A).** `run_task_requests`(K): 다른 system의 A2A run은 `submit`만 할 수 있고(`task_requests` pending, 요청한 system = run의 `caller`),
     K의 확정 권한자가 `accept`(담당 · 기한 필수, 지정 회의 또는 따로 만든 접수 기록에 Action Item 생성 + 배정 메일) · `reject`한다. A2A `list`는 그 system이 보낸 요청과 연결된 Action Item 진행만 보여 준다.
 - `backend/app/library/tools/run_company_risk_news_analysis.py`: `make_run_company_risk_news_analysis(path)` → `@tool("run_company_risk_news_analysis")`, 인자 `query: str, company: str, topics: list[str] | None`.
@@ -479,6 +486,7 @@ K system에도 같은 모양의 `POST /api/agents/{meeting,news,advisory}/run`�
 Group system에는 Agent를 거치지 않는 **회의 업무 화면용** `POST /api/desk/{overview,mail,flags,items,meeting,schedule,report,minutes,checkin,attendance,watch,control,finalize}`도 있다 (2026-10-30, `library/workflows/meeting_desk`;
 `watch`는 전제가 흔들린 결정, `control`은 관제(`meeting_control`), `finalize`는 저장된 초안을 Agent 없이 확정(메일 발송)한다 — 2026-11-03;
 `checkin` open · status · close · join과 `attendance` assign · add · remove, `items`의 `action: split`은 2026-11-03, `library/workflows/attendance`). `meeting`은 `attendance` · `recall`도 준다.
+요청자(principal) 대신 메일 버튼의 서명된 token으로 담당자를 정하는 `POST /api/mail-action {token, status?, note?}`도 있다 (2026-11-04, `library/workflows/mail_actions`, gateway `/meetings/act/<token>`).
 `report` `{meeting_id, kind: minutes|report}`는 저장된 회의록으로 만든 **회의록(양식) · 회의 결과 보고서(개조식) PDF**를 돌려준다 (`library/workflows/meeting_report`, fpdf2 + 나눔 글꼴;
 양식은 data.go.kr에 공개된 공공데이터전략위원회 회의록 · 회의 결과를 따름). 같은 PDF가 회의록 메일에 첨부되고, 의장 · 간사 메일에는 결과 보고서도 붙는다.
 배포에서는 이 desk API를 Open WebUI 채팅 안의 회의 카드가 부른다 (gateway가 회의 Tool 결과로 답변 끝에 카드 블록을 붙이고 Open WebUI 스크립트가 그림). 회의록 저장 Tool은 회의 시각(start_time · end_time)도 받는다.
