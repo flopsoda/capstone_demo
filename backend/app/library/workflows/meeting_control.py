@@ -208,7 +208,7 @@ def control(*, store: MeetingStore, viewer: Viewer, today: date | None = None) -
         e["at"] = e["at"].astimezone(KST).strftime("%Y-%m-%d %H:%M")
     counts = {k: sum(1 for x in out if x["state"] == k) for k in STATE_ORDER}
     return {"today": today.isoformat(), "screens": out, "counts": counts, "log": log[:LOG_LIMIT],
-            "meetings": _meeting_rows(meetings, decisions, recordings, progress, mails, now),
+            "meetings": _meeting_rows(meetings, decisions, recordings, progress, mails, now, today),
             "people": _owners(owned, by_id, today)}
 
 
@@ -245,9 +245,10 @@ def _owners(owned, by_id, today: date) -> list[dict[str, Any]]:
     return out
 
 
-def _meeting_rows(meetings, decisions, recordings, progress, mails, now) -> list[dict[str, Any]]:
-    """Every meeting as a row: live (booked and begun, no minutes yet) · upcoming · done (recording · minutes · decisions ·
-    Action Items done / all · mail sent / all)."""
+def _meeting_rows(meetings, decisions, recordings, progress, mails, now, today: date) -> list[dict[str, Any]]:
+    """Every meeting as a row: live (booked, begun today, no minutes yet) · pending (booked for an earlier day and still
+    no minutes: the recording is yet to come) · upcoming · done (recording · minutes · decisions · Action Items done / all ·
+    mail sent / all)."""
     decided: dict[int, int] = defaultdict(int)
     for d in decisions:
         decided[d["meeting_id"]] += 1
@@ -258,7 +259,8 @@ def _meeting_rows(meetings, decisions, recordings, progress, mails, now) -> list
         sent[ml["meeting_id"]][0] += ml["status"] == "sent"
     rows = []
     for m in meetings:
-        phase = "done" if m["status"] == "held" else "live" if m["starts_at"] <= now else "upcoming"
+        phase = ("done" if m["status"] == "held" else "upcoming" if m["starts_at"] > now
+                 else "live" if kst_date(m["starts_at"]) == today.isoformat() else "pending")
         rec, prog = recording.get(m["id"]), progress.get(m["id"])
         rows.append({
             "id": m["code"], "title": m["title"], "subject": m["subject"], "phase": phase, "date": kst_date(m["starts_at"]),
@@ -267,7 +269,7 @@ def _meeting_rows(meetings, decisions, recordings, progress, mails, now) -> list
             "decisions": decided[m["id"]], "items": {"total": prog["total"], "done": prog["done"], "overdue": prog["overdue"]} if prog else None,
             "mails": {"sent": sent[m["id"]][0], "total": sent[m["id"]][1]} if m["id"] in sent else None,
         })
-    order = {"live": 0, "upcoming": 1, "done": 2}
+    order = {"live": 0, "pending": 1, "upcoming": 2, "done": 3}
     rows.sort(key=lambda r: (order[r["phase"]], r["starts_at"] if r["phase"] != "done" else "", r["starts_at"]), reverse=False)
     done = sorted((r for r in rows if r["phase"] == "done"), key=lambda r: r["starts_at"], reverse=True)
     return [r for r in rows if r["phase"] != "done"] + done

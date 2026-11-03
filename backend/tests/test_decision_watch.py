@@ -282,6 +282,10 @@ def test_the_control_room_lists_meetings_and_a_draft_is_confirmed_from_it(decide
     done, upcoming = rows[decided], rows[booked["meeting"]["id"]]
     assert done["phase"] == "done" and done["recording"]["name"] == "HBM_투심위.wav" and done["decisions"] == 1
     assert done["items"] == {"total": 1, "done": 0, "overdue": 0} and upcoming["phase"] == "upcoming"
+    with STORE.connect() as conn:  # booked for an earlier day and still no minutes: not "in progress"
+        conn.execute("UPDATE meetings SET starts_at = '2026-11-01 01:00+00', ends_at = NULL WHERE code = %s", (booked["meeting"]["id"],))
+    late = {r["id"]: r for r in control(store=STORE, viewer=SECRETARY, today=date(2026, 11, 3))["meetings"]}[booked["meeting"]["id"]]
+    assert late["phase"] == "pending"
     view = meeting_desk.meeting(store=STORE, viewer=SECRETARY, meeting_id=decided)
     assert view["recordings"][0]["lines"] == 3 and view["items"][0]["text"] == "세부 투자 계획 제출" and view["mails"]
     plain = {k: v for k, v in MINUTES.items() if k != "transcript_id"}

@@ -233,7 +233,7 @@ Advisory Agent  → run_mna_review
     근거 발언 · 전제 상태 · 들어온 신호를 주고, 계획의 금액(조 · 억)을 결정 금액과 코드로 비교해 넘으면 `conflicts`, 전제가 흔들렸으면 재검토 회의안을 붙인다. 이후 결정이 이전 결정을 대신하면(`supersedes`) 이전 결정의 신호는 더 세지 않는다.
   - **주제와 관제 (2026-11-03, `subjects.py`, `meeting_control.py`).** 회의마다 주제(`meetings.subject`, 예: 천안 신공장 · 뉴로엣지 인수)가 있다: 저장할 때 Agent가 준 이름, 이어지는 회의(carry over)의 주제,
     쓰고 있는 주제와 회의명 단어 일치, 아니면 회의명에서 '회의 · 검토 · 준비' 같은 말을 뺀 것 순서. 007 전에 저장된 회의는 관제를 처음 열 때 같은 규칙으로 정한다 (`fill_missing`, 오래된 회의부터).
-    `meeting_control.control()`은 회사의 모든 회의를 한 화면으로: 주제마다 상태(alarm 이상 · warn 주의 · ok, 이유 · 지금 유효한 결정 · 다음 회의), 회의 목록(진행 중 · 예정 · 완료, 녹음 · 회의록 · 결정 · 분공 진행 · 메일),
+    `meeting_control.control()`은 회사의 모든 회의를 한 화면으로: 주제마다 상태(alarm 이상 · warn 주의 · ok, 이유 · 지금 유효한 결정 · 다음 회의), 회의 목록(진행 중 · 기록 대기(지난 날짜에 예약된 채 회의록이 없음) · 예정 · 완료, 녹음 · 회의록 · 결정 · 분공 진행 · 메일),
     담당자별 할 일(같은 email · 이름은 한 사람, 소속은 `staff_directory`), 날짜별 활동(녹음 → 초안 → 확정 · 결정 변경 · 신호 · 메일)을 준다.
   - **업무 요청 (A2A).** `run_task_requests`(K): 다른 system의 A2A run은 `submit`만 할 수 있고(`task_requests` pending, 요청한 system = run의 `caller`),
     K의 확정 권한자가 `accept`(담당 · 기한 필수, 지정 회의 또는 따로 만든 접수 기록에 Action Item 생성 + 배정 메일) · `reject`한다. A2A `list`는 그 system이 보낸 요청과 연결된 Action Item 진행만 보여 준다.
