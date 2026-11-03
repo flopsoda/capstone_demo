@@ -33,6 +33,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from pydantic import ValidationError
 
 from .capabilities import Skill
 from .events import AgentError, emit
@@ -79,6 +80,17 @@ def compose_system_prompt(identity: str, skills: Sequence[Skill]) -> str:
     return "\n\n".join(parts)
 
 
+MAX_ARGUMENT_ERRORS = 10  # argument problems quoted back to the model
+
+
+def argument_error(name: str, error: ValidationError) -> dict[str, str]:
+    """Arguments that do not fit the Tool's schema, as a result the model can correct and call again
+    (a model that names a field differently must not end the whole run)."""
+    problems = [f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in error.errors()[:MAX_ARGUMENT_ERRORS]]
+    return {"error": f"{name}의 인자가 Tool 정의와 맞지 않아 실행하지 않았습니다 — " + "; ".join(problems)
+                     + ". Tool 설명에 적힌 필드 이름과 형식 그대로 다시 호출하세요."}
+
+
 def execute_tool_calls(agent: str, message: AIMessage, tools: dict[str, BaseTool]) -> list[ToolMessage]:
     """Runs every tool call the model made, emitting tool_start / tool_end around each."""
     out: list[ToolMessage] = []
@@ -88,7 +100,10 @@ def execute_tool_calls(agent: str, message: AIMessage, tools: dict[str, BaseTool
         if tool is None:
             content: Any = {"error": f"unknown tool: {call['name']}"}
         else:
-            content = tool.invoke(call["args"])
+            try:
+                content = tool.invoke(call["args"])
+            except ValidationError as e:  # the arguments did not fit the Tool's schema
+                content = argument_error(call["name"], e)
         emit({"type": "tool_end", "agent": agent, "tool": call["name"], "result": content})
         out.append(
             ToolMessage(
