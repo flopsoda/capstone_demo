@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response, StreamingResponse
 
-from ...library.workflows import meeting_desk, meeting_report
+from ...library.workflows import decision_watch, meeting_control, meeting_desk, meeting_report
 from ...library.workflows.jobs import start_meeting_jobs
 from ...library.workflows.meeting_store import StoreUnavailable, Viewer, viewer_for
 from ...runtime.api import ndjson_run, run_identity, shutdown_signal, sse_events
@@ -24,11 +24,13 @@ from .agents.group_super import run_group_super
 from .agents.meeting import run_meeting_agent
 from .agents.news import run_news_agent
 from .tools.correct_transcript import TRANSCRIPT_CORRECTION
+from .tools.run_decision_review import DECISION_WATCH
 
 app = FastAPI(title="Group agent system", version="0.5.0")
 # Observer streams end on shutdown so uvicorn --reload can restart; the meeting store's mail /
-# reminder jobs start with the app (only when MEETINGS_BACKGROUND_JOBS=1) and stop with it.
-STOP = shutdown_signal(app, on_start=lambda stop: start_meeting_jobs(MEETING_STORE, stop))
+# reminder jobs and the decision watch (news against the premises of the decisions in force) start
+# with the app (only when MEETINGS_BACKGROUND_JOBS=1) and stop with it.
+STOP = shutdown_signal(app, on_start=lambda stop: start_meeting_jobs(MEETING_STORE, stop, watch=DECISION_WATCH.scan))
 
 
 @app.get("/api/health")
@@ -107,6 +109,7 @@ class DeskRequest(Identified):
     source_name: str | None = None  # checkin open: 함께 올린 녹음 파일 이름
     speaker: str | None = None  # attendance assign: 목소리 라벨 ('화자 C')
     person: dict[str, Any] | None = None  # attendance: {name, email, user_id} (gateway가 회사 계정으로 확인)
+    signal_id: str | None = None  # watch: 전제를 흔든 신호 (SIG-…)
 
 
 def _desk(body: DeskRequest, call: Callable[[Viewer], dict[str, Any]]) -> dict[str, Any]:
@@ -168,6 +171,25 @@ def desk_checkin(body: DeskRequest) -> dict[str, Any]:
 def desk_attendance(body: DeskRequest) -> dict[str, Any]:
     return _desk(body, lambda v: meeting_desk.attendance(store=MEETING_STORE, viewer=v, action=body.action, meeting_id=body.meeting_id,
                                                          speaker=body.speaker, person=body.person))
+
+
+@app.post("/api/desk/watch")
+def desk_watch(body: DeskRequest) -> dict[str, Any]:
+    """전제가 흔들린 결정: 목록 · 문제없음(dismiss) · 재검토로 넘김(reviewed)."""
+    return _desk(body, lambda v: decision_watch.set_signal(store=MEETING_STORE, viewer=v, action=body.action,
+                                                           signal_id=body.signal_id, note=body.note))
+
+
+@app.post("/api/desk/finalize")
+def desk_finalize(body: DeskRequest) -> dict[str, Any]:
+    """회의 관제의 '확정 · 메일 발송': 저장된 초안을 그대로 확정 (확정 권한은 회의록 확정과 같음)."""
+    return _desk(body, lambda v: meeting_desk.finalize(store=MEETING_STORE, viewer=v, meeting_id=body.meeting_id))
+
+
+@app.post("/api/desk/control")
+def desk_control(body: DeskRequest) -> dict[str, Any]:
+    """회의 관제: 주제마다 지금 상태와, 회의 Agent가 본 것 · 한 일."""
+    return _desk(body, lambda v: meeting_control.control(store=MEETING_STORE, viewer=v))
 
 
 @app.post("/api/desk/minutes")

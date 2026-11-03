@@ -242,6 +242,16 @@ def test_recall_brings_back_what_these_attendees_left_open(recording):
     assert [i["statement"] for i in out["recall"]["open_issues"]] == ["모델을 무엇으로 할지 정하지 못함"]
 
 
+def test_recall_stays_on_the_subject_when_it_has_earlier_meetings(recording):
+    common = dict(store=STORE, viewer=UPLOADER, summary="-", attendees=[{"name": "이서연"}, {"name": "김민수 (팀장)"}], action_items=[])
+    save_minutes(**common, title="신공장 부지 회의", date="2026-10-10", subject="신공장",
+                 decisions=[{"kind": "issue", "statement": "허가 기간이 정해지지 않음"}])
+    save_minutes(**common, title="인수 검토 회의", date="2026-10-13", subject="인수",
+                 decisions=[{"kind": "issue", "statement": "핵심 인력 유지 여부 확인 필요"}])
+    out = save(subject="인수")
+    assert [i["statement"] for i in out["recall"]["open_issues"]] == ["핵심 인력 유지 여부 확인 필요"]
+
+
 def test_desk_routes_check_in_and_the_meeting_card_shows_attendance(recording):
     client = TestClient(app)
 

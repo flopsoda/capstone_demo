@@ -87,7 +87,8 @@ backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Wo
    (`earn-out이 뭐야?` 같은 개념 질문에는 Tool 없이 답함), **K전자 슈퍼에이전트** 탭에 `지난 회의에서 정한 기준만 정리해줘.`(미팅 위임 창이 열림).
    Group UI의 **미팅** 탭은 그룹 투자심의 회의 기록(Group 데이터)으로 답합니다. 미팅 탭에서는 회의 transcript로 회의록 초안을 저장 · 확정하고
    (`save_meeting_minutes`: transcript id 연결 · Compliance 검토 · 확정 권한), Action Item 진행을 조회 · 갱신하며(`run_action_item_tracking` · `update_action_item`), 회의 일정을 예약하고(`run_meeting_schedule`),
-   회의록 · 업무 배정 · 회의 안내 · 기한 알림 메일은 Agent가 받는 사람의 주소를 찾아 바로 보내고, 보낸 메일을 조회합니다(`manage_mail_outbox`).
+   회의록 · 업무 배정 · 회의 안내 · 기한 알림 메일은 Agent가 받는 사람의 주소를 찾아 바로 보내고, 보낸 메일을 조회합니다(`manage_mail_outbox`). 요청하면 밀린 일의 담당자에게 독촉 메일도 보냅니다(`update_action_item(remind=true)`).
+   회의에서 정한 결정의 전제 · 조건을 남기고, 새 기사가 그 전제를 흔들면 참석자에게 알리며 재검토를 제안합니다(`run_decision_review`, 배경 작업의 결정 감시).
    회의록 메일에는 회의록 PDF가, 의장 · 간사에게는 회의 결과 보고서 PDF도 첨부됩니다(`meeting_report`, 글꼴: `fonts-nanum` 또는 `REPORT_FONT_DIR`). K 미팅 탭은 그룹이 A2A로 보낸 업무 요청을 접수 · 등록합니다(`run_task_requests`).
 5. Monitor의 **초기화**로 관찰 화면을 비우고 다시 시연할 수 있습니다. 채팅 전사는 탭마다 유지됩니다.
 
@@ -152,7 +153,8 @@ backend/
       tools/                         run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory;
                                      run_meeting_context_retrieval, save_meeting_minutes, run_action_item_tracking, update_action_item, run_meeting_schedule,
                                      manage_mail_outbox, run_task_requests — make_<tool>(store) factory;
-                                     correct_transcript — make_transcript_correction(store, glossary, agent): 회의 Agent 앞의 녹음 변환본 교정 + 다시 교정하는 Tool
+                                     correct_transcript — make_transcript_correction(store, glossary, agent): 회의 Agent 앞의 녹음 변환본 교정 + 다시 교정하는 Tool;
+                                     run_decision_review — make_decision_watch(store, articles): 결정 · 전제 검토 Tool + 배경 작업의 기사 대조(scan)
                                      (Tool 이름 · 설명 · schema의 source of truth); meeting_access.py — 요청자(viewer)를 run에서 읽음; delegation.py — make_delegate_tool(name, description, from, to, run)
       workflows/
         meeting_store.py             회의 저장소: MeetingStore(schema, seed) — Postgres 연결 · schema 생성(meeting_schema.sql) · migration · fixture seed · 등급 필터(VISIBLE)
@@ -166,7 +168,10 @@ backend/
         meeting_report.py            회의록(양식) · 회의 결과 보고서(개조식) PDF — 회의 업무 화면 내려받기 · 회의록 메일 첨부
         outbox.py                    메일 발송함: 회의록 · 업무 배정 · 회의 안내 · 기한 알림 생성, 주소 자동 탐색(로그인 이메일 → 임직원 연락처), 자동 SMTP 발송, 재발송 · 취소 · 주소 정정
         directory.py                 메일 받는 사람의 등록 이메일 조회 (gateway 내부 API)
-        jobs.py                      배경 작업: 메일 발송(매분) · 기한 알림 · 주소 재조회 · 만료 transcript 삭제(매일)
+        jobs.py                      배경 작업: 메일 발송(매분) · 기한 알림 · 주소 재조회 · 만료 transcript 삭제(매일) · 결정 감시(10분마다 새 기사)
+        decision_watch.py            결정의 전제 · 조건 감시: 새 기사 × 전제 → broken | at_risk 판정(chat model) · 알림 메일, 결정 검토(금액 비교 · 재검토 회의안)
+        subjects.py                  회의 주제: Agent가 준 이름 · 이어지는 회의 · 회의명 단어로 정함, 주제 없는 이전 회의 채우기
+        meeting_control.py           회의 관제: 주제별 상태 · 회의 목록(진행 중 · 예정 · 완료) · 담당자별 할 일 · 날짜별 활동 (desk `control`)
         task_requests.py             다른 system의 A2A 업무 요청: submit(A2A) → accept | reject(확정 권한자) → Action Item
         action_items.py              Action Item 진행 조회(지연 순, 상태별 건수) · 갱신(이력 기록)
         meeting_schedule.py          회의 일정 조회 · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소 (참석자 안내 메일 생성)
@@ -175,7 +180,7 @@ backend/
     systems/
       group/                         Group agent system (SYSTEM = "group") — `uvicorn app.systems.group.app:app --port 8001`
         app.py                       FastAPI: /api/health, /api/agents/{group-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE)
-        registry.py                  Group의 CAPABILITIES (20개): group_super ← subsidiary_review · specialist_delegation · request_k_electronics_review · delegate_to_*;
+        registry.py                  Group의 CAPABILITIES (22개): group_super ← subsidiary_review · specialist_delegation · request_k_electronics_review · delegate_to_*;
                                      meeting / news / advisory ← 라이브러리 Skill + Group 데이터 · 회의 저장소(schema grp)에 바인딩한 Tool
         agents/group_super.py        그룹 슈퍼에이전트: AGENT_ID · IDENTITY + Registry (Super core). 자기 Specialist 위임과 K전자 A2A 중 선택은 모델 판단
         agents/{meeting,news,advisory}.py  그룹 전문 Agent: 같은 Specialist core · 같은 Skill, Group 데이터

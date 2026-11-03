@@ -3,6 +3,8 @@
     every MEETINGS_DELIVERY_INTERVAL seconds (60)   send queued mail (outbox.deliver_approved)
     once a day from MEETINGS_DAILY_HOUR KST (9)     queue due-date reminders, look up addresses still missing,
                                                     delete expired transcripts
+    every MEETINGS_WATCH_INTERVAL seconds (600)     the system's decision watch, when it gives one: new articles
+                                                    against the premises of the decisions in force (decision_watch.py)
 
 Started only when MEETINGS_BACKGROUND_JOBS=1 (deployment) and the store is configured: tests and
 local runs never write on their own. Each pass takes a per-schema advisory lock, so two processes
@@ -14,6 +16,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
+from collections.abc import Callable
 from datetime import datetime
 
 from .meeting_store import KST, MeetingStore, StoreUnavailable, today_kst
@@ -47,18 +51,27 @@ def run_pass(store: MeetingStore, *, daily: bool) -> dict[str, int]:
     return out
 
 
-def start_meeting_jobs(store: MeetingStore, stop: threading.Event) -> threading.Thread | None:
+def start_meeting_jobs(store: MeetingStore, stop: threading.Event,
+                       watch: Callable[[], dict[str, int]] | None = None) -> threading.Thread | None:
+    """`watch`: the system's decision watch pass (decision_watch.watch_news over its articles), every
+    MEETINGS_WATCH_INTERVAL seconds (600)."""
     if os.environ.get("MEETINGS_BACKGROUND_JOBS", "0") != "1" or not os.environ.get("MEETINGS_DATABASE_URL"):
         return None
     interval = max(10, _int_env("MEETINGS_DELIVERY_INTERVAL", 60))
     daily_hour = min(23, max(0, _int_env("MEETINGS_DAILY_HOUR", 9)))
+    watch_every = max(60, _int_env("MEETINGS_WATCH_INTERVAL", 600))
 
     def loop() -> None:
-        last_daily = None
+        last_daily, last_watch = None, 0.0
         while not stop.is_set():
             now = datetime.now(KST)
             daily = now.hour >= daily_hour and last_daily != now.date()
             try:
+                if watch and time.monotonic() - last_watch >= watch_every:
+                    last_watch = time.monotonic()
+                    found = watch()
+                    if any(found.values()):
+                        log.info("decision watch (%s): %s", store.schema, found)
                 out = run_pass(store, daily=daily)
                 if daily and out:
                     last_daily = now.date()
@@ -72,5 +85,6 @@ def start_meeting_jobs(store: MeetingStore, stop: threading.Event) -> threading.
 
     thread = threading.Thread(target=loop, name=f"meeting-jobs-{store.schema}", daemon=True)
     thread.start()
-    log.info("meeting jobs (%s) started: every %ss, daily from %02d:00 KST", store.schema, interval, daily_hour)
+    log.info("meeting jobs (%s) started: every %ss, daily from %02d:00 KST%s", store.schema, interval, daily_hour,
+             f", decision watch every {watch_every}s" if watch else "")
     return thread

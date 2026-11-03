@@ -26,6 +26,7 @@ def make_update_action_item(store: MeetingStore) -> BaseTool:
         note: str | None = None,
         due: str | None = None,
         owner: str | None = None,
+        remind: bool = False,
     ) -> dict[str, Any]:
         """Action Item 하나의 진행 상황을 갱신한다. 변경은 누가 언제 보고했는지와 함께 이력으로 남는다.
     사용자가 명시적으로 말한 변경만 반영한다. id를 모르면 결과의 candidates에서 고르도록 사용자에게 묻는다.
@@ -36,10 +37,12 @@ def make_update_action_item(store: MeetingStore) -> BaseTool:
         note: 진행 메모 (예: "DCF 1차 산정 완료, 민감도 분석 중").
         due: 새 기한 YYYY-MM-DD.
         owner: 새 담당 부서 또는 사람.
+        remind: true면 담당자에게 지금 진행 확인 요청(독촉) 메일을 보낸다. 사용자가 독촉 · 재촉 · 알림을 요청했을 때만 쓴다.
+            확정된 회의록의 열린 할 일, 담당이 사람일 때만 보내며 같은 할 일은 하루 한 번. 사용자가 덧붙인 말은 note로 넘긴다.
     """
         viewer = current_viewer()
         return store_call(lambda: update_item(
-            store=store, viewer=viewer, item_id=item_id, status=status, note=note, due=due, owner=owner,
+            store=store, viewer=viewer, item_id=item_id, status=status, note=note, due=due, owner=owner, remind=remind,
         ))
 
     return update_action_item

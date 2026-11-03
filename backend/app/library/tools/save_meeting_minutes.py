@@ -32,10 +32,26 @@ class Dissent(BaseModel):
     reason: str | None = Field(default=None, description="그 이유 (회의에서 밝힌 그대로)")
 
 
+class Premise(BaseModel):
+    kind: Literal["premise", "condition"] = Field(
+        default="premise",
+        description="premise 전제: 결정이 맞으려면 계속 사실이어야 하는 바깥 상황 (시장 가격 · 수요 · 금리 · 규제 등) · "
+                    "condition 조건: 회사가 기한까지 해내야 하는 목표 (수율 · 일정 · 인력 등)",
+    )
+    statement: str = Field(description="전제 · 조건의 내용 (예: 'HBM 단가가 내년 말까지 현재 수준 유지', '내년 3월까지 수율 85% 달성')")
+    review_when: str | None = Field(default=None, description="회의에서 밝힌 재검토 기준 (예: '단가가 15% 넘게 떨어지면 투자 규모 재검토'). "
+                                                              "재검토 기준은 따로 전제 · 조건으로 만들지 않고 그 전제의 이 칸에 적는다")
+    watch: list[str] = Field(default_factory=list,
+                             description="뉴스 · 보고에서 이 전제를 찾을 낱말 2~4개, 한 낱말씩 (예: ['HBM', '고대역폭 메모리', '단가'])")
+    due: str | None = Field(default=None, description="condition만: 달성 기한 YYYY-MM-DD. 회의에서 정해진 경우만 ('내년'은 회의 날짜의 다음 해)")
+    speaker: str | None = Field(default=None, description="그 전제 · 조건을 말한 사람 (transcript 라벨)")
+    source_time: str | None = Field(default=None, description="그 전제 · 조건을 말한 발언의 transcript 시각 (예: '00:35'). transcript가 있으면 적는다")
+
+
 class Decision(BaseModel):
     kind: Literal["decision", "resolution", "criterion", "opinion", "issue"] = Field(
-        default="decision",
-        description="decision 합의된 결정 · resolution 표결로 의결 · criterion 이후 판단 기준 · opinion 주요 발언 · issue 결론 내지 못한 쟁점/질문",
+        description="decision 회의가 정한 것(\"~로 결정하겠습니다\", \"~를 승인하겠습니다\") · resolution 표결로 의결 · criterion 이후 판단 기준 · "
+                    "opinion 주요 발언(보고 · 비교 결과 · 근거 · 의견) · issue 결론 내지 못한 쟁점/질문 (\"아직 모릅니다\", \"다시 보겠습니다\")",
     )
     statement: str = Field(description="결정 · 기준 · 발언 · 쟁점의 내용")
     speaker: str | None = Field(default=None, description="발언자 (criterion · opinion은 필수). transcript에 드러난 경우만")
@@ -50,6 +66,11 @@ class Decision(BaseModel):
     supersedes: str | None = Field(default=None, description="이 결정이 바꾸는 이전 결정의 ref (예: MTG-2026-09-15-D1)")
     resolves: str | None = Field(default=None, description="이 결정이 해결한 이전 쟁점의 ref")
     source_time: str | None = Field(default=None, description="근거 발언의 transcript 시각 (예: '03:15'). transcript가 연결된 경우만")
+    premises: list[Premise] = Field(
+        default_factory=list,
+        description="decision · resolution만: 회의에서 밝힌 이 결정의 전제와 조건 (다른 사람이 말한 것도 이 결정에 대한 것이면 여기에). "
+                    "전제 · 조건을 따로 결정으로 만들지 않는다. 회의가 끝난 뒤 뉴스 · 보고로 전제가 흔들리는지 Agent가 지켜본다",
+    )
 
 
 class ActionItem(BaseModel):
@@ -91,6 +112,7 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
         start_time: str | None = None,
         end_time: str | None = None,
         checkin_code: str | None = None,
+        subject: str | None = None,
     ) -> dict[str, Any]:
         """회의록을 회의 기록 저장소에 저장한다. 처음에는 초안(draft)으로 저장하고, 사용자가 확인하면 같은 meeting_id로
     다시 호출하며 finalize=true로 확정한다. 담당자나 기한이 빠진 Action Item, 검토되지 않은 Compliance 항목(compliance_flags의 open)이
@@ -106,8 +128,9 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
         title: 회의명 (예: "AI 반도체 전략회의").
         date: 회의 날짜 YYYY-MM-DD.
         summary: 회의 요약 2~4문장.
-        decisions: 결정 · 의결 · 기준 · 주요 발언 · 미결 쟁점 목록. transcript에 실제로 있는 것만.
-        action_items: 후속 조치 목록. 담당 · 기한은 회의에서 정해진 경우만 채운다.
+        decisions: 결정 · 의결 · 기준 · 주요 발언 · 미결 쟁점 목록. transcript에 실제로 있는 것만. 결정에 전제 · 조건이 말해졌으면 premises에.
+            저장된 회의(meeting_id)를 다시 저장할 때 빼면 저장된 목록을 그대로 둔다. 보내면 보낸 목록으로 바뀐다.
+        action_items: 후속 조치 목록. 담당 · 기한은 회의에서 정해진 경우만 채운다. 다시 저장할 때 빼면 그대로 둔다.
         attendees: 참석자 · 불참자 · 배석자 (모르면 비워 둔다).
         topics: 검색용 주제 키워드 (예: ["NeuroEdge", "M&A"]).
         body: 안건별 논의 경과 · 발언 요지 (서술, 선택).
@@ -121,14 +144,17 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
         start_time: 회의 시작 시각 HH:MM (한국 시간). 녹음 시각이나 회의에서 밝힌 시각만. 예약된 회의는 비워 두면 예약 시각을 쓴다.
         end_time: 회의 종료 시각 HH:MM (한국 시간). start_time과 같은 기준.
         checkin_code: 요청에 적힌 출석 확인 코드 (예: "CHK-7F3K2Q"). 그 QR로 출석한 사람을 참석자로 넣는다.
+        subject: 이 회의가 이어 가는 사업 · 안건의 짧은 이름 (예: "천안 신공장", "뉴로엣지 인수"). 모르면 비워 둔다 —
+            회의명으로 진행 중인 주제를 찾고, 없으면 새 주제를 만든다.
     """
         viewer = current_viewer()
         return store_call(lambda: save_minutes(
             store=store, viewer=viewer, title=title, date=date, summary=summary,
-            decisions=plain(decisions or []), action_items=plain(action_items or []), attendees=plain(attendees or []),
+            decisions=None if decisions is None else plain(decisions),
+            action_items=None if action_items is None else plain(action_items), attendees=plain(attendees or []),
             topics=topics, body=body, classification=classification, location=location, meeting_id=meeting_id,
             finalize=finalize, correction_reason=correction_reason, transcript_id=transcript_id,
-            flag_reviews=plain(flag_reviews or []), start_time=start_time, end_time=end_time, checkin_code=checkin_code,
+            flag_reviews=plain(flag_reviews or []), start_time=start_time, end_time=end_time, checkin_code=checkin_code, subject=subject,
         ))
 
     return save_meeting_minutes

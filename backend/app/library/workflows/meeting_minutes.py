@@ -18,7 +18,7 @@ access check are deterministic here. Not agent-visible; no LangChain dependency.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any
 
 import psycopg
@@ -51,12 +51,15 @@ from .meeting_store import (
     unnamed_speaker,
 )
 from .outbox import queue_minutes_mail, unit_owned
+from .subjects import subject_for
 from .transcripts import TranscriptUnavailable, attach_transcript, fetch_transcript, segment_at
 
 ROLES = ("chair", "secretary", "required", "optional", "observer")
 KINDS = ("decision", "resolution", "criterion", "opinion", "issue")
 OUTCOMES = ("approved", "amended", "rejected", "deferred")
 POSITIONS = ("against", "abstain", "recused")
+PREMISE_KINDS = ("decision", "resolution", "criterion")  # decisions that can rest on premises
+PREMISE_TYPES = ("premise", "condition")
 UNKNOWN_SPEAKER = "발언자 확인 필요"
 
 
@@ -95,6 +98,12 @@ def minutes_record(conn: psycopg.Connection, meeting_id: int) -> dict[str, Any]:
             WHERE a.meeting_id = %s ORDER BY a.id""",
         (meeting_id,),
     ).fetchall()
+    premises = conn.execute(
+        f"""SELECT dp.decision_id, dp.kind, dp.statement, dp.review_when, dp.due_date, coalesce({PERSON_LABEL}, dp.speaker_label) AS speaker
+            FROM decision_premises dp JOIN decisions d ON d.id = dp.decision_id LEFT JOIN people p ON p.id = dp.speaker_id
+            WHERE d.meeting_id = %s ORDER BY dp.decision_id, dp.seq""",
+        (meeting_id,),
+    ).fetchall()
 
     def decision(d: dict[str, Any]) -> dict[str, Any]:
         out = {"ref": decision_ref(m["code"], d["seq"]), "kind": d["kind"], "speaker": d["speaker"], "statement": d["statement"]}
@@ -104,6 +113,11 @@ def minutes_record(conn: psycopg.Connection, meeting_id: int) -> dict[str, Any]:
         own = [{"name": x["name"], "position": x["position"], "reason": x["reason"]} for x in dissents if x["decision_id"] == d["id"]]
         if own:
             out["dissents"] = own
+        rests_on = [{k: v for k, v in (("kind", p["kind"]), ("statement", p["statement"]), ("review_when", p["review_when"]),
+                                       ("due", p["due_date"].isoformat() if p["due_date"] else None), ("speaker", p["speaker"])) if v}
+                    for p in premises if p["decision_id"] == d["id"]]
+        if rests_on:
+            out["premises"] = rests_on
         return out
 
     return {
@@ -165,6 +179,27 @@ def _write_participants(conn: psycopg.Connection, meeting_id: int, attendees: li
         )
 
 
+def _add_named_speakers(conn: psycopg.Connection, meeting_id: int, transcript_id: int, created: list[str]) -> None:
+    """Who the recording names by voice was there: attendees even when the minutes left them out — also when a later
+    save rewrites the attendees from a shorter list (only people who did not speak can be removed). Unnamed voices
+    ('화자 A') are left to the attendance check."""
+    labels = conn.execute(
+        "SELECT speaker_label, min(person_id) AS person_id FROM transcript_segments WHERE transcript_id = %s GROUP BY speaker_label",
+        (transcript_id,),
+    ).fetchall()
+    for r in labels:
+        if unnamed_speaker(r["speaker_label"]):
+            continue
+        pid = r["person_id"] or person_id(conn, r["speaker_label"], created, meeting_id=meeting_id)
+        conn.execute("UPDATE transcript_segments SET person_id = %s WHERE transcript_id = %s AND speaker_label = %s AND person_id IS NULL",
+                     (pid, transcript_id, r["speaker_label"]))
+        conn.execute(
+            """INSERT INTO meeting_participants (meeting_id, person_id, role, rsvp, attended)
+               VALUES (%s, %s, 'required', 'accepted', true) ON CONFLICT (meeting_id, person_id) DO NOTHING""",
+            (meeting_id, pid),
+        )
+
+
 def _write_decisions(conn: psycopg.Connection, meeting_id: int, decisions: list[dict[str, Any]], viewer: Viewer,
                      created: list[str], warnings: list[str]) -> None:
     """Rewritten in place by position (seq), so other meetings' links to these decisions survive a correction."""
@@ -211,6 +246,7 @@ def _write_decisions(conn: psycopg.Connection, meeting_id: int, decisions: list[
                 "INSERT INTO decision_dissents (decision_id, person_id, position, reason) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
                 (decision_id, person_id(conn, x["name"], created, meeting_id=meeting_id), position, x.get("reason")),
             )
+        _write_premises(conn, meeting_id, decision_id, kind, d.get("premises") or [], f"결정 {seq}", warnings)
         if d.get("resolves"):
             issue = find_decision(conn, d["resolves"], viewer)
             if issue is None:
@@ -223,6 +259,47 @@ def _write_decisions(conn: psycopg.Connection, meeting_id: int, decisions: list[
         conn.execute("UPDATE decisions SET supersedes_id = NULL WHERE supersedes_id = ANY(%s)", (stale,))
         conn.execute("UPDATE decisions SET resolved_by_id = NULL WHERE resolved_by_id = ANY(%s)", (stale,))
         conn.execute("DELETE FROM decisions WHERE id = ANY(%s)", (stale,))
+
+
+def _write_premises(conn: psycopg.Connection, meeting_id: int, decision_id: int, kind: str, premises: list[dict[str, Any]],
+                    what: str, warnings: list[str]) -> None:
+    """A decision's premises and conditions, rewritten by position like the decisions. A premise whose statement
+    did not change keeps its status and the signals found against it (decision_watch.py)."""
+    if premises and kind not in PREMISE_KINDS:
+        warnings.append(f"{what}: 전제 · 조건은 결정 · 의결 · 기준에만 둘 수 있어 저장하지 않음")
+        premises = []
+    for seq, p in enumerate(premises, 1):
+        statement = (p.get("statement") or "").strip()
+        if not statement:
+            continue
+        speaker = (p.get("speaker") or "").strip() or None
+        speaker_id = find_person(conn, speaker) if speaker and not unnamed_speaker(speaker) else None
+        kind = p.get("kind") if p.get("kind") in PREMISE_TYPES else "premise"
+        try:
+            due = parse_date(p.get("due")) if kind == "condition" else None  # a premise holds until it breaks
+        except ValueError:
+            warnings.append(f"{what} 전제 {seq}: 기한 '{p.get('due')}'은 YYYY-MM-DD가 아니라 비워 둠")
+            due = None
+        held = conn.execute("SELECT (starts_at AT TIME ZONE 'Asia/Seoul')::date AS day FROM meetings WHERE id = %s", (meeting_id,)).fetchone()["day"]
+        if due and due < held:
+            warnings.append(f"{what} 조건 '{statement}': 기한 {due.isoformat()}이 회의 날짜({held.isoformat()})보다 앞섬 — 연도 확인 필요")
+        watch = [w.strip() for w in p.get("watch") or [] if isinstance(w, str) and w.strip()][:6]
+        source = _source(conn, meeting_id, p.get("source_time"), f"{what} 전제 {seq}", warnings) or (None, None)
+        conn.execute(
+            """INSERT INTO decision_premises (decision_id, seq, kind, statement, review_when, watch, due_date, speaker_id,
+                                              speaker_label, source_transcript_id, source_seq)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (decision_id, seq) DO UPDATE SET
+                 kind = EXCLUDED.kind, statement = EXCLUDED.statement, review_when = EXCLUDED.review_when,
+                 watch = EXCLUDED.watch, due_date = EXCLUDED.due_date, speaker_id = EXCLUDED.speaker_id,
+                 speaker_label = EXCLUDED.speaker_label,
+                 source_transcript_id = coalesce(EXCLUDED.source_transcript_id, decision_premises.source_transcript_id),
+                 source_seq = CASE WHEN EXCLUDED.source_transcript_id IS NULL THEN decision_premises.source_seq ELSE EXCLUDED.source_seq END,
+                 status = CASE WHEN decision_premises.statement = EXCLUDED.statement THEN decision_premises.status ELSE 'holding' END""",
+            (decision_id, seq, kind, statement,
+             (p.get("review_when") or "").strip() or None, watch, due, speaker_id, None if speaker_id else speaker, *source),
+        )
+    conn.execute("DELETE FROM decision_premises WHERE decision_id = %s AND seq > %s", (decision_id, len(premises)))
 
 
 def _source(conn: psycopg.Connection, meeting_id: int, stamp: str | None, what: str, warnings: list[str]) -> tuple[int, int] | None:
@@ -305,6 +382,7 @@ def save_minutes(
     start_time: str | None = None,
     end_time: str | None = None,
     checkin_code: str | None = None,
+    subject: str | None = None,
 ) -> dict[str, Any]:
     if not viewer.can_write:
         return _fail("다른 Agent System이 보낸 요청으로는 회의 기록을 바꿀 수 없습니다. 이 시스템의 사용자가 직접 요청해야 합니다.")
@@ -320,10 +398,13 @@ def save_minutes(
         return _fail("date는 회의 날짜(YYYY-MM-DD)여야 합니다.")
     try:
         start_clock, end_clock = parse_time_of_day(start_time), parse_time_of_day(end_time)
+        if start_clock == time(0, 0) and end_clock is None:  # 모르는 시각을 모델이 00:00으로 채운 것: 시각을 받지 않은 것으로 본다
+            start_clock = None
     except ValueError:
         return _fail("start_time · end_time은 한국 시각 HH:MM이어야 합니다 (예: 14:00).")
     if start_clock and end_clock and end_clock <= start_clock:
         return _fail("end_time은 start_time보다 늦어야 합니다.")
+    sent_decisions, sent_items = decisions is not None, action_items is not None
     decisions, action_items, attendees = decisions or [], action_items or [], attendees or []
     warnings: list[str] = []
     created: list[str] = []
@@ -335,9 +416,28 @@ def save_minutes(
             warnings.append(f"transcript를 연결하지 못함: {e}")
 
     with store.connect() as conn:
+        if not meeting_id and transcript:  # the same recording, day and title saved again without the id: that meeting
+            linked = conn.execute(
+                f"""SELECT m.code FROM transcripts t JOIN meetings m ON m.id = t.meeting_id
+                    WHERE t.source_ref = %(ref)s AND {VISIBLE} AND (m.starts_at AT TIME ZONE 'Asia/Seoul')::date = %(day)s
+                      AND regexp_replace(m.title, '\\s', '', 'g') = regexp_replace(%(title)s, '\\s', '', 'g')""",
+                {"ref": str(transcript["id"]).upper(), "day": day, "title": title, **viewer.scope()},
+            ).fetchone()
+            meeting_id = linked["code"] if linked else None
+            if not meeting_id:  # a recording of a day with exactly one meeting booked: that meeting (its time stays)
+                booked = conn.execute(
+                    f"""SELECT m.code FROM meetings m WHERE {VISIBLE} AND m.status = 'scheduled'
+                          AND (m.starts_at AT TIME ZONE 'Asia/Seoul')::date = %(day)s""",
+                    {"day": day, **viewer.scope()},
+                ).fetchall()
+                if len(booked) == 1:
+                    meeting_id = booked[0]["code"]
+                    warnings.append(f"{day} 예약된 회의 {meeting_id}에 저장했습니다.")
+        # Saving a meeting again without a list leaves what is stored (a confirm call often sends only what changed)
+        keep_decisions, keep_items = bool(meeting_id) and not sent_decisions, bool(meeting_id) and not sent_items
         if meeting_id:
             row = conn.execute(
-                f"""SELECT m.id, m.code, m.starts_at, m.ends_at, mi.status AS minutes_status, mi.version
+                f"""SELECT m.id, m.code, m.starts_at, m.ends_at, m.subject, mi.status AS minutes_status, mi.version
                     FROM meetings m LEFT JOIN minutes mi ON mi.meeting_id = m.id
                     WHERE m.code = %(code)s AND {VISIBLE} FOR UPDATE OF m""",
                 {"code": meeting_id.strip(), **viewer.scope()},
@@ -361,17 +461,19 @@ def save_minutes(
                 )
             conn.execute(
                 """UPDATE meetings SET title = %s, starts_at = %s, ends_at = %s, location = coalesce(%s, location), topics = %s,
-                                       classification = %s, status = 'held', updated_at = now() WHERE id = %s""",
-                (title, starts, ends, location, topics or [], classification, mid),
+                                       classification = %s, subject = %s, status = 'held', updated_at = now() WHERE id = %s""",
+                (title, starts, ends, location, topics or [], classification,
+                 row["subject"] if row["subject"] and not subject else subject_for(conn, viewer, title, named=subject), mid),
             )
         else:
             was = None
             code = new_meeting_code(conn, day)
             mid = conn.execute(
-                """INSERT INTO meetings (code, title, status, starts_at, ends_at, location, topics, classification, created_by)
-                   VALUES (%s, %s, 'held', %s, %s, %s, %s, %s, %s) RETURNING id""",
+                """INSERT INTO meetings (code, title, status, starts_at, ends_at, location, topics, classification, subject, created_by)
+                   VALUES (%s, %s, 'held', %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
                 (code, title, datetime.combine(day, start_clock or DEFAULT_MEETING_TIME, KST),
-                 datetime.combine(day, end_clock, KST) if end_clock else None, location, topics or [], classification, viewer.email),
+                 datetime.combine(day, end_clock, KST) if end_clock else None, location, topics or [], classification,
+                 subject_for(conn, viewer, title, named=subject), viewer.email),
             ).fetchone()["id"]
 
         # Judged on the participants as they were: a call cannot name its requester secretary and finalize at once.
@@ -379,9 +481,16 @@ def save_minutes(
         if attendees:
             _write_participants(conn, mid, attendees, created)
         # After the participants, so speaker labels find the people just named; before the decisions that cite it.
+        fresh = transcript and not conn.execute("SELECT 1 FROM transcripts WHERE source_ref = %s",
+                                                (str(transcript["id"]).upper(),)).fetchone()
         attached = attach_transcript(conn, mid, transcript, viewer, warnings) if transcript else None
-        _write_decisions(conn, mid, decisions, viewer, created, warnings)
-        _write_action_items(conn, mid, code, action_items, keep_unlisted=was == "final", created=created, warnings=warnings)
+        if (fresh and attached) or attendees:
+            for t in conn.execute("SELECT id FROM transcripts WHERE meeting_id = %s", (mid,)).fetchall():
+                _add_named_speakers(conn, mid, t["id"], created)
+        if not keep_decisions:
+            _write_decisions(conn, mid, decisions, viewer, created, warnings)
+        if not keep_items:
+            _write_action_items(conn, mid, code, action_items, keep_unlisted=was == "final", created=created, warnings=warnings)
         # Last, so a name the model wrote for someone who checked in is merged into that account.
         link_session(conn, mid, viewer, checkin_code, from_recording=transcript is not None, warnings=warnings)
         apply_checkins(conn, mid)

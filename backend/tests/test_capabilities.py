@@ -40,9 +40,9 @@ def test_tool_definition_is_the_source_of_truth():
     for name, args in {
         "save_meeting_minutes": {"title", "date", "summary", "decisions", "action_items", "attendees", "topics", "body",
                                  "classification", "location", "meeting_id", "finalize", "correction_reason", "transcript_id",
-                                 "flag_reviews", "start_time", "end_time", "checkin_code"},
+                                 "flag_reviews", "start_time", "end_time", "checkin_code", "subject"},
         "run_action_item_tracking": {"query", "owner", "status", "due_before", "due_within_days", "overdue_only", "meeting_id", "mine"},
-        "update_action_item": {"item_id", "status", "note", "due", "owner"},
+        "update_action_item": {"item_id", "status", "note", "due", "owner", "remind"},
         "run_meeting_schedule": {"action", "meeting_id", "title", "starts_at", "ends_at", "location", "attendees", "agenda",
                                  "classification", "carry_over_from", "date_from", "date_to", "mine"},
         "manage_mail_outbox": {"action", "mail_ids", "meeting_id", "email", "note"},

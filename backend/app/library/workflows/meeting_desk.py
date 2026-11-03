@@ -5,6 +5,7 @@
 같은 저장소 · 같은 권한 규칙(VISIBLE · can_confirm · can_write)을 쓰고, 조회 · 검토는 미팅 Tool이 쓰는
 workflow 함수를 그대로 부른다. 새로 둔 것은 여러 회의를 한 번에 보는 조회(overview · open_flags)뿐이다.
 출석 확인(QR) · 참석자 확인 · '각자' 할 일 나누기는 attendance.py.
+전제가 흔들린 결정(뉴스 · 보고 신호)과 그 확인은 decision_watch.py.
 """
 
 from __future__ import annotations
@@ -15,9 +16,13 @@ from typing import Any
 from . import attendance as attendance_flow
 from .action_items import track_action_items, update_action_item
 from .compliance import apply_reviews, flag_ref, flags_of
+from .decision_watch import open_signals
 from .meeting_context_retrieval import retrieve_meeting_context
 from .meeting_schedule import meeting_schedule, scheduled_meeting
-from .meeting_store import PERSON_LABEL, VISIBLE, MeetingStore, Viewer, can_confirm, confirm_denied, kst_date, time_label, today_kst
+from .meeting_minutes import save_minutes
+from .meeting_store import (
+    PERSON_LABEL, VISIBLE, MeetingStore, Viewer, can_confirm, confirm_denied, kst_date, kst_minute, time_label, today_kst,
+)
 from .outbox import manage_outbox
 
 UPCOMING_DAYS = 14
@@ -29,7 +34,7 @@ VIEWS = ("mine", "all", "overdue")
 
 
 def overview(*, store: MeetingStore, viewer: Viewer, today: date | None = None) -> dict[str, Any]:
-    """첫 화면: 다가오는 회의, 최근 회의록(초안 먼저), 내 Action Item, 메일 · 검토 건수."""
+    """첫 화면: 다가오는 회의, 최근 회의록(초안 먼저), 내 Action Item, 메일 · 검토 건수, 전제가 흔들린 결정."""
     today = today or today_kst()
     upcoming = meeting_schedule(store=store, viewer=viewer, action="list", date_from=today.isoformat(),
                                 date_to=(today + timedelta(days=UPCOMING_DAYS)).isoformat(), today=today)
@@ -57,6 +62,7 @@ def overview(*, store: MeetingStore, viewer: Viewer, today: date | None = None) 
                 WHERE {VISIBLE} AND f.status = 'open'""",
             viewer.scope(),
         ).fetchone()["n"]
+        watch = open_signals(conn, viewer)
     items = mine.get("items", [])
     return {
         "today": today.isoformat(),
@@ -70,6 +76,7 @@ def overview(*, store: MeetingStore, viewer: Viewer, today: date | None = None) 
                      "version": r["version"], "classification": r["classification"], "open_flags": r["open_flags"],
                      "decisions": r["decisions"], "items": r["items"]} for r in minutes],
         "my_items": items,
+        "watch": watch,
     }
 
 
@@ -210,7 +217,46 @@ def meeting(*, store: MeetingStore, viewer: Viewer, meeting_id: str | None, toda
         return {"meeting": found["meetings"][0], "participants": [{"name": r["name"], "role": r["role"]} for r in people],
                 "flags": flags_of(conn, mid), "can_confirm": can_confirm(conn, viewer, mid),
                 "attendance": attendance_flow.attendance_view(conn, mid), "recall": attendance_flow.recall(conn, mid, viewer, today),
-                "can_edit": viewer.can_write}
+                "can_edit": viewer.can_write, **_meeting_record(conn, mid)}
+
+
+def _meeting_record(conn, mid: int) -> dict[str, Any]:
+    """회의 관제의 회의 칸: 녹음 파일, 이 회의의 할 일 전부(끝난 것 포함 — 진행률), 이 회의가 보낸 메일."""
+    recordings = conn.execute(
+        """SELECT t.source_name, t.duration_s, count(s.seq) AS lines, count(DISTINCT s.speaker_label) AS speakers
+           FROM transcripts t LEFT JOIN transcript_segments s ON s.transcript_id = t.id WHERE t.meeting_id = %s
+           GROUP BY t.id ORDER BY t.id""", (mid,)).fetchall()
+    items = conn.execute(
+        f"""SELECT a.code, a.text, a.status, a.due_date, coalesce({PERSON_LABEL}, u.name) AS owner FROM action_items a
+            LEFT JOIN people p ON p.id = a.owner_person_id LEFT JOIN org_units u ON u.id = a.owner_unit_id
+            WHERE a.meeting_id = %s ORDER BY a.id""", (mid,)).fetchall()
+    mails = conn.execute(
+        """SELECT o.id, o.kind, o.to_name, o.status, o.subject, o.sent_at FROM outbox o WHERE o.meeting_id = %s ORDER BY o.id""",
+        (mid,)).fetchall()
+    return {
+        "recordings": [{"name": r["source_name"], "seconds": round(r["duration_s"] or 0), "lines": r["lines"], "speakers": r["speakers"]}
+                       for r in recordings],
+        "items": [{"id": i["code"], "text": i["text"], "status": i["status"], "owner": i["owner"],
+                   "due": i["due_date"].isoformat() if i["due_date"] else None} for i in items],
+        "mails": [{"id": f"MAIL-{m['id']}", "kind": m["kind"], "to": m["to_name"], "status": m["status"], "subject": m["subject"],
+                   "sent_at": kst_minute(m["sent_at"])} for m in mails],
+    }
+
+
+def finalize(*, store: MeetingStore, viewer: Viewer, meeting_id: str | None) -> dict[str, Any]:
+    """회의 관제의 '확정 · 메일 발송': 저장된 초안을 그대로 확정한다 (Agent를 거치지 않음 — 목록을 보내지 않으면 저장된 것을 둔다)."""
+    if not meeting_id:
+        return {"ok": False, "error": "meeting_id가 필요합니다."}
+    with store.connect() as conn:
+        row = conn.execute(
+            f"""SELECT m.code, m.title, m.starts_at, mi.summary, mi.status FROM meetings m JOIN minutes mi ON mi.meeting_id = m.id
+                WHERE m.code = %(code)s AND {VISIBLE}""", {"code": meeting_id.strip(), **viewer.scope()}).fetchone()
+    if row is None:
+        return {"ok": False, "error": "회의록 초안이 없는 회의입니다."}
+    if row["status"] == "final":
+        return {"ok": False, "error": "이미 확정된 회의록입니다."}
+    return save_minutes(store=store, viewer=viewer, title=row["title"], date=kst_date(row["starts_at"]), summary=row["summary"] or "",
+                        meeting_id=row["code"], finalize=True)
 
 
 CHECKIN_ACTIONS = ("open", "status", "close", "join")

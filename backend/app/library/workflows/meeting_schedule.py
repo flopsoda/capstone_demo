@@ -31,6 +31,7 @@ from .meeting_store import (
     today_kst,
 )
 from .outbox import queue_schedule_mail
+from .subjects import subject_for
 
 ACTIONS = ("list", "create", "update", "cancel")
 UPCOMING_DAYS = 30
@@ -194,10 +195,12 @@ def meeting_schedule(
                     return _fail(action, f"이월할 회의 '{carry_over_from}'를 찾을 수 없거나 열람 권한이 없습니다.")
                 carried = found
             code = new_meeting_code(conn, start_ts.astimezone(KST).date())
+            source = conn.execute("SELECT id FROM meetings WHERE code = %s", ((carry_over_from or "").strip(),)).fetchone()
+            subject = subject_for(conn, viewer, title, carried_from=source["id"] if source else None)
             mid = conn.execute(
-                """INSERT INTO meetings (code, title, status, starts_at, ends_at, location, classification, created_by)
-                   VALUES (%s, %s, 'scheduled', %s, %s, %s, %s, %s) RETURNING id""",
-                (code, title.strip(), start_ts, end_ts, location, classification, viewer.email),
+                """INSERT INTO meetings (code, title, status, starts_at, ends_at, location, classification, subject, created_by)
+                   VALUES (%s, %s, 'scheduled', %s, %s, %s, %s, %s, %s) RETURNING id""",
+                (code, title.strip(), start_ts, end_ts, location, classification, subject, viewer.email),
             ).fetchone()["id"]
             _add_participants(conn, mid, attendees or [], created)
             _add_agenda(conn, mid, agenda or [], carried)

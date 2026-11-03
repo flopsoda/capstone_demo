@@ -19,6 +19,8 @@ from .meeting_store import (
     VISIBLE,
     MeetingStore,
     Viewer,
+    can_confirm,
+    confirm_denied,
     day_label,
     kst_date,
     parse_date,
@@ -126,6 +128,7 @@ def update_action_item(
     note: str | None = None,
     due: str | None = None,
     owner: str | None = None,
+    remind: bool = False,
     today: date | None = None,
 ) -> dict[str, Any]:
     today = today or today_kst()
@@ -137,8 +140,8 @@ def update_action_item(
         new_due = parse_date(due)
     except ValueError:
         return {"updated": False, "error": "due는 YYYY-MM-DD 형식이어야 합니다."}
-    if status is None and not note and new_due is None and not owner:
-        return {"updated": False, "error": "바꿀 내용(status, note, due, owner)이 하나 이상 있어야 합니다."}
+    if status is None and not note and new_due is None and not owner and not remind:
+        return {"updated": False, "error": "바꿀 내용(status, note, due, owner) 또는 remind가 하나 이상 있어야 합니다."}
     code = (item_id or "").strip()
     with store.connect() as conn:
         row = conn.execute(
@@ -159,6 +162,8 @@ def update_action_item(
                 "error": f"Action Item '{code}'을 찾을 수 없거나 열람 권한이 없습니다.",
                 "candidates": [{"id": c["code"], "text": c["text"], "status": c["status"]} for c in candidates],
             }
+        if remind and not can_confirm(conn, viewer, row["meeting_id"]):
+            return {"updated": False, "error": confirm_denied()}
         changes = []
         created: list[str] = []
         sets, values = ["updated_at = now()"], []
@@ -189,6 +194,17 @@ def update_action_item(
 
             mail_id = queue_assignment_mail(conn, row["id"], viewer)
             mails = summarize(conn, [mail_id]) if mail_id else []
+        # 독촉: 사용자가 요청하면 기한 알림(매일 아침)과 별도로 담당자에게 지금 확인 요청 메일을 보낸다 (확정 권한이 있는 사람만)
+        remind_note = None
+        if remind:
+            from .outbox import queue_nudge_mail, summarize
+
+            nudge_id, remind_note = queue_nudge_mail(conn, row["id"], viewer, today, note)
+            if nudge_id:
+                mails += summarize(conn, [nudge_id])
+                changes.append("독촉 메일")
+            elif status is None and not note and new_due is None and not owner:
+                return {"updated": False, "error": remind_note}
         text = "; ".join([*changes, note.strip()] if note else changes) or None
         conn.execute(
             "INSERT INTO action_item_updates (action_item_id, by_email, old_status, new_status, note) VALUES (%s, %s, %s, %s, %s)",
@@ -208,4 +224,5 @@ def update_action_item(
         ],
         "new_directory_entries": created,
         "mail_queued": mails,
+        **({"remind_skipped": remind_note} if remind_note else {}),
     }

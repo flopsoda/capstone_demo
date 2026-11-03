@@ -156,7 +156,7 @@ Workflow Tool은 **Agent가 아니다**.
 
 ```text
 Meeting Agent   → run_meeting_context_retrieval · save_meeting_minutes · run_action_item_tracking · update_action_item · run_meeting_schedule
-                  · manage_mail_outbox · run_task_requests (K만) · correct_transcript (Group만)
+                  · manage_mail_outbox · run_task_requests (K만) · correct_transcript · run_decision_review (Group만)
 News Agent      → run_company_risk_news_analysis
 Advisory Agent  → run_mna_review
 ```
@@ -185,13 +185,13 @@ Advisory Agent  → run_mna_review
   이전 결정을 바꾸면 `supersedes`, 쟁점을 해결하면 `resolves`(ref). 사람 · 조직 이름은 디렉터리(`people` · `org_units`)에서 찾고 없으면 등록해 `new_directory_entries`로 알린다.
 - `run_action_item_tracking(query?, owner?, status?, due_before?, due_within_days?, overdue_only, meeting_id?, mine)` → `action_items.track_action_items`: 회의를 가로질러
   지연 일수 큰 순 → 기한 순, 같은 범위의 상태별 건수(`summary`)와 기준일(`as_of`, 요일 포함 — 모델은 오늘 날짜를 모른다)을 준다. 조회만 한다.
-- `update_action_item(item_id, status?, note?, due?, owner?)` → `action_items.update_action_item`: 변경마다 `action_item_updates`에 누가 · 언제 · 이전/새 상태 · 메모를 남긴다. 모르는 id면 `candidates`.
+- `update_action_item(item_id, status?, note?, due?, owner?, remind?)` → `action_items.update_action_item`: 변경마다 `action_item_updates`에 누가 · 언제 · 이전/새 상태 · 메모를 남긴다. 모르는 id면 `candidates`. `remind=true`는 사용자가 독촉을 요청할 때 담당자에게 지금 확인 요청 메일을 보낸다 (`outbox.queue_nudge_mail`: 확정된 회의록의 열린 할 일 · 사람 담당 · 확정 권한, 할 일마다 하루 한 번, 매일 아침 기한 알림과 별개).
 - `run_meeting_schedule(action = list | create | update | cancel, ...)` → `meeting_schedule.meeting_schedule`: 외부 캘린더 동기화 없는 사내 일정.
   `create`의 `carry_over_from`은 이전 회의의 보류 안건과 미결 쟁점(`issue`)을 새 회의 안건으로 이월한다. 시각은 한국 시간이며 `list`는 `today`(요일 포함)를 준다.
   예약된 회의의 회의록은 같은 id로 `save_meeting_minutes`에 쓴다.
 - **회의 후속 기능 (2026-10-28, 11장 결정 14~19).**
   - **schema migration.** `meeting_schema.sql`이 version 1이고, `library/workflows/meeting_migrations/NNN_name.sql`을 `MeetingStore`가 처음 연결할 때 순서대로 적용해
-    schema마다 `schema_migrations`에 남긴다 (`002_delivery_and_review.sql`: `transcripts.source_ref`, `compliance_flags`, `outbox`, `task_requests`; `003_outbox_reject_without_address.sql`: 주소 없는 메일도 반려 가능; `004_autonomous_mail.sql`: `staff_directory`, 승인 대기 메일을 발송 대기로; `005_attendance.sql`: 회의별 목소리 라벨 `people.speaker_meeting_id`, 출석 확인 `checkin_sessions` · `checkin_attendees`, `meeting_participants.checked_in_at`). 적용된 파일은 고치지 않고 다음 번호를 추가한다.
+    schema마다 `schema_migrations`에 남긴다 (`002_delivery_and_review.sql`: `transcripts.source_ref`, `compliance_flags`, `outbox`, `task_requests`; `003_outbox_reject_without_address.sql`: 주소 없는 메일도 반려 가능; `004_autonomous_mail.sql`: `staff_directory`, 승인 대기 메일을 발송 대기로; `005_attendance.sql`: 회의별 목소리 라벨 `people.speaker_meeting_id`, 출석 확인 `checkin_sessions` · `checkin_attendees`, `meeting_participants.checked_in_at`; `006_decision_watch.sql`: 결정의 전제 · 조건 `decision_premises`, 그 전제를 흔든 기사 · 보고 `premise_signals`, 메일 종류 `alert`; `007_subjects.sql`: 회의 주제 `meetings.subject`). 적용된 파일은 고치지 않고 다음 번호를 추가한다.
   - **확정 권한.** 회의록 확정 · 정정, Compliance 검토, 메일 재발송 · 취소 · 주소 정정, 업무 요청 접수는 `meeting_store.can_confirm`: 그 회의의 의장 · 간사(참석자 role, `people.email` = 요청자 email)
     또는 `MEETINGS_CONFIRM_GROUPS`(기본 `secretary,executive`, 로컬 데모는 `*`) 그룹. 참석자 판단은 그 호출의 참석자 변경 **전** 상태로 한다. 권한이 없으면 초안으로 저장하고 `warnings`로 알린다 (정정은 거부).
   - **Compliance.** `compliance.py`의 결정적 규칙(미공개 중요정보 · 담합 · 부정청탁 · 회계 부정 · 기록 은폐 · 부당노동행위 · 개인정보)이 회의록 요약 · 본문 · 결정과 연결된 transcript 발언을 검사해
@@ -213,7 +213,7 @@ Advisory Agent  → run_mna_review
     모델이 이름으로만 적은 같은 이름의 사람은 그 계정으로 합친다. 저장 결과의 `attendance`(출석 · 발언 여부, 이름 모를 목소리, 말하지 않은 참석자, 목소리 하나 · 조용한 출석자 하나일 때의 추정)를 보고 모델이 사용자에게 묻는다.
     목소리 라벨("화자 A")은 그 회의 안에서만 한 사람이다 (`people.speaker_meeting_id`; 005가 기존에 공유되던 라벨을 회의마다 나눴다). 회의 카드에서 라벨의 이름을 정하면(`assign`) 그 회의의 발언 · 발언자 · 담당 · 참석자와
     회의록 글의 라벨이 그 사람으로 바뀌고, 그 사람이 출석할 때 목소리 학습에 동의했으면 speech-service가 그 목소리를 voiceprint로 익힌다(`transcripts.learn_voice`). 확정된 회의록은 정정으로만 바꾼다.
-    담당이 없는 '각자' 할 일은 참석자마다 한 건으로 나눈다(`split`). `recall`은 이번 참석자들이 이전 회의에서 맡아 아직 열린 일과 같은 사람들이 있던 회의의 미결 쟁점이다 (저장 결과와 회의 카드).
+    담당이 없는 '각자' 할 일은 참석자마다 한 건으로 나눈다(`split`). `recall`은 이번 참석자들이 이전 회의에서 맡아 아직 열린 일과 같은 사람들이 있던 회의의 미결 쟁점이다 (저장 결과와 회의 카드). 이 회의의 주제(`meetings.subject`)로 열린 이전 회의가 있으면 그 주제 안에서만 찾는다.
   - **녹음 변환본 교정 (2026-11-03, `transcript_correction.py`, `library/tools/correct_transcript.py`).** 음성 인식은 용어 · 이름을 잘못 듣고("에젠드")
     한국어 띄어쓰기를 깨뜨린다. Group의 `/api/agents/meeting/run`은 Meeting Agent가 요청을 읽기 전에 `TRANSCRIPT_CORRECTION.prepare`를 돌린다:
     요청의 `[현재 요청]` 부분에 있는 변환본 줄(`[mm:ss] 화자: …`)만 ① 고정 치환(`data/transcript_glossary.json`의 replacements) ② 모델 교정
@@ -225,7 +225,16 @@ Advisory Agent  → run_mna_review
     Super Agent 위임 경로(`run_meeting_agent`의 delegation)에는 변환본이 오지 않으므로 이 단계가 없다.
   - **배경 작업.** `jobs.start_meeting_jobs`(app lifespan, `MEETINGS_BACKGROUND_JOBS=1`일 때만): 매분 발송 대기 메일을 SMTP(`SMTP_*`, 미설정이면 대기)로 발송(5회 실패하면 failed,
     발송 대기가 된 지 3일이 지난 메일은 늦게 보내지 않고 failed — 메일 서버를 나중에 설정했을 때 지난 안내가 한꺼번에 나가지 않도록),
-    매일 `MEETINGS_DAILY_HOUR`(9시 KST)부터 기한 알림 · 주소 재조회 · 만료 transcript 삭제. schema별 advisory lock.
+    매일 `MEETINGS_DAILY_HOUR`(9시 KST)부터 기한 알림 · 주소 재조회 · 만료 transcript 삭제, system이 결정 감시를 주면 `MEETINGS_WATCH_INTERVAL`(600초)마다 새 기사 대조 (시작할 때 한 번 먼저). schema별 advisory lock.
+  - **결정 감시 (2026-11-03, `decision_watch.py`, Tool `run_decision_review` · Skill `decision_review`, Group).** 회의록의 결정(결정 · 의결 · 기준)에 회의에서 밝힌 전제 · 조건을
+    `save_meeting_minutes`의 `decisions[].premises`(kind premise | condition, `review_when`, `watch` 단어)로 남긴다. 배경 작업이 기사 store(`data/news.json`, 시작할 때 읽어 둠)의 새 기사를
+    `watch` 단어로 거른 뒤 system의 chat model에게 전제마다 broken · at_risk · none을 묻고(전제 × 기사 한 번씩, 모델 오류면 at_risk · 단어 일치), 흔들린 전제는 상태를 바꾸고
+    그 회의 참석자에게 `alert` 메일을 (결정 · 기사마다 한 번) 보낸다. `run_decision_review(query, topics, decision_ref)`는 질문 · 새 계획과 관련된 결정을 하나씩 점수 매겨
+    근거 발언 · 전제 상태 · 들어온 신호를 주고, 계획의 금액(조 · 억)을 결정 금액과 코드로 비교해 넘으면 `conflicts`, 전제가 흔들렸으면 재검토 회의안을 붙인다. 이후 결정이 이전 결정을 대신하면(`supersedes`) 이전 결정의 신호는 더 세지 않는다.
+  - **주제와 관제 (2026-11-03, `subjects.py`, `meeting_control.py`).** 회의마다 주제(`meetings.subject`, 예: 천안 신공장 · 뉴로엣지 인수)가 있다: 저장할 때 Agent가 준 이름, 이어지는 회의(carry over)의 주제,
+    쓰고 있는 주제와 회의명 단어 일치, 아니면 회의명에서 '회의 · 검토 · 준비' 같은 말을 뺀 것 순서. 007 전에 저장된 회의는 관제를 처음 열 때 같은 규칙으로 정한다 (`fill_missing`, 오래된 회의부터).
+    `meeting_control.control()`은 회사의 모든 회의를 한 화면으로: 주제마다 상태(alarm 이상 · warn 주의 · ok, 이유 · 지금 유효한 결정 · 다음 회의), 회의 목록(진행 중 · 예정 · 완료, 녹음 · 회의록 · 결정 · 분공 진행 · 메일),
+    담당자별 할 일(같은 email · 이름은 한 사람, 소속은 `staff_directory`), 날짜별 활동(녹음 → 초안 → 확정 · 결정 변경 · 신호 · 메일)을 준다.
   - **업무 요청 (A2A).** `run_task_requests`(K): 다른 system의 A2A run은 `submit`만 할 수 있고(`task_requests` pending, 요청한 system = run의 `caller`),
     K의 확정 권한자가 `accept`(담당 · 기한 필수, 지정 회의 또는 따로 만든 접수 기록에 Action Item 생성 + 배정 메일) · `reject`한다. A2A `list`는 그 system이 보낸 요청과 연결된 Action Item 진행만 보여 준다.
 - `backend/app/library/tools/run_company_risk_news_analysis.py`: `make_run_company_risk_news_analysis(path)` → `@tool("run_company_risk_news_analysis")`, 인자 `query: str, company: str, topics: list[str] | None`.
@@ -319,6 +328,8 @@ systems/k_electronics/
 | `update_action_item` | tool | `meeting` | `make_update_action_item(MEETING_STORE)` → `library/workflows/action_items.update_action_item` |
 | `run_meeting_schedule` | tool | `meeting` | `make_run_meeting_schedule(MEETING_STORE)` → `library/workflows/meeting_schedule.meeting_schedule` |
 | `correct_transcript` | tool | `meeting` (Group) | `make_transcript_correction(MEETING_STORE, data/transcript_glossary.json, agent="meeting").tool` → `library/workflows/transcript_correction.correct_lines` |
+| `decision_review` | skill | `meeting` (Group) | `library/skills/decision_review.py` |
+| `run_decision_review` | tool | `meeting` (Group) | `make_decision_watch(MEETING_STORE, data/news.json).tool` → `library/workflows/decision_watch.review_decisions` (같은 객체의 `scan()`이 배경 작업의 기사 대조) |
 | `external_risk_analysis` | skill | `news` | `library/skills/external_risk_analysis.py` |
 | `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(data/news.json)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
@@ -465,7 +476,8 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 
 K system에도 같은 모양의 `POST /api/agents/{meeting,news,advisory}/run`이 있다 (K 데이터).
 
-Group system에는 Agent를 거치지 않는 **회의 업무 화면용** `POST /api/desk/{overview,mail,flags,items,meeting,schedule,report,minutes,checkin,attendance}`도 있다 (2026-10-30, `library/workflows/meeting_desk`;
+Group system에는 Agent를 거치지 않는 **회의 업무 화면용** `POST /api/desk/{overview,mail,flags,items,meeting,schedule,report,minutes,checkin,attendance,watch,control,finalize}`도 있다 (2026-10-30, `library/workflows/meeting_desk`;
+`watch`는 전제가 흔들린 결정, `control`은 관제(`meeting_control`), `finalize`는 저장된 초안을 Agent 없이 확정(메일 발송)한다 — 2026-11-03;
 `checkin` open · status · close · join과 `attendance` assign · add · remove, `items`의 `action: split`은 2026-11-03, `library/workflows/attendance`). `meeting`은 `attendance` · `recall`도 준다.
 `report` `{meeting_id, kind: minutes|report}`는 저장된 회의록으로 만든 **회의록(양식) · 회의 결과 보고서(개조식) PDF**를 돌려준다 (`library/workflows/meeting_report`, fpdf2 + 나눔 글꼴;
 양식은 data.go.kr에 공개된 공공데이터전략위원회 회의록 · 회의 결과를 따름). 같은 PDF가 회의록 메일에 첨부되고, 의장 · 간사 메일에는 결과 보고서도 붙는다.
@@ -807,6 +819,8 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 19. **Compliance 규칙의 한계.** 키워드 · 정규식 규칙이라 돌려 말한 발언은 놓치고 일상 표현에도 걸릴 수 있다 (검토자가 cleared로 닫는다). LLM 판정을 더할지, 규칙을 법무팀이 관리하게 할지는 미결정.
 20. **조직 이름 담당.** `resolve_owner`는 "팀 · 본부 · 실 …"로 끝나는 이름만 조직으로 보므로 "K전자" 같은 회사명 담당은 사람으로 등록되어 배정 메일이 주소 필요 상태가 된다.
     계열사에 배정된 업무는 A2A 업무 요청으로 전달하는 것이 맞는 경로다 (11장 18번).
+21. **주제 추론의 한계.** 주제는 회의명 단어로 정하므로 회의명이 매번 다른 정기 회의("10/13 회의")는 회의마다 다른 주제가 되고, 회의명이 겹치면 다른 사업이 한 주제로 묶일 수 있다.
+    Agent가 `save_meeting_minutes(subject=)`로 이름을 주면 그것을 쓴다. 주제를 사람이 고치는 화면은 아직 없다.
 
 ---
 

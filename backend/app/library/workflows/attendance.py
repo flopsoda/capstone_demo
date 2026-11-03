@@ -551,17 +551,23 @@ def attendance_view(conn: psycopg.Connection, meeting_id: int) -> dict[str, Any]
 
 def recall(conn: psycopg.Connection, meeting_id: int, viewer: Viewer, today: date | None = None) -> dict[str, Any]:
     """이전 회의에서 이어지는 일: 이번 참석자들이 맡아 아직 열린 할 일(기한 지난 것 먼저)과, 이번 참석자가 있던
-    이전 회의의 미결 쟁점."""
+    이전 회의의 미결 쟁점. 이 회의의 주제로 열린 이전 회의가 있으면 그 주제 안에서만 찾는다 (같은 사람이 다른 주제에서
+    남긴 일은 끌어오지 않는다)."""
     today = today or today_kst()
-    m = conn.execute("SELECT starts_at FROM meetings WHERE id = %s", (meeting_id,)).fetchone()
-    params = {**viewer.scope(), "mid": meeting_id, "starts": m["starts_at"], "today": today, "statuses": list(OPEN_STATUSES)}
+    m = conn.execute("SELECT starts_at, subject FROM meetings WHERE id = %s", (meeting_id,)).fetchone()
+    params = {**viewer.scope(), "mid": meeting_id, "starts": m["starts_at"], "today": today, "statuses": list(OPEN_STATUSES),
+              "subject": m["subject"]}
+    same = m["subject"] and conn.execute(
+        "SELECT 1 FROM meetings WHERE subject = %s AND id <> %s AND starts_at <= %s LIMIT 1", (m["subject"], meeting_id, m["starts_at"]),
+    ).fetchone()
+    topic = "AND m.subject = %(subject)s" if same else ""
     attendees = """SELECT mp.person_id FROM meeting_participants mp JOIN people p ON p.id = mp.person_id
                    WHERE mp.meeting_id = %(mid)s AND p.speaker_meeting_id IS NULL"""
     items = conn.execute(
         f"""SELECT a.code, a.text, a.due_date, a.status, {PERSON_LABEL} AS owner, m.code AS mcode, m.title, m.starts_at
             FROM action_items a JOIN meetings m ON m.id = a.meeting_id JOIN people p ON p.id = a.owner_person_id
             WHERE a.meeting_id <> %(mid)s AND m.starts_at <= %(starts)s AND a.status = ANY(%(statuses)s)
-              AND a.owner_person_id IN ({attendees}) AND {VISIBLE}
+              AND a.owner_person_id IN ({attendees}) {topic} AND {VISIBLE}
             ORDER BY (a.due_date IS NOT NULL AND a.due_date < %(today)s) DESC, a.due_date NULLS LAST, m.starts_at DESC
             LIMIT {RECALL_ITEMS}""",
         params,
@@ -570,7 +576,7 @@ def recall(conn: psycopg.Connection, meeting_id: int, viewer: Viewer, today: dat
         f"""SELECT d.seq, d.statement, m.code AS mcode, m.title, m.starts_at FROM decisions d JOIN meetings m ON m.id = d.meeting_id
             WHERE d.kind = 'issue' AND d.resolved_by_id IS NULL AND d.meeting_id <> %(mid)s AND m.starts_at <= %(starts)s
               AND EXISTS (SELECT 1 FROM meeting_participants mp WHERE mp.meeting_id = m.id AND mp.person_id IN ({attendees}))
-              AND {VISIBLE}
+              {topic} AND {VISIBLE}
             ORDER BY m.starts_at DESC, d.seq LIMIT {RECALL_ISSUES}""",
         params,
     ).fetchall()

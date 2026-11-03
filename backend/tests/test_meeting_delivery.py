@@ -12,7 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.library.workflows import compliance, meeting_minutes, meeting_report, outbox
-from app.library.workflows.action_items import track_action_items
+from app.library.workflows.action_items import track_action_items, update_action_item
 from app.library.workflows.jobs import run_pass, start_meeting_jobs
 from app.library.workflows.meeting_minutes import save_minutes
 from app.library.workflows.meeting_schedule import meeting_schedule
@@ -466,6 +466,24 @@ def test_reminders_before_and_after_the_due_date(meeting_db, directory):
         rows = conn.execute("SELECT subject, status FROM outbox WHERE kind = 'reminder' ORDER BY id").fetchall()
     assert [r["status"] for r in rows] == ["rejected", "rejected", "rejected", "approved"]
     assert rows[1]["subject"].startswith("[기한 알림] D-1") and rows[3]["subject"].startswith("[기한 경과] 8일 지남")
+
+
+def test_a_reminder_asked_for_now(meeting_db, directory):
+    draft = save()
+    item = f"{draft['meeting_id']}-A1"
+    nudge = dict(store=STORE, viewer=SECRETARY, item_id=item, remind=True, today=date(2026, 10, 30))
+    early = update_action_item(**nudge)
+    assert not early["updated"] and "초안" in early["error"]  # not assigned before the minutes are final
+    save(meeting_id=draft["meeting_id"], finalize=True)
+    out = update_action_item(**{**nudge, "note": "이번 주 안에 공유 부탁드립니다"})
+    assert [(m["to"], m["subject"]) for m in out["mail_queued"]] == [("박지훈 (CFO)", "[업무 독촉] 2일 지남: 협력사별 재고 현황 보고 (기한 2026-10-28)")]
+    again = update_action_item(**nudge)
+    assert not again["updated"] and "오늘 이미" in again["error"]  # once a day
+    with STORE.connect() as conn:
+        body = conn.execute("SELECT body FROM outbox WHERE dedupe_key LIKE 'nudge:%%'").fetchone()["body"]
+    assert "이번 주 안에 공유 부탁드립니다" in body and "요청한 사람: 이서연" in body
+    update_action_item(store=STORE, viewer=SECRETARY, item_id=item, status="done", today=date(2026, 10, 31))
+    assert "이미 'done'" in update_action_item(**{**nudge, "today": date(2026, 10, 31)})["error"]
 
 
 def test_scheduling_queues_notices(meeting_db, directory):
