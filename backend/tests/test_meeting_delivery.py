@@ -133,6 +133,15 @@ def test_schema_records_its_migrations(meeting_db):
     assert versions == [1] + [v for v, _, _ in migrations()] and 2 in versions
 
 
+def test_a_deployment_may_start_without_the_sample_meetings(meeting_db, monkeypatch):
+    from app.systems.group import MEETING_STORE as GROUP_STORE  # the Group fixture has a staff directory
+
+    monkeypatch.setenv("MEETINGS_SEED_MEETINGS", "0")
+    with GROUP_STORE.connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM meetings").fetchone()["n"] == 0
+        assert conn.execute("SELECT count(*) AS n FROM staff_directory").fetchone()["n"] > 0  # addresses still known
+
+
 def test_a_schema_created_before_the_migrations_is_upgraded_in_place(meeting_db):
     import psycopg
     from psycopg import sql

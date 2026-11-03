@@ -7,6 +7,8 @@ On first use the schema (meeting_schema.sql, version 1) is created when missing,
 migrations in meeting_migrations/ (NNN_name.sql) it has not had yet are applied in order and
 recorded in its schema_migrations table, and, while it has no meetings (no staff directory), its
 meetings (staff directory) are seeded from the system's fixture file (data/meetings.json).
+MEETINGS_SEED_MEETINGS=0 leaves the sample meetings out (a deployment that starts empty); the staff
+directory is still seeded.
 
 Who is asking (`Viewer`) is decided by the Tool layer from the run — never from model
 arguments — and every query filters by it in SQL, before anything is read
@@ -167,11 +169,16 @@ class MeetingStore:
                 migrate(conn)
                 if self.seed is not None:
                     fixture = json.loads(self.seed.read_text(encoding="utf-8"))
-                    if conn.execute("SELECT count(*) AS n FROM meetings").fetchone()["n"] == 0:
+                    if seed_meetings() and conn.execute("SELECT count(*) AS n FROM meetings").fetchone()["n"] == 0:
                         seed_fixture(conn, fixture)
                     if not conn.execute("SELECT 1 FROM staff_directory LIMIT 1").fetchone():
                         seed_directory(conn, fixture.get("directory", []))
             self._ready = True
+
+
+def seed_meetings() -> bool:
+    """Whether an empty store gets the fixture's sample meetings (MEETINGS_SEED_MEETINGS, default on)."""
+    return os.environ.get("MEETINGS_SEED_MEETINGS", "1").strip().lower() not in ("0", "off", "false", "no")
 
 
 def migrations() -> list[tuple[int, str, Path]]:
