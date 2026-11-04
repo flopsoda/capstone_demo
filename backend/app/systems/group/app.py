@@ -111,6 +111,7 @@ class DeskRequest(Identified):
     speaker: str | None = None  # attendance assign: 목소리 라벨 ('화자 C')
     person: dict[str, Any] | None = None  # attendance: {name, email, user_id} (gateway가 회사 계정으로 확인)
     signal_id: str | None = None  # watch: 전제를 흔든 신호 (SIG-…)
+    carry_over_from: str | None = None  # schedule: 안건 · 미결 쟁점을 이어 받을 이전 회의 id
 
 
 def _desk(body: DeskRequest, call: Callable[[Viewer], dict[str, Any]]) -> dict[str, Any]:
@@ -154,7 +155,8 @@ def desk_items(body: DeskRequest) -> dict[str, Any]:
 def desk_schedule(body: DeskRequest) -> dict[str, Any]:
     return _desk(body, lambda v: meeting_desk.schedule(
         store=MEETING_STORE, viewer=v, action=body.action, meeting_id=body.meeting_id, title=body.title, starts_at=body.starts_at,
-        ends_at=body.ends_at, location=body.location, attendees=body.attendees, agenda=body.agenda, classification=body.classification))
+        ends_at=body.ends_at, location=body.location, attendees=body.attendees, agenda=body.agenda, classification=body.classification,
+        carry_over_from=body.carry_over_from))
 
 
 @app.post("/api/desk/meeting")

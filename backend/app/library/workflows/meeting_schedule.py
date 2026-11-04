@@ -5,10 +5,16 @@ create one with its agenda (optionally carrying over what an earlier meeting def
 left unresolved), change it, or cancel it — each queues a notice to the participants for
 approval (outbox.py). Minutes are later written onto the same meeting
 id with save_meeting_minutes. Not agent-visible; no LangChain dependency.
+
+`draft` stores nothing and sends nothing: from what a booking request said it fills what the
+records know (the meeting it continues — same subject —, its attendees and room, what it left
+open), says what it assumed, and lists what is missing, which names fit several people (or
+nobody), and which booked meetings overlap. The screen shows it as a booking form.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from typing import Any
 
@@ -33,8 +39,10 @@ from .meeting_store import (
 from .outbox import queue_schedule_mail
 from .subjects import subject_for
 
-ACTIONS = ("list", "create", "update", "cancel")
+ACTIONS = ("list", "draft", "create", "update", "cancel")
 UPCOMING_DAYS = 30
+DEFAULT_LENGTH = timedelta(hours=1)  # 끝 시각을 말하지 않은 회의
+CANDIDATES = 5
 
 
 def _fail(action: str, error: str) -> dict[str, Any]:
@@ -123,6 +131,152 @@ def _carry_over(conn: psycopg.Connection, viewer: Viewer, code: str) -> list[tup
     ]
 
 
+# ---------------------------------------------------------------------------
+# Draft: what a booking request leaves open (nothing is stored, no mail)
+# ---------------------------------------------------------------------------
+
+
+def _previous(conn: psycopg.Connection, viewer: Viewer, title: str | None, carry_over_from: str | None) -> dict[str, Any] | None:
+    """The meeting this one continues: the one named, else the latest meeting of the same subject (by the title's words)."""
+    if carry_over_from and carry_over_from.strip():
+        where, params = "m.code = %(code)s", {"code": carry_over_from.strip()}
+    else:
+        subject = subject_for(conn, viewer, title) if title and title.strip() else None
+        if not subject:
+            return None
+        where, params = "m.subject = %(subject)s AND m.status <> 'cancelled'", {"subject": subject}
+    return conn.execute(
+        f"""SELECT m.id, m.code, m.title, m.status, m.starts_at, m.location, m.classification FROM meetings m
+            WHERE {where} AND {VISIBLE} ORDER BY (m.status = 'held') DESC, m.starts_at DESC LIMIT 1""",
+        {**params, **viewer.scope()},
+    ).fetchone()
+
+
+def _who(conn: psycopg.Connection, viewer: Viewer, label: str) -> dict[str, Any]:
+    """One attendee as written ("박 상무", "재무실장 (간사)") → the person found, the candidates when several fit,
+    or new (not in the directory: no address for the notice)."""
+    name, title, role = parse_person_label(label)
+    words = [w for w in re.split(r"[\s·,/]+", f"{name} {title or ''}") if w]
+    rows = conn.execute(
+        """SELECT DISTINCT ON (lower(name)) name, title, email FROM (
+               SELECT p.display_name AS name, p.title, p.email, 0 AS src FROM people p
+               UNION ALL SELECT s.name, coalesce(s.title, s.department), s.email, 1 FROM staff_directory s) d
+           WHERE name !~ '^(화자 [A-Z]{1,2}|미확인 화자)'
+           ORDER BY lower(name), (email IS NULL), src""",
+    ).fetchall()
+    exact = [r for r in rows if r["name"] == name]
+    if not exact:  # 성 · 이름 일부 · 직함으로: "박 상무", "CFO", "정 실장"
+        def fits(r):
+            hay = f"{r['name']} {r['title'] or ''}".lower()
+            return all(w.lower() in hay or r["name"].startswith(w) for w in words)
+        exact = [r for r in rows if words and fits(r)]
+    out: dict[str, Any] = {"input": label.strip(), "role": role}
+    if len(exact) == 1:
+        r = exact[0]
+        return {**out, "status": "found", "name": r["name"], "title": r["title"], "email": r["email"],
+                "label": f"{r['name']} ({r['title']})" if r["title"] else r["name"], "guessed": r["name"] != name}
+    if len(exact) > 1:
+        return {**out, "status": "ambiguous", "candidates": [
+            {"label": f"{r['name']} ({r['title']})" if r["title"] else r["name"], "email": r["email"]} for r in exact[:CANDIDATES]]}
+    return {**out, "status": "new", "name": name, "label": label.strip()}
+
+
+def _busy(conn: psycopg.Connection, viewer: Viewer, start, end, names: list[str], location: str | None) -> list[str]:
+    """Meetings already booked over [start, end) with one of these people, or in the same room."""
+    rows = conn.execute(
+        f"""SELECT m.code, m.title, m.starts_at, m.ends_at, m.location,
+                   array(SELECT p.display_name FROM meeting_participants mp JOIN people p ON p.id = mp.person_id
+                         WHERE mp.meeting_id = m.id AND p.display_name = ANY(%(names)s)) AS who
+            FROM meetings m WHERE {VISIBLE} AND m.status IN ('scheduled', 'postponed')
+              AND m.starts_at < %(end)s AND coalesce(m.ends_at, m.starts_at + interval '1 hour') > %(start)s""",
+        {**viewer.scope(), "names": names, "start": start, "end": end},
+    ).fetchall()
+    out = []
+    for r in rows:
+        room = bool(location and r["location"] and location.strip() == r["location"].strip())
+        if r["who"] or room:
+            what = (f"{', '.join(r['who'])} 참석" if r["who"] else "") + (" · " if r["who"] and room else "") + ("같은 장소" if room else "")
+            out.append(f"{kst_minute(r['starts_at'])[11:]} {r['title']} ({r['code']}) — {what}")
+    return out
+
+
+def _draft(conn: psycopg.Connection, viewer: Viewer, today: date, *, title, starts_at, ends_at, location, attendees, agenda,
+           classification, carry_over_from) -> dict[str, Any]:
+    assumed, missing, problems = [], [], []
+    when = (starts_at or "").strip()
+    day = start = end = None
+    try:
+        day = parse_date(when) if when else None
+        start = parse_datetime(when) if len(when) > 10 else None  # 날짜만 말했으면 시각은 묻는다
+        end = parse_datetime(ends_at) if ends_at and len(ends_at.strip()) > 10 else None
+    except ValueError:
+        problems.append("일시를 읽을 수 없습니다 ('YYYY-MM-DD HH:MM', 한국 시간).")
+    if start and end is None:
+        end = start + DEFAULT_LENGTH
+        assumed.append("끝나는 시각을 말하지 않아 1시간으로 잡았습니다.")
+    if start and end and end <= start:
+        problems.append("끝나는 시각이 시작보다 앞입니다.")
+    if day and day < today:
+        problems.append("지난 날짜입니다.")
+
+    prev = _previous(conn, viewer, title, carry_over_from)
+    people = [_who(conn, viewer, a) for a in attendees or [] if a and a.strip()]
+    suggested: list[str] = []
+    if prev:
+        before = [r["label"] for r in conn.execute(
+            f"""SELECT {PERSON_LABEL} AS label FROM meeting_participants mp JOIN people p ON p.id = mp.person_id
+                WHERE mp.meeting_id = %s AND p.display_name !~ '^(화자 [A-Z]{{1,2}}|미확인 화자)' ORDER BY p.display_name""",
+            (prev["id"],))]
+        if not people and before:
+            people = [_who(conn, viewer, b) for b in before]
+            assumed.append(f"참석자를 말하지 않아 지난 회의({prev['title']})의 참석자로 채웠습니다.")
+        else:
+            named = {p.get("name") for p in people}
+            suggested = [b for b in before if parse_person_label(b)[0] not in named]
+        if not location and prev["location"]:
+            location = prev["location"]
+            assumed.append(f"장소를 지난 회의와 같게 했습니다 ({prev['location']}).")
+    carried = _carry_over(conn, viewer, prev["code"]) if prev and prev["status"] == "held" else []
+    if carried:
+        assumed.append(f"지난 회의({prev['code']})에서 이어지는 안건 {len(carried)}개를 넣었습니다.")
+    open_items = conn.execute(
+        f"""SELECT a.code, a.text, coalesce({PERSON_LABEL}, u.name) AS owner FROM action_items a
+            LEFT JOIN people p ON p.id = a.owner_person_id LEFT JOIN org_units u ON u.id = a.owner_unit_id
+            WHERE a.meeting_id = %s AND a.status IN ('open', 'in_progress', 'blocked') ORDER BY a.due_date NULLS LAST""",
+        (prev["id"],),
+    ).fetchall() if prev else []
+
+    if not (title and title.strip()):
+        missing.append("title")
+    if day is None:
+        missing.append("date")
+    if start is None:
+        missing.append("start")
+    if not people:
+        missing.append("attendees")
+    unclear = [p for p in people if p["status"] != "found"]
+    conflicts = _busy(conn, viewer, start, end, [p["name"] for p in people if p.get("name")], location) if start and end else []
+    level = classification or (prev["classification"] if prev else 2)
+    return {
+        "ok": True, "action": "draft", "today": day_label(today),
+        "draft": {
+            "title": (title or "").strip() or None, "date": day.isoformat() if day else None,
+            "start": kst_minute(start)[11:] if start else None, "end": kst_minute(end)[11:] if end else None,
+            "location": location, "classification": min(level, viewer.clearance) if viewer.clearance else level,
+            "attendees": people, "agenda": [a.strip() for a in agenda or [] if a and a.strip()],
+            "carry_over_from": prev["code"] if carried else None,
+            "carried": [c[0] for c in carried],
+        },
+        "previous": {"id": prev["code"], "title": prev["title"], "date": kst_minute(prev["starts_at"])[:10]} if prev else None,
+        "suggestions": {"attendees": suggested,
+                        "agenda": [{"id": r["code"], "text": r["text"], "owner": r["owner"]} for r in open_items]},
+        "assumed": assumed, "missing": missing, "problems": problems, "conflicts": conflicts,
+        "unclear": [p["input"] for p in unclear],
+        # 말한 대로 바로 예약해도 되는가: 빠진 것 · 애매한 사람 · 겹침 · 문제가 없고, 참석자를 지어 넣지 않았다
+        "complete": not (missing or unclear or conflicts or problems) and bool(attendees),
+    }
+
+
 def meeting_schedule(
     *,
     store: MeetingStore,
@@ -169,6 +323,11 @@ def meeting_schedule(
             meetings = [scheduled_meeting(conn, r["id"]) for r in rows]
         return {"ok": True, "action": action, "today": day_label(today), "from": start.isoformat(), "to": end.isoformat(),
                 "matched": len(meetings), "meetings": meetings}
+
+    if action == "draft":
+        with store.connect() as conn:
+            return _draft(conn, viewer, today, title=title, starts_at=starts_at, ends_at=ends_at, location=location,
+                          attendees=attendees, agenda=agenda, classification=classification, carry_over_from=carry_over_from)
 
     if not viewer.can_write:
         return _fail(action, "다른 Agent System이 보낸 요청으로는 회의 일정을 바꿀 수 없습니다.")

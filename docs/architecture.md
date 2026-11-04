@@ -186,7 +186,8 @@ Advisory Agent  → run_mna_review
 - `run_action_item_tracking(query?, owner?, status?, due_before?, due_within_days?, overdue_only, meeting_id?, mine)` → `action_items.track_action_items`: 회의를 가로질러
   지연 일수 큰 순 → 기한 순, 같은 범위의 상태별 건수(`summary`)와 기준일(`as_of`, 요일 포함 — 모델은 오늘 날짜를 모른다)을 준다. 조회만 한다.
 - `update_action_item(item_id, status?, note?, due?, owner?, remind?)` → `action_items.update_action_item`: 변경마다 `action_item_updates`에 누가 · 언제 · 이전/새 상태 · 메모를 남긴다. 모르는 id면 `candidates`. `remind=true`는 사용자가 독촉을 요청할 때 담당자에게 지금 확인 요청 메일을 보낸다 (`outbox.queue_nudge_mail`: 확정된 회의록의 열린 할 일 · 사람 담당 · 확정 권한, 할 일마다 하루 한 번, 매일 아침 기한 알림과 별개).
-- `run_meeting_schedule(action = list | create | update | cancel, ...)` → `meeting_schedule.meeting_schedule`: 외부 캘린더 동기화 없는 사내 일정.
+- `run_meeting_schedule(action = list | draft | create | update | cancel, ...)` → `meeting_schedule.meeting_schedule`: 외부 캘린더 동기화 없는 사내 일정.
+  `draft`(2026-11-04)는 저장 · 메일 없이 예약 요청을 점검한다: 같은 주제의 지난 회의에서 참석자 · 장소 · 이어지는 안건을 채우고(assumed), 빠진 것(missing: title · date · start · attendees), 여러 사람에 맞거나 기록에 없는 이름(unclear, 후보), 겹치는 회의(conflicts)를 돌려준다. 끝 시각이 없으면 1시간. Skill은 complete면 바로 create, 아니면 빠진 것만 묻고 화면이 예약 양식을 띄운다 (gateway `schedule_form` 카드, 관제의 '+ 회의 예약'과 같은 양식 → desk `schedule` create).
   `create`의 `carry_over_from`은 이전 회의의 보류 안건과 미결 쟁점(`issue`)을 새 회의 안건으로 이월한다. 시각은 한국 시간이며 `list`는 `today`(요일 포함)를 준다.
   예약된 회의의 회의록은 같은 id로 `save_meeting_minutes`에 쓴다.
 - **회의 후속 기능 (2026-10-28, 11장 결정 14~19).**

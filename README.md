@@ -175,7 +175,7 @@ backend/
         meeting_control.py           회의 관제: 주제별 상태 · 회의 목록(진행 중 · 예정 · 완료) · 담당자별 할 일 · 날짜별 활동 (desk `control`)
         task_requests.py             다른 system의 A2A 업무 요청: submit(A2A) → accept | reject(확정 권한자) → Action Item
         action_items.py              Action Item 진행 조회(지연 순, 상태별 건수) · 갱신(이력 기록)
-        meeting_schedule.py          회의 일정 조회 · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소 (참석자 안내 메일 생성)
+        meeting_schedule.py          회의 일정 조회 · 예약 전 점검(draft: 빠진 것 · 애매한 이름 · 겹침, 지난 회의로 채우기) · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소 (참석자 안내 메일 생성)
         company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(path) 조회
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
     systems/

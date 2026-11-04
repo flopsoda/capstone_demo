@@ -179,19 +179,19 @@ def update_item(*, store: MeetingStore, viewer: Viewer, item_id: str, status: st
                               today=today)
 
 
-SCHEDULE_ACTIONS = ("create", "update", "cancel")
+SCHEDULE_ACTIONS = ("draft", "create", "update", "cancel")
 
 
 def schedule(*, store: MeetingStore, viewer: Viewer, action: str, meeting_id: str | None = None, title: str | None = None,
              starts_at: str | None = None, ends_at: str | None = None, location: str | None = None,
              attendees: list[str] | None = None, agenda: list[str] | None = None, classification: int | None = None,
-             today: date | None = None) -> dict[str, Any]:
-    """회의 일정 만들기 · 바꾸기 · 취소 (run_meeting_schedule Tool과 같은 workflow). 안내 메일은 Agent가 바로 보낸다."""
+             carry_over_from: str | None = None, today: date | None = None) -> dict[str, Any]:
+    """회의 일정 점검(draft, 예약 양식) · 만들기 · 바꾸기 · 취소 (run_meeting_schedule Tool과 같은 workflow). 안내 메일은 Agent가 바로 보낸다."""
     if action not in SCHEDULE_ACTIONS:
         return {"ok": False, "error": f"action은 {', '.join(SCHEDULE_ACTIONS)} 중 하나여야 합니다."}
     return meeting_schedule(store=store, viewer=viewer, action=action, meeting_id=meeting_id, title=title, starts_at=starts_at,
                             ends_at=ends_at, location=location, attendees=attendees, agenda=agenda,
-                            classification=classification or 2, today=today)
+                            classification=classification or 2, carry_over_from=carry_over_from, today=today)
 
 
 def meeting(*, store: MeetingStore, viewer: Viewer, meeting_id: str | None, today: date | None = None) -> dict[str, Any]:
