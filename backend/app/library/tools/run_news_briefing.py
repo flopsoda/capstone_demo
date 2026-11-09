@@ -14,7 +14,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from ...runtime.llm import LLMConfigError, get_chat_model
-from ..workflows.news_briefing import FixtureSource, GoogleNewsSource, run_news_briefing
+from ..workflows import news_briefing as workflow
 
 TOOL_NAME = "run_news_briefing"
 
@@ -46,9 +46,9 @@ def make_run_news_briefing(fixture: Path) -> BaseTool:
         purpose: 분석 목적. "general"(기본: 일반 동향) 또는 "risk"(주제마다 리스크 종류·수준·확인 사항 추가).
         days: 며칠 전 기사까지 볼지 (기본 7).
     """
-        return run_news_briefing(
+        return workflow.run_news_briefing(  # not the Tool itself: it has the same name
             query, purpose=purpose, days=max(1, min(int(days), 30)),
-            sources=[GoogleNewsSource(), FixtureSource(fixture)], llm=_llm(),
+            sources=[workflow.GoogleNewsSource(), workflow.FixtureSource(fixture)], llm=_llm(),
         )
 
     return run_news_briefing

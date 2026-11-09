@@ -140,3 +140,13 @@ def test_content_adjusts_the_filter_score():
     assert adjusted_importance({**base, "risk": {"level": "HIGH"}}) == 55
     assert adjusted_importance({**base, "importance_llm": "high"}) == 55
     assert adjusted_importance({**base, "importance_llm": "low", "risk": {"level": "LOW"}}) == 30
+
+
+def test_the_agent_tool_runs_the_workflow_not_itself(monkeypatch):
+    # The Tool and the workflow share the name run_news_briefing; the Tool once called itself.
+    from app.library.tools import run_news_briefing as tool_module
+    from app.systems.k_electronics.tools.run_news_briefing import run_news_briefing as tool
+
+    monkeypatch.setattr(tool_module, "_llm", lambda: None)
+    out = tool.invoke({"query": "뉴로엣지", "purpose": "risk", "days": 400})
+    assert out["topic_count"] >= 1 and out["purpose"] == "risk"
