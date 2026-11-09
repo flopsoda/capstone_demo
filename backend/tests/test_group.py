@@ -75,6 +75,8 @@ def test_group_registry_content():
         "update_action_item": ("tool", {"meeting"}),
         "run_meeting_schedule": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
+        "news_briefing": ("skill", {"news"}),
+        "run_news_briefing": ("tool", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
         "run_mna_review": ("tool", {"advisory"}),

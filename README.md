@@ -53,6 +53,9 @@ npm run build    # tsc + vite build
 #                                   Group backend의 /api/events(SSE)를 구독해 전체 Agent Graph · Step 1~8 · 협업 세션을 실제 이벤트로만 보여준다
 ```
 
+뉴스 브리핑 파이프라인(News Agent 기본 Tool `run_news_briefing`): 요청 하나가 수집(Google 뉴스 RSS + 가상 fixture) → 중복 제거 · 주제 묶기 · 중요도 → LLM 분석(요약 · 흐름 · 시사점, 키 없으면 규칙) → 응답을 한 번에 실행합니다. 뉴스 탭에 `HBM 시장 최근 동향 알려줘.` 같은 어떤 주제든 요청할 수 있습니다.
+설치 없이 단계별 결과와 LLM 모델 비교(분석 · 속도 · Tool 호출 정확도)를 보려면 backend/에서 `python briefing_demo.py "HBM 시장" --compare gpt-oss:20b-cloud,gemma4:31b-cloud` (키는 `backend/.env`의 `OLLAMA_API_KEY`).
+
 실제 뉴스 수집 (선택, backend/에서). 결과는 `data/collected/news.json`(Git 제외)에 쌓이고 뉴스 Tool이 fixture와 함께 읽습니다:
 
 ```bash

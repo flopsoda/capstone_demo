@@ -41,7 +41,7 @@ Group Super Agent
 Subsidiary Super Agent
        │
        ├── Meeting Agent ──▶ run_meeting_context_retrieval
-       ├── News Agent ─────▶ run_company_risk_news_analysis
+       ├── News Agent ─────▶ run_news_briefing · run_company_risk_news_analysis
        └── Management Advisory Agent ──▶ run_mna_review
                 │
                 ▼
@@ -140,7 +140,7 @@ User        → Specialist Agent   (직접 대화)
 - Registry가 허용한 Capability:
   - Meeting: Skill `meeting_context_analysis`(조회·정리 · 브리핑 지침), `meeting_minutes_writing`(transcript → 초안 → 확정 지침), `meeting_follow_up`(진행 추적 · 갱신 · 일정 지침),
     Tool `run_meeting_context_retrieval`, `save_meeting_minutes`, `run_action_item_tracking`, `update_action_item`, `run_meeting_schedule` ([3.3](#33-workflow-tool)).
-  - News: Skill `external_risk_analysis`(외부 리스크 조사·정리 지침, 응답 형식), Tool `run_company_risk_news_analysis`.
+  - News: Skill `external_risk_analysis`(외부 리스크 조사·정리 지침, 응답 형식), `news_briefing`(일반 뉴스 브리핑 지침, 응답 형식), Tool `run_news_briefing`(기본 파이프라인), `run_company_risk_news_analysis`(데모 시나리오의 기업 리스크 조사).
   - Advisory: Skill `mna_feasibility_review`(인수 검토 지침 — 관점 선택, 맥락 전달, 응답 형식), Tool `run_mna_review`.
 - **호출 맥락(invocation)** 은 `"delegation" | "direct"` 두 가지다. 같은 그래프가 쓰이고, 호출 맥락은 LangGraph `config["configurable"]`로 실행마다 전달된다 (state에 넣지 않는다).
   - 모델에게는 system context 끝에 한 문단(`agent_core.INVOCATION_CONTEXT`)으로 알려 준다: delegation이면 "슈퍼에이전트에게 돌아가는 보고이므로 Tool 결과에 근거하라", direct면 "인사·개념 질문에는 Tool 없이 답하고 데이터가 필요한 업무면 Tool을 쓰라".
@@ -156,7 +156,7 @@ Workflow Tool은 **Agent가 아니다**.
 
 ```text
 Meeting Agent   → run_meeting_context_retrieval · save_meeting_minutes · run_action_item_tracking · update_action_item · run_meeting_schedule
-News Agent      → run_company_risk_news_analysis
+News Agent      → run_news_briefing · run_company_risk_news_analysis
 Advisory Agent  → run_mna_review
 ```
 
@@ -188,6 +188,14 @@ Advisory Agent  → run_mna_review
 - `run_meeting_schedule(action = list | create | update | cancel, ...)` → `meeting_schedule.meeting_schedule`: 외부 캘린더 동기화 없는 사내 일정.
   `create`의 `carry_over_from`은 이전 회의의 보류 안건과 미결 쟁점(`issue`)을 새 회의 안건으로 이월한다. 시각은 한국 시간이며 `list`는 `today`(요일 포함)를 준다.
   예약된 회의의 회의록은 같은 id로 `save_meeting_minutes`에 쓴다.
+- `backend/app/library/tools/run_news_briefing.py`: `make_run_news_briefing(fixture)` → `@tool("run_news_briefing")`, 인자 `query: str, purpose: str = "general", days: int = 7`(1~30).
+  News Agent의 기본 파이프라인. 기업 · 산업 · 시장 · 규제 · 인물 등 어떤 주제든 받는다. 출처는 Google 뉴스 RSS(실시간)와 system의 가상 fixture(`data/news.json`, 데모 시나리오). LLM은 runtime의 설정 모델(`get_chat_model`), 설정이 없으면 규칙만 쓴다.
+- `backend/app/library/workflows/news_briefing.py`: 순수 함수 `run_news_briefing(query, purpose, days, sources, llm, today, log)`가 한 요청 안에서
+  수집(출처마다 `Article`로 정규화, 한 출처 실패는 `failed_sources`에 적고 계속) → 필터링(같은 링크 · 같은 매체의 거의 같은 제목 제거, 다른 매체의 같은 이야기는 topic 하나로 묶음, 중요도 0~100 = 보도 매체 수 + 최신성 + 제목의 검색어 비율) →
+  분석(규칙으로 요약 · 핵심 사실 · 긍정/부정을 먼저 채우고, LLM이 있으면 JSON 한 번 호출로 topic별 요약과 전체 `trend` · `so_what`을 덮어씀. 답이 JSON이 아니거나 호출이 실패하면 규칙 결과 유지, `analysis: "rule" | "llm"`) →
+  응답(`topics[]` 중요도 순, `negative_alerts` = 중요도 50 이상인 부정 topic, `outlet_tone`)을 실행한다. `purpose="risk"`면 topic마다 `risk{category,label,level}`과 `check_points`를 더한다(카테고리는 `company_risk_news_analysis.CHECK_POINTS`).
+  저장소를 거치지 않는다(요청 시점 수집). 개인화 · 정기 발송은 아직 없다.
+  `run_company_risk_news_analysis`는 기존 데모 · 화면(`risks[]` 렌더링, gateway의 `risks[].source.id` 감사)을 위해 남겨 두었다. 둘을 하나로 합칠지는 열린 결정이다 ([12장](#12-current-limitations--next-architectural-work)).
 - `backend/app/library/tools/run_company_risk_news_analysis.py`: `make_run_company_risk_news_analysis(path)` → `@tool("run_company_risk_news_analysis")`, 인자 `query: str, company: str, topics: list[str] | None`.
 - `backend/app/library/workflows/company_risk_news_analysis.py`: 순수 함수 `analyze_company_risk_news(..., path=..., collected=...)`가 기사 store 두 개를 함께 조회한다: 가상 fixture(`data/news.json`, K 8건)와 수집 store(`data/collected/news.json`, 없으면 빈 것으로 본다).
   `company`를 기사 `companies` alias와 대조해 대상 기업 기사만 남기고, `query`/`topics`에서 리스크 category 키워드(`customer_concentration`, `legal_dispute`, `key_personnel`, `labor_dispute`, `regulatory`, `market_reaction`, `operations`)를 찾아 좁힌다. 키워드가 없으면 그 기업의 모든 리스크를 돌려준다.
@@ -284,13 +292,15 @@ systems/k_electronics/
 | `update_action_item` | tool | `meeting` | `make_update_action_item(MEETING_STORE)` → `library/workflows/action_items.update_action_item` |
 | `run_meeting_schedule` | tool | `meeting` | `make_run_meeting_schedule(MEETING_STORE)` → `library/workflows/meeting_schedule.meeting_schedule` |
 | `external_risk_analysis` | skill | `news` | `library/skills/external_risk_analysis.py` |
+| `news_briefing` | skill | `news` | `library/skills/news_briefing.py` |
+| `run_news_briefing` | tool | `news` | `systems/k_electronics/tools/run_news_briefing.py` = `make_run_news_briefing(data/news.json)` → `library/workflows/news_briefing.run_news_briefing` |
 | `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(data/news.json)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
 | `run_mna_review` | tool | `advisory` | `systems/k_electronics/tools/run_mna_review.py` = `make_run_mna_review(data/companies.json)` → `library/workflows/mna_review.review_acquisition` |
 
 Group system의 Registry(`systems/group/registry.py`)는 같은 메커니즘으로 자기 내용을 가진다 (Phase 5a·5b):
 `group_super` ← Skill `subsidiary_review`(Group 전용) · `specialist_delegation`(라이브러리), Tool `request_k_electronics_review`(A2A client) · `delegate_to_{meeting,news,advisory}_agent`(Group 전용 설명, 라이브러리 factory `library/tools/delegation.make_delegate_tool`);
-`meeting` / `news` / `advisory` ← 라이브러리 Skill 5개 + 라이브러리 Tool factory를 `systems/group/data/` · Group 회의 저장소(schema `grp`)에 바인딩한 instance 7개 (모두 19개).
+`meeting` / `news` / `advisory` ← 라이브러리 Skill 6개 + 라이브러리 Tool factory를 `systems/group/data/` · Group 회의 저장소(schema `grp`)에 바인딩한 instance 8개 (모두 21개).
 어느 Tool을 쓸지(자기 Specialist 위임 vs K전자 A2A)는 Registry 제한 없이 요청과 Tool 설명에 따른 모델 판단이다.
 
 설계 규칙:
@@ -738,6 +748,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
     STT 서비스나 gateway가 transcript id를 넘기는 경로, 만료 transcript와 원본 녹음 파일의 삭제 작업이 함께 정해져야 한다. 그 전까지 결정 · Action Item의 "근거 발언" 링크는 비어 있다.
 16. **회의 저장소 schema 변경.** schema는 없을 때만 만든다 (`meeting_schema.sql`). 테이블을 바꾸려면 migration 방식을 정해야 한다 (현재 도구 없음).
 17. **새 미팅 Tool 결과의 frontend 렌더.** Vite 제품 UI의 `toolResultBlocks`는 `run_meeting_context_retrieval`만 전용 렌더가 있고 나머지 네 Tool 결과는 JSON으로 보인다 (4번과 같은 문제).
+18. **뉴스 Tool 두 개의 관계.** 기본 파이프라인 `run_news_briefing`(어떤 주제든, 요청 시점 수집)과 기존 `run_company_risk_news_analysis`(기업 리스크, fixture + 수집 store)가 함께 있다. 선택지: (a) 그대로 두고 News Agent가 요청에 따라 고름, (b) `run_news_briefing(purpose="risk")`로 합치고 frontend 렌더와 gateway 감사(`risks[].source.id`)를 새 결과 모양에 맞춤, (c) 리스크 Tool을 내부 함수로만 남김. 추천은 (b)이지만 frontend · gateway가 함께 바뀌므로 팀 결정이 필요하다. `run_news_briefing` 결과는 frontend에 전용 렌더가 없어 JSON으로 보인다.
 
 ---
 

@@ -23,6 +23,8 @@ def test_registry_lists_capabilities_with_permissions():
         "update_action_item": ("tool", {"meeting"}),
         "run_meeting_schedule": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
+        "news_briefing": ("skill", {"news"}),
+        "run_news_briefing": ("tool", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
         "run_mna_review": ("tool", {"advisory"}),
@@ -78,7 +80,9 @@ def test_each_agent_gets_only_its_subset():
         "meeting_context_analysis", "meeting_minutes_writing", "meeting_follow_up",
         "run_meeting_context_retrieval", "save_meeting_minutes", "run_action_item_tracking", "update_action_item", "run_meeting_schedule",
     ]
-    assert [c.name for c in capabilities_for("news")] == ["external_risk_analysis", "run_company_risk_news_analysis"]
+    assert [c.name for c in capabilities_for("news")] == [
+        "external_risk_analysis", "news_briefing", "run_news_briefing", "run_company_risk_news_analysis",
+    ]
     assert [c.name for c in capabilities_for("advisory")] == ["mna_feasibility_review", "run_mna_review"]
     assert capabilities_for("group_super") == []
     for agent in ("meeting", "news", "advisory"):
