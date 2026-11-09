@@ -42,6 +42,9 @@ PERIODS = {"daily": 1, "weekly": 7}
 BRIEFING_TOPICS = 6  # topics in one person's briefing, across all interests
 TELEGRAM_LIMIT = 4000  # Telegram allows 4096 characters per message
 ALERT_MIN_IMPORTANCE = 50
+# An alert interrupts an executive: a negative story qualifies only if it touches one of our own
+# records (internal_links) or many outlets carry it. Everything else waits for the briefing.
+ALERT_MIN_OUTLETS = 3
 
 
 # ── 4. Personalize ──────────────────────────────────────────────────────────
@@ -136,7 +139,7 @@ def personal_briefing(sub: dict[str, Any], *, sources: list[Source], llm: LLM | 
                          "so_what": out["so_what"], "analysis": out["analysis"], "topic_count": len(kept),
                          "failed_sources": out["failed_sources"]})
         topics.extend(kept)
-        alerts.extend(t for t in kept if t["id"] in out["negative_alerts"])
+        alerts.extend(t for t in kept if t["id"] in out["negative_alerts"] and alert_worthy(t))
     topics.sort(key=lambda t: t["importance"], reverse=True)
     # Interests overlap ("HBM 시장" and "AI 반도체"): a story appears once, under its best-scored interest.
     seen: set[str] = set()
@@ -157,6 +160,10 @@ def personal_briefing(sub: dict[str, Any], *, sources: list[Source], llm: LLM | 
         "topics": topics[:BRIEFING_TOPICS],
         "alerts": alerts,
     }
+
+
+def alert_worthy(t: dict[str, Any]) -> bool:
+    return bool(t.get("internal_links")) or t["outlet_count"] >= ALERT_MIN_OUTLETS
 
 
 def format_briefing(b: dict[str, Any]) -> tuple[str, str]:

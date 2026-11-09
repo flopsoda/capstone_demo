@@ -31,7 +31,7 @@ RSS = """<rss><channel>
 
 
 def data(tmp_path):
-    for name in ("news.json", "news_subscribers.json"):
+    for name in ("news.json", "news_subscribers.json", "companies.json"):
         shutil.copy(DATA_DIR / name, tmp_path / name)
     return tmp_path
 
@@ -40,10 +40,16 @@ def sources(tmp_path):
     return [GoogleNewsSource(fetch=lambda url, headers: RSS.encode()), FixtureSource(tmp_path / "news.json")]
 
 
+def company_facts(d):
+    from app.library.workflows.news_briefing import context_from_companies
+
+    return lambda q: context_from_companies(d / "companies.json", q)
+
+
 def test_a_briefing_follows_the_subscribers_interests_and_exclusions(tmp_path):
     d = data(tmp_path)
     ceo = SubscriberStore(d).find("ceo@example.com")
-    b = personal_briefing(ceo, sources=sources(d), today=TODAY)
+    b = personal_briefing(ceo, sources=sources(d), today=TODAY, context_for=company_facts(d))
     assert [s["query"] for s in b["sections"]] == ["뉴로엣지", "HBM 시장", "AI 반도체 수출 규제"]
     titles = [t["articles"][0]["title"] for t in b["topics"]]
     assert not any("채용 공고" in t for t in titles)  # the CEO excluded it
@@ -75,9 +81,18 @@ def test_interest_changes_go_to_the_runtime_copy_not_the_fixture(tmp_path):
 
 def test_the_briefing_text(tmp_path):
     d = data(tmp_path)
-    subject, text = format_briefing(personal_briefing(SubscriberStore(d).find(None), sources=sources(d), today=TODAY))
+    subject, text = format_briefing(personal_briefing(SubscriberStore(d).find(None), sources=sources(d), today=TODAY,
+                                                         context_for=company_facts(d)))
     assert subject.startswith("[일간 뉴스 브리핑] 2026-11-10")
     assert "주요 이슈" in text and "⚠ 부정 기사 알림" in text and "https://n.example/1" in text
+    assert "↔ 검토 자료" in text
+
+
+def test_an_unlinked_story_from_one_outlet_waits_for_the_briefing(tmp_path):
+    d = data(tmp_path)
+    b = personal_briefing(SubscriberStore(d).find(None), sources=sources(d), today=TODAY, context_for=company_facts(d))
+    assert b["alerts"] and all(t["internal_links"] or t["outlet_count"] >= 3 for t in b["alerts"])
+    assert not any(t["interest"] == "HBM 시장" for t in b["alerts"])  # negative, but one outlet and none of ours
 
 
 def test_telegram_posts_to_the_bot_api_in_chunks():

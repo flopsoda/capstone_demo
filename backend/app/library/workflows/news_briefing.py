@@ -94,8 +94,12 @@ class GoogleNewsSource:
         raws = fetch_google_news(query, [], days, fetch=self.fetch, limit=self.limit, exact=len(words) == 1)
         if not raws and len(words) > 2:  # a long, model-made query ("뉴로엣지 리스크 논란 분쟁") finds little
             raws = fetch_google_news(" ".join(words[:2]), [], days, fetch=self.fetch, limit=self.limit, exact=False)
+        # Google also returns loosely related stories ("K그룹" → a fridge-hacking story that never
+        # names it): keep the ones whose headline or snippet has a query word.
+        terms = _terms(query)
         return [Article(r.id, r.title, r.summary, r.url, r.publisher, r.published.isoformat(), self.name)
-                for r in raws if r.published >= since]
+                for r in raws if r.published >= since
+                and (not terms or any(t in f"{r.title} {r.summary}".lower() for t in terms))]
 
 
 class FixtureSource:
@@ -325,7 +329,8 @@ ANALYZE_SYSTEM = """너는 경영진에게 뉴스를 보고하는 분석가다. 
               "importance": "high" | "medium" | "low"{risk_fields}}}],
  "trend": 전체 기사에서 보이는 흐름 2~3문장,
  "so_what": 요청 목적({purpose}) 관점에서 경영진이 알아야 할 시사점 2~3문장}}
-- 기사에 없는 사실이나 수치를 만들지 않는다. 추측성 보도와 칼럼은 그렇다고 밝힌다."""
+- 기사에 없는 사실이나 수치를 만들지 않는다. 추측성 보도와 칼럼은 그렇다고 밝힌다.
+- 모든 문장은 한국어로만 쓴다 (중국어·일본어 한자 표현, 영어 문장 금지. 고유명사와 약어는 그대로)."""
 
 CONTEXT_RULES = """
 - "우리 회사 내부 기록"(회의 결정사항, 미결 쟁점, 미완료 Action Item, 검토 자료)이 주어지면, 주제마다 아래 두 필드를 더한다:

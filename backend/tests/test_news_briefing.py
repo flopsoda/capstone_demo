@@ -210,3 +210,8 @@ def test_the_second_look_says_what_is_new_and_what_developed(tmp_path):
     new = next(t for t in second["topics"] if "수출 통제" in t["articles"][0]["title"])
     assert new["tracking"]["status"] == "new"
     assert [e["date"] for e in second["topics"][0]["timeline"]] == sorted(e["date"] for e in second["topics"][0]["timeline"])
+
+
+def test_live_results_that_never_name_the_query_are_dropped():
+    rss = RSS.replace("美 HBM 수출 통제 강화 검토", "유럽 냉장고 해킹 확산").replace("수출 통제 강화가 검토된다.", "마트 비상.")
+    assert run(sources=[google(rss)])["collected"] == 3

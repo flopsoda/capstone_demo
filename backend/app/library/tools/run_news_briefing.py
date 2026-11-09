@@ -35,21 +35,27 @@ def _llm():
     return call
 
 
-def internal_context(query: str, data_dir: Path, meetings: MeetingStore | None) -> list[dict[str, Any]]:
+def internal_context(query: str, data_dir: Path, meetings: MeetingStore | None,
+                     org: tuple[tuple[str, ...], tuple[str, ...]] = ((), ())) -> list[dict[str, Any]]:
     """What this company has on record about the query: meeting decisions, open issues and open
     Action Items the requester may see (their clearance, as the meeting Tools), and the review
-    data of a company the query names. A store that is down only leaves meetings out."""
+    data of a company the query names. A store that is down only leaves meetings out.
+    `org` = (names, topics): a query naming the organization itself ("K그룹") is about all of it,
+    so its meetings are searched by the organization's meeting topics too ("계열사", "그룹")."""
     items = workflow.context_from_companies(data_dir / "companies.json", query)
     if meetings is not None:
         try:
-            found = retrieve_meeting_context(query, [query], store=meetings, viewer=current_viewer())
+            names, topics = org
+            extra = list(topics) if any(n.lower() in query.lower() for n in names) else []
+            found = retrieve_meeting_context(query, [query, *extra], store=meetings, viewer=current_viewer())
             items = workflow.context_from_meetings(found) + items
         except Exception:  # no database configured / reachable: the news still answers
             pass
     return items
 
 
-def make_run_news_briefing(fixture: Path, meetings: MeetingStore | None = None) -> BaseTool:
+def make_run_news_briefing(fixture: Path, meetings: MeetingStore | None = None,
+                           org: tuple[tuple[str, ...], tuple[str, ...]] = ((), ())) -> BaseTool:
     """Tool instance whose sources are the live web news and this system's demo fixture
     (data/news.json); internal context comes from the same data folder and meeting store."""
     data_dir = fixture.parent
@@ -70,7 +76,7 @@ def make_run_news_briefing(fixture: Path, meetings: MeetingStore | None = None) 
         return workflow.run_news_briefing(  # not the Tool itself: it has the same name
             query, purpose=purpose, days=max(1, min(int(days), 30)),
             sources=[workflow.GoogleNewsSource(), workflow.FixtureSource(fixture)], llm=_llm(),
-            context=internal_context(query, data_dir, meetings),
+            context=internal_context(query, data_dir, meetings, org),
             history=workflow.state_dir(data_dir) / "news_history.json",
         )
 

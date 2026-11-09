@@ -56,7 +56,8 @@ def make_manage_news_interests(data_dir: Path) -> BaseTool:
     return manage_news_interests
 
 
-def make_run_personal_news_briefing(data_dir: Path, meetings: MeetingStore | None = None) -> BaseTool:
+def make_run_personal_news_briefing(data_dir: Path, meetings: MeetingStore | None = None,
+                                    org: tuple[tuple[str, ...], tuple[str, ...]] = ((), ())) -> BaseTool:
     store = SubscriberStore(data_dir)
 
     @tool(PERSONAL_TOOL)
@@ -73,7 +74,7 @@ def make_run_personal_news_briefing(data_dir: Path, meetings: MeetingStore | Non
             return {"error": "뉴스 구독 정보가 없는 사용자입니다."}
         days = {"daily": 1, "weekly": 7}.get(period)
         b = personal_briefing(sub, sources=[GoogleNewsSource(), FixtureSource(data_dir / "news.json")], llm=_llm(), days=days,
-                              context_for=lambda q: internal_context(q, data_dir, meetings),
+                              context_for=lambda q: internal_context(q, data_dir, meetings, org),
                               history=state_dir(data_dir) / "news_history.json")
         if send:
             senders, missing = senders_from_env()
