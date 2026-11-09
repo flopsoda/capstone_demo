@@ -116,8 +116,10 @@ def http_fetch(url: str, headers: dict[str, str]) -> bytes:
         return resp.read()
 
 
-def fetch_google_news(company: str, aliases: list[str], days: int, fetch: Fetch = http_fetch, limit: int = 30) -> list[RawArticle]:
-    names = " OR ".join(f'"{n}"' for n in [company, *aliases])
+def fetch_google_news(company: str, aliases: list[str], days: int, fetch: Fetch = http_fetch, limit: int = 30,
+                      exact: bool = True) -> list[RawArticle]:
+    """`exact`: names as quoted phrases (a company). False: a topic's words in any order ("HBM 시장 가격")."""
+    names = " OR ".join(f'"{n}"' for n in [company, *aliases]) if exact else company
     q = urllib.parse.quote(f"{names} when:{max(1, days)}d")
     body = fetch(f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko", {})
     out = []

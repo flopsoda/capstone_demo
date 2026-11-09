@@ -80,7 +80,11 @@ class GoogleNewsSource:
 
     def search(self, query: str, since: date) -> list[Article]:
         days = max(1, (datetime.now(KST).date() - since).days)
-        raws = fetch_google_news(query, [], days, fetch=self.fetch, limit=self.limit)
+        words = query.split()
+        # One word: that name exactly. Several: every word, in any order.
+        raws = fetch_google_news(query, [], days, fetch=self.fetch, limit=self.limit, exact=len(words) == 1)
+        if not raws and len(words) > 2:  # a long, model-made query ("뉴로엣지 리스크 논란 분쟁") finds little
+            raws = fetch_google_news(" ".join(words[:2]), [], days, fetch=self.fetch, limit=self.limit, exact=False)
         return [Article(r.id, r.title, r.summary, r.url, r.publisher, r.published.isoformat(), self.name)
                 for r in raws if r.published >= since]
 
@@ -175,6 +179,16 @@ def importance(topic: list[Article], query: str, today: date) -> float:
     in_title = sum(sum(t in a.title.lower() for t in terms) / len(terms) for a in topic) / len(topic) if terms else 0
     score = min(outlets, 5) * 10 + max(0, 30 - age * 4) + in_title * 20
     return round(min(100.0, score), 1)
+
+
+def adjusted_importance(t: dict[str, Any]) -> float:
+    """The filter's score, then what the content says: the model's own rating and, for
+    purpose="risk", a high risk. A positive/neutral topic is not pushed up by its risk label."""
+    score = t["importance"] + {"high": 15, "low": -10}.get(t.get("importance_llm", ""), 0)
+    risk = t.get("risk")
+    if risk and risk["level"] == "HIGH":
+        score += 15
+    return round(max(0.0, min(100.0, score)), 1)
 
 
 # ── 4. Analyze ──────────────────────────────────────────────────────────────
@@ -327,12 +341,15 @@ def run_news_briefing(
 
     # 3. filter
     unique, duplicates = dedupe(articles)
+    # Recency counts from the newest collected article: live news ends today, the fictional
+    # scenario ends on its own last day, and either way the latest story scores as new.
+    as_of = min(today, max((date.fromisoformat(a.date) for a in unique), default=today))
     groups = group_topics(unique, query)
     topics = []
     for g in groups:
         g.sort(key=lambda a: a.date, reverse=True)
         topics.append({
-            "importance": importance(g, query, today),
+            "importance": importance(g, query, as_of),
             "article_count": len(g),
             "outlet_count": len({a.outlet for a in g}),
             "first_reported": min(a.date for a in g),
@@ -350,6 +367,9 @@ def run_news_briefing(
 
     # 4. analyze
     trend, so_what, method = analyze(topics, query, purpose, llm)
+    for t in topics:
+        t["importance"] = adjusted_importance(t)
+    topics.sort(key=lambda t: t["importance"], reverse=True)  # ids stay: the LLM answered by id
     log("analyze", {"method": method})
 
     # 5. respond

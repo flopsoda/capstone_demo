@@ -22,7 +22,7 @@ export const CHAT_HEADERS: Record<ChatTabId, ChatHeaderInfo> = {
   },
   group_news: {
     title: "뉴스 에이전트",
-    subtitle: "그룹 · 계열사 뉴스 리스크 · run_company_risk_news_analysis",
+    subtitle: "그룹 · 계열사 뉴스 브리핑 · run_news_briefing",
     placeholder: "기업 또는 이슈를 입력하세요.",
   },
   group_meeting: {
@@ -43,7 +43,7 @@ export const CHAT_HEADERS: Record<ChatTabId, ChatHeaderInfo> = {
   },
   news: {
     title: "뉴스 에이전트",
-    subtitle: "뉴스 · 리스크 분석 · run_company_risk_news_analysis",
+    subtitle: "뉴스 브리핑 · 개인화 · run_news_briefing",
     placeholder: "기업 또는 이슈를 입력하세요.",
   },
   meeting: {

@@ -42,7 +42,7 @@ def make_run_news_briefing(fixture: Path) -> BaseTool:
     전체 흐름(trend)·시사점(so_what)·부정 기사 알림·매체별 논조를 반환한다.
 
     Args:
-        query: 검색할 주제 (예: "삼성전자", "HBM 시장", "AI 반도체 수출 규제", "뉴로엣지").
+        query: 검색할 주제 1~3단어 (예: "삼성전자", "HBM 시장", "AI 반도체 수출 규제", "뉴로엣지"). 요청에 없는 단어는 넣지 않는다.
         purpose: 분석 목적. "general"(기본: 일반 동향) 또는 "risk"(주제마다 리스크 종류·수준·확인 사항 추가).
         days: 며칠 전 기사까지 볼지 (기본 7).
     """

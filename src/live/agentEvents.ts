@@ -101,6 +101,106 @@ function companyRiskNewsBlocks(result: unknown): MessageBlock[] {
   });
 }
 
+/** One topic of run_news_briefing / run_personal_news_briefing (backend news_briefing.py). */
+interface NewsTopic {
+  importance: number;
+  article_count: number;
+  outlet_count: number;
+  summary: string;
+  key_facts: string[];
+  sentiment: "positive" | "negative" | "neutral";
+  risk?: { label: string; level: string } | null;
+  interest?: string;
+  articles: { title: string; outlet: string; date: string; url?: string }[];
+}
+
+interface NewsBriefingResult {
+  query: string;
+  collected: number;
+  duplicates_removed: number;
+  trend: string;
+  so_what: string;
+  topics: NewsTopic[];
+  negative_alerts: string[];
+  outlet_tone: { outlet: string; tone: string }[];
+}
+
+interface PersonalBriefingResult {
+  subscriber: { name: string; interests: { query: string }[] };
+  period: string;
+  sections: { query: string; trend: string; so_what: string }[];
+  topics: NewsTopic[];
+  alerts: NewsTopic[];
+  delivery?: { sent: string[]; failed: Record<string, string>; not_configured: string[] };
+}
+
+const SENTIMENT_BADGE: Record<string, { text: string; tone: BadgeTone }> = {
+  negative: { text: "부정", tone: "high" },
+  positive: { text: "긍정", tone: "ok" },
+  neutral: { text: "중립", tone: "info" },
+};
+
+function newsTopicBlocks(t: NewsTopic): MessageBlock[] {
+  const mood = SENTIMENT_BADGE[t.sentiment] ?? { text: t.sentiment, tone: "info" as const };
+  const risk = t.risk ? ` · ${t.risk.label} ${RISK_LEVEL_BADGE[t.risk.level]?.text ?? t.risk.level}` : "";
+  const lead = t.articles[0];
+  return [
+    { kind: "badge", text: `${t.interest ? `${t.interest} · ` : ""}중요도 ${Math.round(t.importance)} · ${mood.text}${risk}`, tone: mood.tone },
+    { kind: "label", text: `${lead ? `${lead.date} · ${lead.outlet} · ` : ""}기사 ${t.article_count}건 · 매체 ${t.outlet_count}곳` },
+    { kind: "text", text: t.summary },
+    ...(t.key_facts.length ? [{ kind: "list" as const, items: t.key_facts }] : []),
+  ];
+}
+
+function isNewsBriefingResult(v: unknown): v is NewsBriefingResult {
+  return typeof v === "object" && v !== null && Array.isArray((v as { topics?: unknown }).topics) && "negative_alerts" in v;
+}
+
+function newsBriefingBlocks(result: unknown): MessageBlock[] {
+  if (!isNewsBriefingResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  const head: MessageBlock[] = [
+    { kind: "label", text: `기사 ${result.collected}건 수집 · 중복 ${result.duplicates_removed}건 제거 · 주제 ${result.topics.length}개` },
+  ];
+  if (result.topics.length === 0) return [...head, { kind: "text", text: "기간 안에 관련 기사를 찾지 못했습니다." }];
+  if (result.trend) head.push({ kind: "label", text: "한눈에 보기" }, { kind: "text", text: result.trend });
+  const tail: MessageBlock[] = [];
+  if (result.so_what) tail.push({ kind: "label", text: "시사점 (So-What)" }, { kind: "text", text: result.so_what });
+  const tones = result.outlet_tone.filter((o) => o.tone !== "판단 보류");
+  if (tones.length) tail.push({ kind: "label", text: "매체별 논조" }, { kind: "kv", items: tones.map((o) => ({ k: o.outlet, v: o.tone })) });
+  return [...head, { kind: "label", text: "주요 이슈" }, ...result.topics.flatMap(newsTopicBlocks), ...tail];
+}
+
+function isPersonalBriefingResult(v: unknown): v is PersonalBriefingResult {
+  return typeof v === "object" && v !== null && Array.isArray((v as { sections?: unknown }).sections);
+}
+
+function personalBriefingBlocks(result: unknown): MessageBlock[] {
+  if (!isPersonalBriefingResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  const blocks: MessageBlock[] = [
+    { kind: "badge", text: `${result.subscriber.name} · ${result.period === "weekly" ? "주간" : "일간"} 브리핑`, tone: "info" },
+    { kind: "label", text: `관심 주제: ${result.sections.map((s) => s.query).join(", ")}` },
+  ];
+  const trends = result.sections.filter((s) => s.trend);
+  if (trends.length) blocks.push({ kind: "kv", items: trends.map((s) => ({ k: s.query, v: s.trend })) });
+  blocks.push({ kind: "label", text: "주요 이슈" }, ...result.topics.flatMap(newsTopicBlocks));
+  if (result.alerts.length) {
+    blocks.push({ kind: "label", text: "부정 기사 알림" }, { kind: "list", items: result.alerts.map((t) => t.articles[0]?.title ?? t.summary) });
+  }
+  if (result.delivery) {
+    const d = result.delivery;
+    const failed = Object.keys(d.failed);
+    blocks.push({ kind: "label", text: "발송" }, {
+      kind: "kv",
+      items: [
+        { k: "보냄", v: d.sent.join(", ") || "없음" },
+        ...(failed.length ? [{ k: "실패", v: failed.join(", ") }] : []),
+        ...(d.not_configured.length ? [{ k: "설정 안 됨", v: d.not_configured.join(", ") }] : []),
+      ],
+    });
+  }
+  return blocks;
+}
+
 /** Shape returned by run_mna_review (backend/app/workflows/mna_review.py). */
 interface MnaReviewResult {
   found: boolean;
@@ -184,6 +284,10 @@ export function toolResultBlocks(tool: string, args: Record<string, unknown>, re
       return [...head, ...meetingContextBlocks(result)];
     case "run_company_risk_news_analysis":
       return [...head, ...companyRiskNewsBlocks(result)];
+    case "run_news_briefing":
+      return [...head, ...newsBriefingBlocks(result)];
+    case "run_personal_news_briefing":
+      return [...head, ...personalBriefingBlocks(result)];
     case "run_mna_review":
       return [...head, ...mnaReviewBlocks(result)];
     default:
@@ -194,11 +298,11 @@ export function toolResultBlocks(tool: string, args: Record<string, unknown>, re
 /** Title of an agent's final answer in the chat. */
 const RESULT_TITLE: Partial<Record<AgentId, string>> = {
   meeting: "회의 맥락",
-  news: "뉴스 리스크 분석",
+  news: "뉴스 브리핑",
   advisory: "M&A 예비 검토",
   k_super: "K전자 검토 결과",
   group_meeting: "그룹 회의 맥락",
-  group_news: "그룹 뉴스 리스크 분석",
+  group_news: "그룹 뉴스 브리핑",
   group_advisory: "그룹 M&A 예비 검토",
   group_super: "그룹 최종 판단",
 };

@@ -77,6 +77,8 @@ def test_group_registry_content():
         "external_risk_analysis": ("skill", {"news"}),
         "news_briefing": ("skill", {"news"}),
         "run_news_briefing": ("tool", {"news"}),
+        "run_personal_news_briefing": ("tool", {"news"}),
+        "manage_news_interests": ("tool", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
         "run_mna_review": ("tool", {"advisory"}),

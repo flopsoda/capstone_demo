@@ -4,7 +4,7 @@ collect → normalize → filter → analyze → respond. No network, no LLM key
 import json
 from datetime import date
 
-from app.library.workflows.news_briefing import Article, FixtureSource, GoogleNewsSource, run_news_briefing
+from app.library.workflows.news_briefing import FixtureSource, GoogleNewsSource, run_news_briefing
 from app.systems.k_electronics import DATA_DIR
 
 TODAY = date(2026, 11, 10)
@@ -115,3 +115,28 @@ def test_outlet_tone_needs_two_articles():
 
 def test_empty_query():
     assert "error" in run_news_briefing(" ", sources=[])
+
+
+def test_a_long_model_made_query_retries_with_its_first_words():
+    asked = []
+
+    def fetch(url, headers):
+        asked.append(url)
+        return (RSS if len(asked) > 1 else "<rss><channel></channel></rss>").encode()
+
+    out = run("HBM 시장 리스크 논란 분쟁", sources=[GoogleNewsSource(fetch=fetch)])
+    assert len(asked) == 2 and out["collected"] == 4
+
+
+def test_the_fictional_scenario_is_scored_from_its_own_last_day():
+    out = run_news_briefing("뉴로엣지", purpose="risk", sources=[FixtureSource(DATA_DIR / "news.json")], today=date(2027, 1, 1))
+    assert out["topics"][0]["importance"] >= 50 and out["negative_alerts"]  # a month later, still news
+
+
+def test_content_adjusts_the_filter_score():
+    from app.library.workflows.news_briefing import adjusted_importance
+
+    base = {"importance": 40}
+    assert adjusted_importance({**base, "risk": {"level": "HIGH"}}) == 55
+    assert adjusted_importance({**base, "importance_llm": "high"}) == 55
+    assert adjusted_importance({**base, "importance_llm": "low", "risk": {"level": "LOW"}}) == 30

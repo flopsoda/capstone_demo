@@ -1,0 +1,18 @@
+{
+  "subscribers": [
+    {
+      "id": "group_chairman",
+      "name": "K그룹 회장실 (가상)",
+      "role": "그룹 회장",
+      "email": "ceo@example.com",
+      "interests": [
+        {"query": "K그룹", "purpose": "risk"},
+        {"query": "반도체 업황", "purpose": "general"}
+      ],
+      "exclude": [],
+      "briefing": "weekly",
+      "alerts": true,
+      "channels": ["telegram", "email"]
+    }
+  ]
+}
