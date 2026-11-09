@@ -15,6 +15,9 @@ from langchain_core.tools import BaseTool, tool
 
 from ...runtime.llm import LLMConfigError, get_chat_model
 from ..workflows import news_briefing as workflow
+from ..workflows.meeting_context_retrieval import retrieve_meeting_context
+from ..workflows.meeting_store import MeetingStore
+from .meeting_access import current_viewer
 
 TOOL_NAME = "run_news_briefing"
 
@@ -32,14 +35,32 @@ def _llm():
     return call
 
 
-def make_run_news_briefing(fixture: Path) -> BaseTool:
-    """Tool instance whose sources are the live web news and this system's demo fixture."""
+def internal_context(query: str, data_dir: Path, meetings: MeetingStore | None) -> list[dict[str, Any]]:
+    """What this company has on record about the query: meeting decisions, open issues and open
+    Action Items the requester may see (their clearance, as the meeting Tools), and the review
+    data of a company the query names. A store that is down only leaves meetings out."""
+    items = workflow.context_from_companies(data_dir / "companies.json", query)
+    if meetings is not None:
+        try:
+            found = retrieve_meeting_context(query, [query], store=meetings, viewer=current_viewer())
+            items = workflow.context_from_meetings(found) + items
+        except Exception:  # no database configured / reachable: the news still answers
+            pass
+    return items
+
+
+def make_run_news_briefing(fixture: Path, meetings: MeetingStore | None = None) -> BaseTool:
+    """Tool instance whose sources are the live web news and this system's demo fixture
+    (data/news.json); internal context comes from the same data folder and meeting store."""
+    data_dir = fixture.parent
 
     @tool(TOOL_NAME)
     def run_news_briefing(query: str, purpose: str = "general", days: int = 7) -> dict[str, Any]:
         """요청한 주제(기업, 산업, 시장 동향, 규제, 인물 등 무엇이든)의 최근 뉴스를 외부 소스에서 수집해
     정규화하고, 중복을 제거해 같은 이야기를 주제(topic)로 묶어 중요도를 매긴 뒤, 주제별 요약·핵심 사실·긍정/부정과
-    전체 흐름(trend)·시사점(so_what)·부정 기사 알림·매체별 논조를 반환한다.
+    전체 흐름(trend)·시사점(so_what)·부정 기사 알림·매체별 논조를 반환한다. 우리 회사 내부 기록(요청자가 볼 수 있는
+    회의 결정사항·미결 쟁점·미완료 Action Item, 기업 검토 자료) 중 기사와 관련된 것을 주제마다 internal_links로 붙이고,
+    같은 주제를 전에 조회했으면 그 뒤 새로 나온 이야기와 후속 보도(tracking, since_last)를 표시한다.
 
     Args:
         query: 검색할 주제 1~3단어 (예: "삼성전자", "HBM 시장", "AI 반도체 수출 규제", "뉴로엣지"). 요청에 없는 단어는 넣지 않는다.
@@ -49,6 +70,8 @@ def make_run_news_briefing(fixture: Path) -> BaseTool:
         return workflow.run_news_briefing(  # not the Tool itself: it has the same name
             query, purpose=purpose, days=max(1, min(int(days), 30)),
             sources=[workflow.GoogleNewsSource(), workflow.FixtureSource(fixture)], llm=_llm(),
+            context=internal_context(query, data_dir, meetings),
+            history=workflow.state_dir(data_dir) / "news_history.json",
         )
 
     return run_news_briefing

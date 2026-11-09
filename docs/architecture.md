@@ -196,9 +196,11 @@ Advisory Agent  → run_mna_review
   응답(`topics[]` 중요도 순, `negative_alerts` = 중요도 50 이상인 부정 topic, `outlet_tone`)을 실행한다. `purpose="risk"`면 topic마다 `risk{category,label,level}`과 `check_points`를 더한다(카테고리는 `company_risk_news_analysis.CHECK_POINTS`).
   저장소를 거치지 않는다(요청 시점 수집). 최신성은 수집된 기사 중 가장 최근 날짜 기준이다(가상 시나리오는 자기 시점 기준). 분석 뒤 LLM 중요도(high +15 / low −10)와 `risk` HIGH(+15)로 점수를 조정한다.
   Google 검색은 한 단어면 그 이름 그대로, 여러 단어면 단어 모두 포함(순서 무관)으로 찾고, 3단어 이상이 0건이면 앞 두 단어로 한 번 더 찾는다.
+  선택 입력 두 가지: `context`(우리 회사 내부 기록 — Tool이 요청자 권한(`current_viewer`)으로 `retrieve_meeting_context`를 불러 얻은 결정사항 · 미결 쟁점 · 미완료 Action Item과, `companies.json`에서 질의가 가리키는 기업의 검토 자료)는 주제마다 `internal_links`(같은 종류의 사안: 고객 · 인력 · 특허 …, LLM이 있으면 LLM이 고르고 `internal_note`로 의미를 한 문장, 모르는 ref는 버림)로 붙고 중요도 +10.
+  `history`(`state_dir()/news_history.json`: `NEWS_STATE_DIR` → `data/collected` → 임시 폴더)는 같은 질의의 지난 실행과 비교해 주제마다 `tracking`(first_look · new · developing(새 기사 수, 매체 수 변화) · unchanged)과 결과의 `since_last`를 준다. 주제마다 `timeline`(보도 경과)도 준다.
 - `backend/app/library/workflows/news_delivery.py`: 파이프라인의 개인화 · 전달 단계. 구독자 프로필(`data/news_subscribers.json`, 가상: 관심 주제와 주제별 purpose, 제외 단어, 브리핑 주기 daily/weekly, 알림 여부, 채널)마다
   관심 주제별 `run_news_briefing` → 제외 단어 기사 제거 → 관심 주제를 합쳐 중요도 순(같은 기사는 한 번) → 텍스트 브리핑 → Telegram Bot API · SMTP(표준 라이브러리)로 발송. 한 채널 실패는 다른 채널을 막지 않는다.
-  부정 기사 알림(`--mode alerts`)은 이미 보낸 이야기를 `data/collected/news_alerts_sent.json`에 기록해 한 번만 보낸다. 받는 곳(봇 토큰, chat id, SMTP 계정, 수신 주소)은 환경변수(`NEWS_TELEGRAM_*`, `NEWS_SMTP_*`, `NEWS_EMAIL_TO`)에서만 읽으며, 데모는 모든 구독자의 브리핑을 그 한 수신처로 보낸다.
+  브리핑 · 알림에는 연결된 내부 기록(`companies.json`)과 지난 확인 대비 변화가 함께 적힌다. 부정 기사 알림(`--mode alerts`)은 이미 보낸 이야기를 `data/collected/news_alerts_sent.json`에 기록해 한 번만 보낸다. 받는 곳(봇 토큰, chat id, SMTP 계정, 수신 주소)은 환경변수(`NEWS_TELEGRAM_*`, `NEWS_SMTP_*`, `NEWS_EMAIL_TO`)에서만 읽으며, 데모는 모든 구독자의 브리핑을 그 한 수신처로 보낸다.
   Agent로 바꾼 관심 설정은 `data/collected/news_subscribers.json`(Git 제외)에 쓰고 fixture보다 먼저 읽는다.
   정기 실행은 backend 프로세스 밖 CLI(`python -m app.library.workflows.news_delivery --data-dir <system data> --mode briefing|alerts [--watch 분]`)를 OS 스케줄러(Windows 작업 스케줄러 · cron)가 부른다. LangChain 없이도 돌도록 LLM은 runtime 모델, 없으면 Ollama HTTP API를 직접 부른다.
 - `backend/app/library/tools/news_personalization.py`: `make_manage_news_interests(data_dir)`(action `list|add|remove|exclude|include|set_briefing`) · `make_run_personal_news_briefing(data_dir)`(`send: bool`, `period`).

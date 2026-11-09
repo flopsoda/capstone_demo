@@ -10,6 +10,15 @@
                        So-What for the request's purpose — an LLM when one is configured, rules otherwise
       5. respond     : a structured result the agent turns into its briefing
 
+Two optional inputs make it more than a search-and-summarize:
+  context  : what the company itself has on record — meeting decisions, open issues, open
+             Action Items the requester may see, and facts about the company in question
+             (the Tool gathers them). Each topic gets `internal_links`: the records the
+             story bears on ("CTO: 핵심 설계팀 유지가 인수 성공의 핵심" ↔ a CTO-departure story).
+  history  : a file of earlier runs of the same query. Each topic gets `tracking` — new since
+             the last look, or developing (more articles / outlets than before) — and the
+             result `since_last`.
+
 `purpose` selects optional analysis steps on top of the general ones. "general" is the default;
 "risk" adds a risk category, level and check points per topic (the M&A scenario uses it).
 Nothing is stored between runs: storing articles in a database / a shared knowledge pool is a
@@ -181,6 +190,103 @@ def importance(topic: list[Article], query: str, today: date) -> float:
     return round(min(100.0, score), 1)
 
 
+def state_dir(data_dir: Path) -> Path:
+    """Where runtime news state (history, alerts sent, changed subscriptions) is written:
+    NEWS_STATE_DIR, else the system's data/collected (not committed), else a temp folder
+    (a container whose app folder is read-only)."""
+    import os
+    import tempfile
+
+    if os.environ.get("NEWS_STATE_DIR"):
+        return Path(os.environ["NEWS_STATE_DIR"]) / data_dir.parent.name
+    own = data_dir / "collected"
+    try:
+        own.mkdir(parents=True, exist_ok=True)
+        probe = own / ".write-test"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return own
+    except OSError:
+        return Path(tempfile.gettempdir()) / "navitech-news" / data_dir.parent.name
+
+
+# ── Internal context: what the company has on record ───────────────────────
+
+# Which kind of matter a record is about (same keys as the article categories).
+CONTEXT_CUES: dict[str, tuple[str, ...]] = {
+    "customer_concentration": ("고객", "의존도", "매출 비중"),
+    "key_personnel": ("인력", "설계팀", "retention", "이탈", "cto", "창업자"),
+    "legal_dispute": ("특허", "소송", "분쟁", "가처분"),
+    "labor_dispute": ("노무", "노조", "임금"),
+    "operations": ("수율", "증설", "가동률", "장비", "설비"),
+    "regulatory": ("규제", "수출 통제", "제재"),
+}
+
+
+def _context_category(text: str) -> str | None:
+    t = text.lower()
+    hits = {cat: sum(c in t for c in cues) for cat, cues in CONTEXT_CUES.items()}
+    best = max(hits, key=hits.get)
+    return best if hits[best] else None
+
+
+def context_from_meetings(found: dict[str, Any]) -> list[dict[str, Any]]:
+    """run_meeting_context_retrieval's result → records (decisions, open issues, open items)."""
+    items = []
+    for m in found.get("meetings") or []:
+        source = f"{m['date']} {m['title']}"
+        for d in m.get("decisions") or []:
+            who = f"{d['speaker']}: " if d.get("speaker") else ""
+            items.append({"ref": d["ref"], "kind": "결정사항", "text": who + d["statement"], "source": source})
+        for d in m.get("open_issues") or []:
+            items.append({"ref": d["ref"], "kind": "미결 쟁점", "text": d["statement"], "source": source})
+        for a in m.get("open_action_items") or []:
+            due = f" (기한 {a['due']})" if a.get("due") else ""
+            items.append({"ref": a["id"], "kind": "미완료 Action Item", "text": f"{a['text']} — {a.get('owner') or ''}{due}",
+                          "source": source})
+    return items
+
+
+def context_from_companies(path: Path, query: str) -> list[dict[str, Any]]:
+    """data/companies.json → facts about the companies the query names (fictional demo data)."""
+    if not path.exists():
+        return []
+    q = query.lower()
+    items = []
+    for c in json.loads(path.read_text(encoding="utf-8")).get("companies", []):
+        if not any(n.lower() in q for n in c.get("aliases", [c["name"]])):
+            continue
+        src = f"기업 검토 자료 · {c['name']}"
+        cust = (c.get("customers") or {}).get("largest")
+        if cust:
+            items.append({"ref": f"{c['id']}:customer", "kind": "검토 자료",
+                          "text": f"최대 고객 {cust['name']} 매출 의존도 {cust['revenue_share']:.0%}", "source": src})
+        tech = c.get("technology") or {}
+        if tech.get("core_team"):
+            items.append({"ref": f"{c['id']}:team", "kind": "검토 자료", "text": f"핵심 인력: {tech['core_team']}", "source": src})
+        dispute = tech.get("ip_dispute")
+        if dispute:
+            items.append({"ref": f"{c['id']}:ip", "kind": "검토 자료",
+                          "text": f"특허 분쟁: {dispute['counterparty']} — {dispute['subject']} ({dispute['status']})", "source": src})
+        val = c.get("valuation") or {}
+        if val:
+            items.append({"ref": f"{c['id']}:valuation", "kind": "검토 자료",
+                          "text": f"요구가격 {val['asking_trillion_krw']}조 원, 추정 적정가치 {val['fair_value_low_trillion_krw']}~"
+                                  f"{val['fair_value_high_trillion_krw']}조 원", "source": src})
+    return items
+
+
+def _link_by_rule(topics: list[dict[str, Any]], context: list[dict[str, Any]]) -> None:
+    """A story and a record about the same kind of matter (customer, people, patents…) are linked."""
+    for item in context:
+        item.setdefault("category", _context_category(item["text"]))
+    for t in topics:
+        text = " ".join(a["title"] + " " + a["summary"] for a in t["articles"])
+        cat = (t.get("risk") or {}).get("category") or (_rule_risk(text, t["articles"][0]["title"]) or {}).get("category")
+        t["internal_links"] = [{k: c[k] for k in ("ref", "kind", "text", "source")} for c in context
+                               if cat and c["category"] == cat]
+
+
 def adjusted_importance(t: dict[str, Any]) -> float:
     """The filter's score, then what the content says: the model's own rating and, for
     purpose="risk", a high risk. A positive/neutral topic is not pushed up by its risk label."""
@@ -188,6 +294,8 @@ def adjusted_importance(t: dict[str, Any]) -> float:
     risk = t.get("risk")
     if risk and risk["level"] == "HIGH":
         score += 15
+    if t.get("internal_links"):  # it touches a decision, an open item or a known issue of ours
+        score += 10
     return round(max(0.0, min(100.0, score)), 1)
 
 
@@ -219,6 +327,12 @@ ANALYZE_SYSTEM = """너는 경영진에게 뉴스를 보고하는 분석가다. 
  "so_what": 요청 목적({purpose}) 관점에서 경영진이 알아야 할 시사점 2~3문장}}
 - 기사에 없는 사실이나 수치를 만들지 않는다. 추측성 보도와 칼럼은 그렇다고 밝힌다."""
 
+CONTEXT_RULES = """
+- "우리 회사 내부 기록"(회의 결정사항, 미결 쟁점, 미완료 Action Item, 검토 자료)이 주어지면, 주제마다 아래 두 필드를 더한다:
+  "internal_links": 그 기사가 직접 영향을 주는 내부 기록의 ref 목록 (관련 없으면 []),
+  "internal_note": internal_links가 있으면 기사가 그 기록에 어떤 의미인지 한 문장 (예: "CTO가 인수 성공 조건으로 든 핵심 설계팀 유지가 흔들린다").
+- so_what은 내부 기록과 연결된 주제를 우선해, 어떤 결정·조건·할 일을 다시 봐야 하는지 구체적으로 쓴다."""
+
 RISK_FIELDS = (',\n              "risk": 리스크가 아니면 null, 리스크면 {"category": '
                + " | ".join(f'"{k}"' for k in CATEGORY_LABELS) + ', "level": "HIGH" | "MEDIUM" | "LOW"}')
 
@@ -236,7 +350,8 @@ def _parse_object(text: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def analyze(topics: list[dict[str, Any]], query: str, purpose: str, llm: LLM | None) -> tuple[str, str, str]:
+def analyze(topics: list[dict[str, Any]], query: str, purpose: str, llm: LLM | None,
+            context: list[dict[str, Any]] | None = None) -> tuple[str, str, str]:
     """Fills summary, key_facts, sentiment (and risk for purpose="risk") on each topic in place.
     Returns (trend, so_what, method)."""
     for t in topics:  # the rule pass first: every field has a value even if the model fails
@@ -250,6 +365,8 @@ def analyze(topics: list[dict[str, Any]], query: str, purpose: str, llm: LLM | N
             risk = hint.get("risk") or _rule_risk(text, lead["title"])
             t["risk"] = risk
             t["check_points"] = list(CHECK_POINTS.get(risk["category"], ())) if risk else []
+    context = context or []
+    _link_by_rule(topics, context)
     if not (llm and topics):
         return "", "", "rule"
 
@@ -257,8 +374,13 @@ def analyze(topics: list[dict[str, Any]], query: str, purpose: str, llm: LLM | N
                                              "date": a["date"]} for a in t["articles"][:5]]} for t in topics]
     system = ANALYZE_SYSTEM.format(purpose="리스크 점검" if purpose == "risk" else "일반 동향 파악",
                                    risk_fields=RISK_FIELDS if purpose == "risk" else "")
+    user = f"요청: {query}\n\n"
+    if context:
+        system += CONTEXT_RULES
+        user += "우리 회사 내부 기록:\n" + json.dumps([{k: c[k] for k in ("ref", "kind", "text", "source")} for c in context],
+                                                ensure_ascii=False) + "\n\n"
     try:
-        answer = _parse_object(llm(system, f"요청: {query}\n\n주제별 기사:\n{json.dumps(payload, ensure_ascii=False)}"))
+        answer = _parse_object(llm(system, user + f"주제별 기사:\n{json.dumps(payload, ensure_ascii=False)}"))
     except Exception:  # network, quota, model errors: the rule pass stands
         answer = None
     if not answer:
@@ -277,6 +399,12 @@ def analyze(topics: list[dict[str, Any]], query: str, purpose: str, llm: LLM | N
             t["sentiment"] = row["sentiment"]
         if row.get("importance") in ("high", "medium", "low"):
             t["importance_llm"] = row["importance"]
+        if context and isinstance(row.get("internal_links"), list):
+            refs = {c["ref"]: c for c in context}
+            links = [refs[r] for r in row["internal_links"] if isinstance(r, str) and r in refs]
+            t["internal_links"] = [{k: c[k] for k in ("ref", "kind", "text", "source")} for c in links]
+        if context and isinstance(row.get("internal_note"), str) and row["internal_note"].strip() and t.get("internal_links"):
+            t["internal_note"] = row["internal_note"].strip()
         if purpose == "risk" and "risk" in row:
             r = row["risk"]
             if r is None:
@@ -317,6 +445,8 @@ def run_news_briefing(
     llm: LLM | None = None,
     today: date | None = None,
     log: Log | None = None,
+    context: list[dict[str, Any]] | None = None,
+    history: Path | None = None,
 ) -> dict[str, Any]:
     log = log or (lambda stage, detail: None)
     query = (query or "").strip()
@@ -366,7 +496,7 @@ def run_news_briefing(
     log("filter", {"articles": len(articles), "duplicates": duplicates, "topics": len(groups), "kept": len(topics)})
 
     # 4. analyze
-    trend, so_what, method = analyze(topics, query, purpose, llm)
+    trend, so_what, method = analyze(topics, query, purpose, llm, context)
     for t in topics:
         t["importance"] = adjusted_importance(t)
     topics.sort(key=lambda t: t["importance"], reverse=True)  # ids stay: the LLM answered by id
@@ -387,9 +517,64 @@ def run_news_briefing(
         "negative_alerts": [t["id"] for t in topics if t["sentiment"] == "negative" and t["importance"] >= 50],
         "outlet_tone": outlet_tone(topics),
         "failed_sources": failed,
+        "internal_context": len(context or []),
     }
+    for t in topics:
+        t["timeline"] = [{"date": a["date"], "outlet": a["outlet"], "title": a["title"]}
+                         for a in sorted(t["articles"], key=lambda a: a["date"])]
+    if history is not None:
+        result["since_last"] = track(topics, query, purpose, history, datetime.now(KST))
     log("respond", {"topics": len(topics)})
     return result
+
+
+# ── History: the same query, run again ──────────────────────────────────────
+
+HISTORY_RUNS = 20  # runs kept per query
+
+
+def _article_keys(t: dict[str, Any]) -> set[str]:
+    return {a.get("url") or f"{a['outlet']}|{a['title']}" for a in t["articles"]}
+
+
+def track(topics: list[dict[str, Any]], query: str, purpose: str, path: Path, now: datetime) -> dict[str, Any]:
+    """Compares this run with the last run of the same query, marks each topic and records the run.
+    A story is the same story when it shares an article with one seen before."""
+    key = f"{purpose}:{' '.join(_terms(query))}"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    runs = data.get(key, [])
+    last = runs[-1] if runs else None
+    counts = {"new": 0, "developing": 0, "unchanged": 0}
+    for t in topics:
+        keys = _article_keys(t)
+        before = next((p for p in (last or {}).get("topics", []) if keys & set(p["articles"])), None) if last else None
+        if not last:
+            t["tracking"] = {"status": "first_look"}
+            continue
+        if not before:
+            status = "new"
+        else:
+            added = len(keys - set(before["articles"]))
+            status = "developing" if added or t["outlet_count"] > before["outlet_count"] else "unchanged"
+            t["tracking"] = {"status": status, "first_seen": before["first_seen"], "new_articles": added,
+                             "outlets_before": before["outlet_count"], "outlets_now": t["outlet_count"]}
+        if status == "new":
+            t["tracking"] = {"status": "new"}
+        counts[status] += 1
+    stamp = now.isoformat(timespec="minutes")
+    runs.append({"at": stamp, "topics": [
+        {"articles": sorted(_article_keys(t)), "outlet_count": t["outlet_count"],
+         "first_seen": (t.get("tracking") or {}).get("first_seen") or stamp} for t in topics]})
+    data[key] = runs[-HISTORY_RUNS:]
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass  # tracking is a bonus: a read-only disk does not fail the briefing
+    return {"previous_run": last["at"] if last else None, **counts}
 
 
 def topic_line(t: dict[str, Any]) -> str:

@@ -162,3 +162,12 @@ def test_plain_python_llm_calls_ollama_chat(monkeypatch):
 
     assert ollama_http_llm(post)("sys", "user") == "{}"
     assert seen["url"] == "https://ollama.com/api/chat" and seen["body"]["model"] == "gemma4:31b-cloud"
+
+
+def test_an_alert_says_which_of_our_records_it_touches(tmp_path):
+    d = data(tmp_path)
+    shutil.copy(DATA_DIR / "companies.json", d / "companies.json")
+    out = PrintSender()
+    run_delivery(d, "alerts", sources=sources(d), senders={"telegram": out}, today=TODAY, log=lambda m: None)
+    text = "\n".join(t for _, t in out.sent)
+    assert "↔ 검토 자료: 최대 고객 알파모바일 매출 의존도 46%" in text

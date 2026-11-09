@@ -23,8 +23,12 @@ NEWS_BRIEFING = Skill(
   1) 한눈에 보기 — trend가 있으면 그대로 요약해 2~3문장. 없으면 상위 주제로 한두 문장.
   2) 주요 이슈 — 중요도(importance) 높은 순으로 주제마다 한 단락: 무슨 일인지(summary), 근거 사실(key_facts, 날짜 포함),
      긍정/부정, 보도 매체 수(outlet_count). purpose가 "risk"면 리스크 종류·수준과 check_points 중 관련 있는 확인 사항.
+     internal_links가 있는 주제는 그 아래에 "우리 회사 관련: " 한 줄로 어떤 결정사항·미결 쟁점·할 일·검토 자료(출처 회의와 날짜)에
+     닿는지와 internal_note를 쓴다. tracking.status가 "new"면 "새 소식", "developing"이면 "후속 보도 n건, 매체 a→b곳"을 붙인다.
   3) 시사점(So-What) — so_what이 있으면 그 내용을, 없으면 주요 이슈에서 근거가 분명한 것만 1~2문장.
   4) 알림 — negative_alerts에 든 주제가 있으면 "부정 기사 알림"으로 한 줄씩.
   5) 매체별 논조 — outlet_tone에서 "판단 보류"가 아닌 매체만, 있을 때만 한 줄.
+- since_last.previous_run이 있으면 한눈에 보기 첫 문장에 "지난 확인(시각) 이후 새 소식 n건, 후속 보도 n건"을 넣는다.
+- 내부 기록은 요청자가 볼 수 있는 것만 Tool이 준다. 결과에 없는 회의나 결정을 추측해 덧붙이지 않는다.
 - 불필요한 서론과 결론은 생략한다.""",
 )

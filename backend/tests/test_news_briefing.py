@@ -150,3 +150,63 @@ def test_the_agent_tool_runs_the_workflow_not_itself(monkeypatch):
     monkeypatch.setattr(tool_module, "_llm", lambda: None)
     out = tool.invoke({"query": "뉴로엣지", "purpose": "risk", "days": 400})
     assert out["topic_count"] >= 1 and out["purpose"] == "risk"
+
+
+# ── internal context and history ───────────────────────────────────────────
+
+from app.library.workflows.news_briefing import context_from_companies, context_from_meetings  # noqa: E402
+
+MEETING = {"meetings": [{"date": "2026-09-15", "title": "AI 반도체 전략회의",
+                         "decisions": [{"ref": "MTG-1#2", "speaker": "CTO", "statement": "핵심 설계팀 유지가 인수 성공의 핵심"}],
+                         "open_issues": [],
+                         "open_action_items": [{"id": "AI-7", "text": "최대 고객사 의존도 확인", "owner": "전략기획팀", "due": "2026-11-30"}]}]}
+
+
+def scenario(**kw):
+    ctx = context_from_meetings(MEETING) + context_from_companies(DATA_DIR / "companies.json", "뉴로엣지")
+    return run_news_briefing("뉴로엣지", purpose="risk", sources=[FixtureSource(DATA_DIR / "news.json")],
+                             today=date(2026, 10, 10), context=ctx, **kw)
+
+
+def test_stories_are_linked_to_our_decisions_and_open_items():
+    out = scenario()
+    links = {t["articles"][0]["title"][:12]: [l["ref"] for l in t["internal_links"]] for t in out["topics"]}
+    cto = next(v for k, v in links.items() if "CTO" in k)
+    customer = next(v for k, v in links.items() if "최대 고객사" in k)
+    assert "MTG-1#2" in cto and "neuroedge:team" in cto
+    assert "AI-7" in customer and "neuroedge:customer" in customer
+    assert out["internal_context"] == 6
+
+
+def test_company_facts_only_for_the_company_asked_about():
+    assert context_from_companies(DATA_DIR / "companies.json", "HBM 시장") == []
+
+
+def test_the_model_can_link_and_explain_but_only_known_records():
+    def llm(system, user):
+        assert "우리 회사 내부 기록" in user and "internal_links" in system
+        topics = json.loads(user.split("주제별 기사:\n", 1)[1])
+        return json.dumps({"topics": [{"id": t["id"], "internal_links": ["neuroedge:valuation", "made-up"],
+                                       "internal_note": "가격 조건에 영향"} for t in topics], "trend": "", "so_what": "s"})
+
+    t = scenario(llm=llm)["topics"][0]
+    assert [l["ref"] for l in t["internal_links"]] == ["neuroedge:valuation"] and t["internal_note"] == "가격 조건에 영향"
+
+
+def test_a_linked_story_ranks_higher():
+    from app.library.workflows.news_briefing import adjusted_importance
+
+    assert adjusted_importance({"importance": 40, "internal_links": [{"ref": "x"}]}) == 50
+
+
+def test_the_second_look_says_what_is_new_and_what_developed(tmp_path):
+    h = tmp_path / "history.json"
+    one = RSS.replace("""<item><title>美 HBM""", """<!--<item><title>美 HBM""").replace("산업일보</source></item>", "산업일보</source></item>-->")
+    first = run(sources=[google(one)], history=h)
+    assert first["since_last"]["previous_run"] is None and first["topics"][0]["tracking"]["status"] == "first_look"
+    second = run(history=h)  # the export-control story appears
+    since = second["since_last"]
+    assert since["previous_run"] and since["new"] == 1 and since["unchanged"] == 1
+    new = next(t for t in second["topics"] if "수출 통제" in t["articles"][0]["title"])
+    assert new["tracking"]["status"] == "new"
+    assert [e["date"] for e in second["topics"][0]["timeline"]] == sorted(e["date"] for e in second["topics"][0]["timeline"])

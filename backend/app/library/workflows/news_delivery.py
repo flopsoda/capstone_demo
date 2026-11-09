@@ -31,12 +31,13 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
-from .news_briefing import LLM, PURPOSES, Source, run_news_briefing, topic_line
+from .news_briefing import LLM, PURPOSES, Source, context_from_companies, run_news_briefing, state_dir, topic_line
 from .news_collection import KST
 
 SUBSCRIBERS_FILE = "news_subscribers.json"
-OVERRIDE_FILE = Path("collected") / "news_subscribers.json"
-SENT_ALERTS_FILE = Path("collected") / "news_alerts_sent.json"
+OVERRIDE_FILE = "news_subscribers.json"  # in state_dir(): runtime copy once changed
+SENT_ALERTS_FILE = "news_alerts_sent.json"
+HISTORY_FILE = "news_history.json"
 PERIODS = {"daily": 1, "weekly": 7}
 BRIEFING_TOPICS = 6  # topics in one person's briefing, across all interests
 TELEGRAM_LIMIT = 4000  # Telegram allows 4096 characters per message
@@ -51,7 +52,7 @@ class SubscriberStore:
 
     def __init__(self, data_dir: Path):
         self.fixture = data_dir / SUBSCRIBERS_FILE
-        self.override = data_dir / OVERRIDE_FILE
+        self.override = state_dir(data_dir) / OVERRIDE_FILE
 
     def load(self) -> list[dict[str, Any]]:
         path = self.override if self.override.exists() else self.fixture
@@ -113,7 +114,9 @@ def _profile(s: dict[str, Any]) -> dict[str, Any]:
 
 
 def personal_briefing(sub: dict[str, Any], *, sources: list[Source], llm: LLM | None = None, days: int | None = None,
-                      today: date | None = None, log: Callable[[str], None] | None = None) -> dict[str, Any]:
+                      today: date | None = None, log: Callable[[str], None] | None = None,
+                      context_for: Callable[[str], list[dict[str, Any]]] | None = None,
+                      history: Path | None = None) -> dict[str, Any]:
     """One person's briefing: run_news_briefing per interest with that interest's purpose, topics
     with an excluded word dropped, the most important topics across interests first."""
     log = log or (lambda msg: None)
@@ -122,7 +125,8 @@ def personal_briefing(sub: dict[str, Any], *, sources: list[Source], llm: LLM | 
     sections, topics, alerts = [], [], []
     for interest in sub.get("interests", []):
         out = run_news_briefing(interest["query"], purpose=interest.get("purpose", "general"), days=days,
-                                sources=sources, llm=llm, today=today)
+                                sources=sources, llm=llm, today=today,
+                                context=context_for(interest["query"]) if context_for else None, history=history)
         kept = [t for t in out["topics"]
                 if not any(w in (a["title"] + a["summary"]).lower() for a in t["articles"] for w in excluded)]
         log(f"  {interest['query']}: 기사 {out['collected']}건 → 주제 {len(kept)}개 ({out['analysis']})")
@@ -171,6 +175,7 @@ def format_briefing(b: dict[str, Any]) -> tuple[str, str]:
         lines.append("- 기간 안에 새 기사가 없습니다.")
     for t in b["topics"]:
         lines.append(f"- ({t['interest']}) {topic_line(t)}")
+        lines += _internal_lines(t)
         url = next((a.get("url") for a in t["articles"] if a.get("url")), None)
         if url:
             lines.append(f"  {url}")
@@ -182,11 +187,27 @@ def format_briefing(b: dict[str, Any]) -> tuple[str, str]:
     return subject, "\n".join(lines)
 
 
+def _internal_lines(t: dict[str, Any]) -> list[str]:
+    """What of ours the story bears on, and how it moved since the last look."""
+    lines = []
+    if t.get("internal_note"):
+        lines.append(f"  → {t['internal_note']}")
+    for link in t.get("internal_links") or []:
+        lines.append(f"  ↔ {link['kind']}: {link['text']} ({link['source']})")
+    tr = t.get("tracking") or {}
+    if tr.get("status") == "new":
+        lines.append("  ● 지난 확인 이후 새로 나온 이야기")
+    elif tr.get("status") == "developing":
+        lines.append(f"  ▲ 후속 보도 {tr['new_articles']}건 · 보도 매체 {tr['outlets_before']}→{tr['outlets_now']}곳")
+    return lines
+
+
 def format_alert(t: dict[str, Any]) -> tuple[str, str]:
     lead = t["articles"][0]
     risk = f" · {t['risk']['label']} {t['risk']['level']}" if t.get("risk") else ""
     subject = f"[부정 기사 알림] {t['interest']}{risk}"
     body = [subject, lead["title"], f"{lead['outlet']} · {lead['date']} · 매체 {t['outlet_count']}곳 보도", t["summary"]]
+    body += _internal_lines(t)
     if lead.get("url"):
         body.append(lead["url"])
     return subject, "\n".join(body)
@@ -321,13 +342,15 @@ def run_delivery(data_dir: Path, mode: str, *, sources: list[Source], senders: d
         if mode == "alerts" and not sub.get("alerts", True):
             continue
         log(f"[{sub['name']}] {mode}")
-        b = personal_briefing(sub, sources=sources, llm=llm, days=days, today=today, log=log)
+        b = personal_briefing(sub, sources=sources, llm=llm, days=days, today=today, log=log,
+                              context_for=lambda q: context_from_companies(data_dir / "companies.json", q),
+                              history=state_dir(data_dir) / HISTORY_FILE)
         channels = sub.get("channels", ["telegram", "email"])
         if mode == "alerts":
-            fresh = new_alerts(b, data_dir / SENT_ALERTS_FILE)
+            fresh = new_alerts(b, state_dir(data_dir) / SENT_ALERTS_FILE)
             results = [deliver(*format_alert(t), channels, senders) for t in fresh]
             if fresh and any(r["sent"] for r in results):
-                mark_alerted(b, fresh, data_dir / SENT_ALERTS_FILE)
+                mark_alerted(b, fresh, state_dir(data_dir) / SENT_ALERTS_FILE)
             report.append({"subscriber": sub["id"], "alerts": len(fresh), "results": results})
             log(f"  새 부정 기사 {len(fresh)}건")
         else:
@@ -409,8 +432,12 @@ def main(argv: list[str] | None = None) -> int:
         for m in missing:
             print("설정 안 됨 →", m)
         if not senders:
-            print("보낼 채널이 없습니다. backend/.env를 채우거나 --dry-run으로 확인하세요.")
-            return 1
+            if not a.watch:
+                print("보낼 채널이 없습니다. backend/.env를 채우거나 --dry-run으로 확인하세요.")
+                return 1
+            print("보낼 채널이 없어 화면(로그)에만 출력합니다.")
+            printer = PrintSender()
+            senders = {"telegram": printer, "email": printer}
     sources = [GoogleNewsSource(), FixtureSource(a.data_dir / "news.json")]
     llm = None if a.no_llm else cli_llm()
     days = PERIODS[a.period] if a.period else None

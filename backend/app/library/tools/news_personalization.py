@@ -23,7 +23,9 @@ from ..workflows.news_delivery import (
     personal_briefing,
     senders_from_env,
 )
-from .run_news_briefing import _llm
+from ..workflows.meeting_store import MeetingStore
+from ..workflows.news_briefing import state_dir
+from .run_news_briefing import _llm, internal_context
 
 INTERESTS_TOOL = "manage_news_interests"
 PERSONAL_TOOL = "run_personal_news_briefing"
@@ -54,7 +56,7 @@ def make_manage_news_interests(data_dir: Path) -> BaseTool:
     return manage_news_interests
 
 
-def make_run_personal_news_briefing(data_dir: Path) -> BaseTool:
+def make_run_personal_news_briefing(data_dir: Path, meetings: MeetingStore | None = None) -> BaseTool:
     store = SubscriberStore(data_dir)
 
     @tool(PERSONAL_TOOL)
@@ -70,7 +72,9 @@ def make_run_personal_news_briefing(data_dir: Path) -> BaseTool:
         if not sub:
             return {"error": "뉴스 구독 정보가 없는 사용자입니다."}
         days = {"daily": 1, "weekly": 7}.get(period)
-        b = personal_briefing(sub, sources=[GoogleNewsSource(), FixtureSource(data_dir / "news.json")], llm=_llm(), days=days)
+        b = personal_briefing(sub, sources=[GoogleNewsSource(), FixtureSource(data_dir / "news.json")], llm=_llm(), days=days,
+                              context_for=lambda q: internal_context(q, data_dir, meetings),
+                              history=state_dir(data_dir) / "news_history.json")
         if send:
             senders, missing = senders_from_env()
             b["delivery"] = deliver(*format_briefing(b), sub.get("channels", ["telegram", "email"]), senders)
