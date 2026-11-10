@@ -119,8 +119,13 @@ def extract_context_signals(context: str | None) -> dict[str, Any]:
 
     ceiling: float | None = None
     for m in re.finditer(r"(\d+(?:\.\d+)?)\s*조", text):
-        window = text[m.end() : m.end() + 14]
-        if any(w in window for w in _CEILING_WORDS):
+        before = text[max(0, m.start() - 14):m.start()]
+        after = text[m.end():m.end() + 14]
+
+        if (
+            any(w in after for w in _CEILING_WORDS)
+            or any(w in before for w in ("상한", "기준가격", "한도"))
+        ):
             ceiling = float(m.group(1))
             break
 
@@ -130,9 +135,17 @@ def extract_context_signals(context: str | None) -> dict[str, Any]:
         if m:
             ttm_years = int(m.group(1))
 
-    flags = [flag for flag, keys in _FLAG_KEYWORDS.items() if any(k in lower for k in keys)]
-    return {"price_ceiling_trillion_krw": ceiling, "ttm_requirement_years": ttm_years, "confirmed_risks": flags}
+    flags = [
+        flag
+        for flag, keys in _FLAG_KEYWORDS.items()
+        if any(k in lower for k in keys)
+    ]
 
+    return {
+        "price_ceiling_trillion_krw": ceiling,
+        "ttm_requirement_years": ttm_years,
+        "confirmed_risks": flags,
+    }
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
