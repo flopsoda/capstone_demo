@@ -453,3 +453,113 @@ def test_whatif_tool_ui_compatibility():
     assert "after_conditions" in result
     assert "removed_conditions" in result
     assert "added_conditions" in result
+
+
+def test_what_if_respects_meeting_context():
+    """What-if 평가에서도 회의에서 정한 가격 상한을 반영한다."""
+
+    tool = make_run_mna_review(DATA_DIR / "companies.json")
+
+    result = tool.invoke({
+        "query": "뉴로엣지 인수가격을 2.7조 원으로 변경하면?",
+        "company": "뉴로엣지",
+        "persona": "CFO",
+        "asking_trillion_krw": 2.7,
+        "context": (
+            "회의에서 인수가격 상한은 2.5조 원 이하로 확정했다."
+        ),
+    })
+
+    assert result["found"] is True
+    assert result["mode"] == "what_if"
+
+    # CFO 평가 항목 중 인수가격 평가 확인
+    valuation = next(
+        assessment
+        for assessment in result["assessments"]
+        if assessment["criterion"] == "valuation"
+    )
+
+    # 변경된 인수가격이 회의 기준을 초과한다는
+    # 사실이 평가 근거에 포함되어야 한다.
+    evidence = " ".join(valuation["evidence"])
+
+    assert "2.5조 원" in evidence
+    assert "요청 맥락의 내부 기준" in evidence
+    assert "초과" in evidence
+
+    # 인수가격의 변경값도 유지해야 한다.
+    assert result["inputs"]["valuation"]["asking"] == "2.7조 원"
+
+
+
+def test_what_if_respects_customer_and_patent_context():
+    """회의에서 확인된 고객 및 특허 위험을 What-if에 반영한다."""
+
+    tool = make_run_mna_review(DATA_DIR / "companies.json")
+
+    result = tool.invoke({
+        "query": "뉴로엣지 인수가격을 2.1조 원으로 변경하면?",
+        "company": "뉴로엣지",
+        "persona": "CFO",
+        "asking_trillion_krw": 2.1,
+        "context": (
+            "회의에서 알파모바일 고객 집중 위험과 "
+            "코어NPU 특허소송 위험이 확인되었다."
+        ),
+    })
+
+    assert result["found"] is True
+    assert result["mode"] == "what_if"
+
+    assessments = {
+        item["criterion"]: item
+        for item in result["assessments"]
+    }
+
+    # 1. 고객 집중 위험에 회의 맥락이 반영되는지 확인
+    customer = assessments["customer_concentration"]
+
+    customer_evidence = " ".join(customer["evidence"])
+
+    assert "46%" in customer_evidence
+    assert "요청 맥락" in customer_evidence
+    assert "외부 리스크가 확인됨" in customer_evidence
+
+    # 2. 특허소송 위험에 회의 맥락이 반영되는지 확인
+    # CFO의 기본 평가 우선순위에는 ip_risk가 없으므로,
+    # 실제 Tool의 변경 전후 평가 결과와는 별도로
+    # CTO 관점에서도 동일한 맥락을 확인한다.
+    cto_result = tool.invoke({
+        "query": "뉴로엣지 인수가격을 2.1조 원으로 변경하면?",
+        "company": "뉴로엣지",
+        "persona": "CTO",
+        "asking_trillion_krw": 2.1,
+        "context": (
+            "회의에서 알파모바일 고객 집중 위험과 "
+            "코어NPU 특허소송 위험이 확인되었다."
+        ),
+    })
+
+    assert cto_result["found"] is True
+    assert cto_result["mode"] == "what_if"
+
+    cto_assessments = {
+        item["criterion"]: item
+        for item in cto_result["assessments"]
+    }
+
+    patent = cto_assessments["ip_risk"]
+
+    patent_evidence = " ".join(patent["evidence"])
+
+    assert "코어NPU" in patent_evidence
+    assert "요청 맥락에서 소송 리스크가 확인됨" in patent_evidence
+
+    # 3. 회의 맥락을 추가해도 What-if 변경 조건은 유지된다.
+    assert result["inputs"]["valuation"]["asking"] == "2.1조 원"
+    assert cto_result["inputs"]["valuation"]["asking"] == "2.1조 원"
+
+    # 4. 최종 권고도 기존 Workflow 결과와 일치해야 한다.
+    assert result["recommendation"] == result["after_recommendation"]
+    assert cto_result["recommendation"] == cto_result["after_recommendation"]

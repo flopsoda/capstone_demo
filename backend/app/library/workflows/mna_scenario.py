@@ -117,10 +117,15 @@ def compare_mna_scenarios(
     asking_trillion_krw: float | None = None,
     operating_margin: float | None = None,
     revenue_share: float | None = None,
+    context: str | None = None,
 ) -> dict[str, Any]:
     """M&A 조건 변경 전후의 전체 평가 결과를 비교한다."""
 
-    from .mna_review import evaluate_all, recommend
+    from .mna_review import (
+        evaluate_all,
+        recommend,
+        extract_context_signals,
+    )
 
     if all(
         value is None
@@ -150,9 +155,14 @@ def compare_mna_scenarios(
             scenario_company, revenue_share
         )
 
-    # 기존 평가 함수를 재사용한다.
-    before = evaluate_all(company, {})
-    after = evaluate_all(scenario_company, {})
+
+    # 기존 회의 맥락을 변경 전후 평가에 동일하게 반영한다.
+    context_signals = extract_context_signals(context)
+
+    # 기존 M&A 평가 함수와 판단 기준을 그대로 사용한다.
+    before = evaluate_all(company, context_signals)
+    after = evaluate_all(scenario_company, context_signals)
+
 
     # 항목별 결과를 비교한다.
     changes = []
@@ -233,6 +243,7 @@ def compare_persona_scenarios(
     asking_trillion_krw: float | None = None,
     operating_margin: float | None = None,
     revenue_share: float | None = None,
+    context: str | None = None,
 ) -> dict[str, Any]:
     """경영진 관점에 따라 What-if 평가 결과를 정리한다."""
 
@@ -248,8 +259,8 @@ def compare_persona_scenarios(
         asking_trillion_krw=asking_trillion_krw,
         operating_margin=operating_margin,
         revenue_share=revenue_share,
+        context=context,
     )
-
     priority = PERSONAS[persona_key]["criteria"]
 
     # 해당 경영진이 중요하게 보는 평가 항목을 먼저 표시
