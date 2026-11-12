@@ -101,26 +101,67 @@ function companyRiskNewsBlocks(result: unknown): MessageBlock[] {
   });
 }
 
-/** Shape returned by run_mna_review (backend/app/workflows/mna_review.py). */
+interface MnaInputs {
+  financials: { revenue: string; revenue_cagr_3y: string; operating_margin: string };
+  valuation: { asking: string; fair_value: string };
+  customers: { largest: string; largest_share: string };
+  technology: { internal_development: string; integration_after_acquisition: string; time_to_market_gain: string };
+}
+
+interface MnaAssessment {
+  label: string;
+  verdict: string;
+  level: string | null;
+  finding: string;
+}
+
+/**
+ * Shapes returned by run_mna_review (backend/app/library/workflows): a single-perspective review
+ * (mna_review.py; What-if adds the same fields, mna_scenario.py) or, for persona "ALL", the
+ * CEO·CFO·CTO summary (mna_executive_summary.py, mode "executive_summary").
+ */
 interface MnaReviewResult {
   found: boolean;
   message?: string;
+  mode?: string;
   persona_label: string;
-  inputs: {
-    financials: { revenue: string; revenue_cagr_3y: string; operating_margin: string };
-    valuation: { asking: string; fair_value: string };
-    customers: { largest: string; largest_share: string };
-    technology: { internal_development: string; integration_after_acquisition: string; time_to_market_gain: string };
-  };
-  assessments: { label: string; verdict: string; level: string | null; finding: string }[];
-  concerns: { label: string; level: string | null; finding: string }[];
+  inputs: MnaInputs;
+  assessments: MnaAssessment[];
   recommendation: string;
   recommendation_label: string;
   conditions: string[];
 }
 
-function isMnaReviewResult(v: unknown): v is MnaReviewResult {
-  return typeof v === "object" && v !== null && typeof (v as { found?: unknown }).found === "boolean";
+interface MnaExecutiveSummaryResult {
+  found: true;
+  mode: "executive_summary";
+  inputs: MnaInputs;
+  executive_reviews: Record<string, { assessments: MnaAssessment[] }>;
+  key_risks: { label: string; level: string | null; finding: string }[];
+  recommendation: string;
+  recommendation_label: string;
+  conditions: string[];
+}
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+function isMnaReviewResult(v: unknown): v is Record<string, unknown> & { found: boolean; message?: string } {
+  return isObject(v) && typeof v.found === "boolean";
+}
+
+/** A found single-perspective (or What-if) review with every field the renderer reads. */
+function isPersonaReview(v: Record<string, unknown>): v is Record<string, unknown> & MnaReviewResult {
+  return isObject(v.inputs) && Array.isArray(v.assessments) && Array.isArray(v.conditions);
+}
+
+function isExecutiveSummary(v: Record<string, unknown>): v is Record<string, unknown> & MnaExecutiveSummaryResult {
+  return (
+    v.mode === "executive_summary" &&
+    isObject(v.inputs) &&
+    isObject(v.executive_reviews) &&
+    Array.isArray(v.key_risks) &&
+    Array.isArray(v.conditions)
+  );
 }
 
 const RECOMMENDATION_TONE: Record<string, BadgeTone> = {
@@ -136,12 +177,8 @@ function assessmentText(a: { verdict: string; level: string | null; finding: str
   return `${VERDICT_TEXT[a.verdict] ?? a.verdict}${level} — ${a.finding}`;
 }
 
-function mnaReviewBlocks(result: unknown): MessageBlock[] {
-  if (!isMnaReviewResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
-  if (!result.found) return [{ kind: "text", text: result.message ?? "기업 데이터를 찾지 못했습니다." }];
-  const { inputs } = result;
+function mnaInputBlocks(inputs: MnaInputs): MessageBlock[] {
   return [
-    { kind: "badge", text: result.persona_label, tone: "info" },
     { kind: "label", text: "입력 정보" },
     {
       kind: "kv",
@@ -155,8 +192,11 @@ function mnaReviewBlocks(result: unknown): MessageBlock[] {
         { k: "기대 단축 기간", v: inputs.technology.time_to_market_gain },
       ],
     },
-    { kind: "label", text: `평가 항목 · ${result.persona_label} 우선순위` },
-    { kind: "kv", items: result.assessments.map((a) => ({ k: a.label, v: assessmentText(a) })) },
+  ];
+}
+
+function mnaRecommendationBlocks(result: { recommendation: string; recommendation_label: string; conditions: string[] }): MessageBlock[] {
+  return [
     { kind: "label", text: "권고" },
     { kind: "badge", text: result.recommendation_label, tone: RECOMMENDATION_TONE[result.recommendation] ?? "info" },
     { kind: "label", text: "권고 조건" },
@@ -164,7 +204,68 @@ function mnaReviewBlocks(result: unknown): MessageBlock[] {
   ];
 }
 
-/** Renders a tool's arguments + result. One case per Workflow Tool; unknown tools fall back to JSON. */
+/** persona "ALL": each perspective's assessments, the merged key risks, one recommendation. */
+function mnaExecutiveSummaryBlocks(result: MnaExecutiveSummaryResult): MessageBlock[] {
+  const perspectives = Object.entries(result.executive_reviews).flatMap(([persona, review]): MessageBlock[] =>
+    Array.isArray(review?.assessments)
+      ? [
+          { kind: "label", text: `${persona} 관점 평가` },
+          { kind: "kv", items: review.assessments.map((a) => ({ k: a.label, v: assessmentText(a) })) },
+        ]
+      : [],
+  );
+  const risks = result.key_risks.map((r) => {
+    const level = r.level ? `${RISK_LEVEL_BADGE[r.level]?.text ?? r.level} · ` : "";
+    return `${level}${r.label} — ${r.finding}`;
+  });
+  const riskBlocks: MessageBlock[] = risks.length
+    ? [
+        { kind: "label", text: "핵심 위험" },
+        { kind: "list", items: risks },
+      ]
+    : [];
+  return [
+    { kind: "badge", text: "CEO·CFO·CTO 종합", tone: "info" },
+    ...mnaInputBlocks(result.inputs),
+    ...perspectives,
+    ...riskBlocks,
+    ...mnaRecommendationBlocks(result),
+  ];
+}
+
+function mnaReviewBlocks(result: unknown): MessageBlock[] {
+  if (!isMnaReviewResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  if (!result.found) return [{ kind: "text", text: result.message ?? "기업 데이터를 찾지 못했습니다." }];
+  if (isExecutiveSummary(result)) return mnaExecutiveSummaryBlocks(result);
+  // A shape this renderer does not know (a newer mode, an error payload): show it as is.
+  if (!isPersonaReview(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  return [
+    { kind: "badge", text: result.persona_label, tone: "info" },
+    ...mnaInputBlocks(result.inputs),
+    { kind: "label", text: `평가 항목 · ${result.persona_label} 우선순위` },
+    { kind: "kv", items: result.assessments.map((a) => ({ k: a.label, v: assessmentText(a) })) },
+    ...mnaRecommendationBlocks(result),
+  ];
+}
+
+/** Per-tool rendering of a result. Unknown tools fall back to JSON. */
+function resultBlocks(tool: string, result: unknown): MessageBlock[] {
+  switch (tool) {
+    case "run_meeting_context_retrieval":
+      return meetingContextBlocks(result);
+    case "run_company_risk_news_analysis":
+      return companyRiskNewsBlocks(result);
+    case "run_mna_review":
+      return mnaReviewBlocks(result);
+    default:
+      return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  }
+}
+
+/**
+ * Renders a tool's arguments + result. A result whose shape a renderer does not expect is
+ * shown as JSON instead of throwing: a rendering problem must not abort the whole run.
+ */
 export function toolResultBlocks(tool: string, args: Record<string, unknown>, result: unknown): MessageBlock[] {
   const head: MessageBlock[] = [];
   if (typeof args.company === "string") {
@@ -179,16 +280,13 @@ export function toolResultBlocks(tool: string, args: Record<string, unknown>, re
   if (typeof args.context === "string" && args.context) {
     head.push({ kind: "label", text: "전달된 맥락" }, { kind: "text", text: args.context });
   }
-  switch (tool) {
-    case "run_meeting_context_retrieval":
-      return [...head, ...meetingContextBlocks(result)];
-    case "run_company_risk_news_analysis":
-      return [...head, ...companyRiskNewsBlocks(result)];
-    case "run_mna_review":
-      return [...head, ...mnaReviewBlocks(result)];
-    default:
-      return [...head, { kind: "text", text: JSON.stringify(result, null, 2) }];
+  let body: MessageBlock[];
+  try {
+    body = resultBlocks(tool, result);
+  } catch {
+    body = [{ kind: "text", text: JSON.stringify(result, null, 2) }];
   }
+  return [...head, ...body];
 }
 
 /** Title of an agent's final answer in the chat. */
