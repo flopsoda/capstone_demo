@@ -24,12 +24,11 @@ Step 8  REAL   그룹 최종 판단                                            G
 
 ### 경영자문 Agent 주요 기능
 
-K전자 경영자문 Agent는 M&A 인수 타당성 평가를 중심으로 경영진의 의사결정을 지원합니다.
+경영자문 Agent(K전자 · 그룹 모두 같은 Skill · Tool · Workflow, 각자의 기업 데이터)는 M&A 인수 타당성 평가를 중심으로 경영진의 의사결정을 지원합니다.
 
 - **기업별 M&A 평가:** 재무·전략·기술·위험 요인을 분석하고 인수 권고 및 선행 조건 도출
 - **What-if 시나리오 분석:** 인수가격, 영업이익률, 주요 고객 매출 비중 변경에 따른 평가 결과 비교
-- **경영진 Persona 분석:** CEO·CFO·CTO 관점별 평가 및 종합 보고서 생성
-- **보고서 검증:** Workflow 결과와 LLM 보고서의 핵심 수치·인수 조건·최종 권고를 대조하고, 검증 실패 시 재작성
+- **경영진 Persona 분석:** CEO·CFO·CTO 관점별 평가 및 세 관점 종합 평가(`persona="ALL"`)
 - **회의 맥락 반영:** 회의에서 확인된 가격 상한과 위험 요소를 M&A 평가에 활용
 
 현재 M&A Workflow는 저장된 가상 기업 데이터를 기반으로 동작하며, 실제 기업정보 자동 수집이나 RAG 기능은 포함하지 않습니다.
@@ -179,9 +178,8 @@ backend/
         meeting_schedule.py          회의 일정 조회 · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소
         company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(path) 조회
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
-
-        mna_scenario.py              인수가격·수익성·고객 집중도 What-if 변경 전후 평가 비교 및 회의 맥락 적용
-        mna_executive_summary.py     CEO·CFO·CTO 평가 통합, 핵심 위험·기회·인수 조건 및 종합 보고서 데이터 구성
+        mna_scenario.py              What-if: review_what_if(path) — 인수가격·영업이익률·고객 비중 변경 전후 평가 · 권고 · 조건 비교 (context 신호 반영)
+        mna_executive_summary.py     persona "ALL": review_executive_summary(path) — CEO·CFO·CTO 평가 통합, 핵심 위험·기회·인수 조건 · 권고
 
     systems/
       group/                         Group agent system (SYSTEM = "group") — `uvicorn app.systems.group.app:app --port 8001`
@@ -202,9 +200,7 @@ backend/
           k_super.py                 K전자 슈퍼에이전트: AGENT_ID · IDENTITY + Registry 위임 Tool (Super core)
           meeting.py                 미팅 에이전트: AGENT_ID · IDENTITY + Registry Skill 3개 / Tool 5개(회의 조회 · 회의록 저장 · 진행 조회 · 진행 갱신 · 일정)
           news.py                    뉴스 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_company_risk_news_analysis)
-
-          advisory.py                경영자문 Agent: Registry 기반 Tool 호출, Persona별 응답 생성, 보고서 사실 검증 및 재작성
-
+          advisory.py                경영자문 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_mna_review)
         tools/
           delegate_to_*.py           K Super → 미팅 / 뉴스 / 경영자문 위임 Tool (라이브러리 factory + K 설명; delegation_start/end 발행, 최종 응답만 반환)
           run_*.py 등                라이브러리 Tool factory를 이 system의 data/ · MEETING_STORE(schema kelec)에 바인딩한 instance
@@ -213,10 +209,10 @@ backend/
         data/companies.json          인수 대상 기업 fixture (NeuroEdge 재무 · 가치 · 고객 · 기술 · 전략)
     tests/                             test_workflow.py · test_meeting_records.py (회의 저장소 필요: conftest.py의 meeting_db) · test_news_workflow.py · test_mna_review_workflow.py
                                      · test_capabilities.py · test_k_super.py · test_k_app.py · test_events.py · test_group.py · test_group_workflows.py
-                                     · test_boundaries.py(runtime/library/system import 경계) (LLM 불필요), test_agents.py (Ollama Cloud 필요)
-
-                                     · test_mna_scenario.py (What-if 시나리오 분석 테스트)
-                                     · test_mna_executive_summary.py (CEO·CFO·CTO 종합 평가 및 보고서 검증 테스트)
+                                     · test_boundaries.py(runtime/library/system import 경계)
+                                     · test_mna_scenario.py (What-if) · test_mna_executive_summary.py (CEO·CFO·CTO 종합 평가)
+                                     · test_advisory.py (K · Group 경영자문 Agent: 실시간 lifecycle, 실패 시 이벤트 보존, Tool 오류 자체 정정, ALL · What-if, A2A 위임)
+                                     (LLM 불필요), test_agents.py (Ollama Cloud 필요)
 
 ```
 
@@ -245,23 +241,11 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
   model ──tool call──▶ delegate_to_advisory_agent(task)  ← 미팅·뉴스 결과를 보고, 필요한 맥락(회의 기준·외부 리스크)을 task에 직접 써서 위임
                               │ invoke
                               ▼
-                      
                        경영자문 에이전트 (LangGraph, MessagesState)
-                         model ──tool call──▶ run_mna_review(
-                           query, company, persona, context,
-                           asking_trillion_krw,
-                           operating_margin, revenue_share
-                         )
-                               ◀── tool result ──┘
-                         model ──▶ LLM 자연어 보고서 생성
-                                      ↓
-                                  보고서 검증
-                                      ↓
-                           필요 시 재작성 및 재검증
-                                      ↓
-                         최종 응답 (한국어)
-
-
+                         model ──tool call──▶ run_mna_review(query, company, persona, context,
+                                                             asking_trillion_krw?, operating_margin?, revenue_share?)
+                               ◀── tool result ──┘        (companies.json + persona 평가 기준 + context 신호; ALL이면 종합, 변경 조건이 있으면 What-if)
+                         model ──▶ 최종 응답 (한국어)
                               │
                        ToolMessage(최종 응답만) ──▶ K전자 슈퍼에이전트
   model ──▶ 요청의 항목에 대한 결과가 모두 있음 → Tool 호출 없이 최종 검토 결과 작성 (Step 6) → END
@@ -332,11 +316,13 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 
 ### 개요
 
-경영자문 Agent는 기존 LangGraph 기반 Agent와 `run_mna_review` Tool을 재사용하여 M&A 인수 타당성 평가 기능을 확장한 전문 Agent입니다.
+경영자문 Agent는 공통 Specialist core(`run_specialist`)와 `run_mna_review` Tool을 그대로 쓰며, M&A 인수 타당성 평가 Workflow를 확장했습니다.
+K전자와 그룹의 경영자문 Agent는 같은 Skill(`mna_feasibility_review`) · Tool factory · Workflow를 각자의 기업 데이터에 바인딩해 씁니다.
 
 기업별 재무·전략·기술 정보를 기반으로 평가 항목별 판단을 생성하고, What-if 시나리오 분석과 경영진 관점의 종합 평가를 지원합니다.
 
-LLM은 Workflow의 구조화된 평가 결과를 바탕으로 자연어 보고서를 작성하며, 주요 수치와 인수 조건이 일치하는지 별도 검증합니다.
+평가 · 권고 · 조건은 Workflow의 결정적 규칙이 정하고, Agent(LLM)는 Skill 지침에 따라 그 결과를 근거로 자연어 응답을 씁니다.
+Tool이 `error`를 돌려주면(예: `ALL`과 변경 조건을 함께 지정) 모델이 그 내용을 보고 인자를 고쳐 다시 호출합니다.
 
 ### 주요 기능
 
@@ -346,8 +332,6 @@ LLM은 Workflow의 구조화된 평가 결과를 바탕으로 자연어 보고�
 | What-if 시나리오 | 인수가격, 영업이익률, 최대 고객 매출 비중 변경에 따른 평가 및 인수 권고 비교 |
 | Persona별 평가 | CEO(전략), CFO(재무), CTO(기술) 관점별 주요 평가 항목 제공 |
 | 경영진 종합 평가 | 세 Persona의 평가 결과를 통합하여 핵심 위험·기회·인수 조건 및 최종 권고 도출 |
-| 보고서 사실 검증 | LLM 응답을 Workflow 결과와 비교하여 주요 수치, 권고 및 조건 검증 |
-| 보고서 재작성 | 검증 실패 시 기존 Tool 결과를 재사용하여 LLM 보고서 재작성 및 재검증 |
 | 회의 맥락 반영 | 자연어 요청이나 Agent 위임 과정에서 전달받은 회의 기준 및 확인된 위험 요소를 M&A 평가와 What-if 분석에 반영 |
 
 ### Workflow 구조
@@ -357,30 +341,20 @@ LLM은 Workflow의 구조화된 평가 결과를 바탕으로 자연어 보고�
         ↓
 경영자문 Agent
         ↓
-run_mna_review Tool
-        ↓
-요청 유형 분기
-        ├─ 일반 M&A 평가
-        │    └─ mna_review.py
+run_mna_review Tool (인자로 Workflow 선택)
+        ├─ 일반 M&A 평가 (CEO / CFO / CTO)
+        │    └─ mna_review.review_acquisition
         │
-        ├─ What-if 분석
-        │    └─ mna_scenario.py
+        ├─ What-if 분석 (변경 조건 지정)
+        │    └─ mna_scenario.review_what_if
         │
-        └─ CEO·CFO·CTO 종합 평가
-             └─ mna_executive_summary.py
+        └─ CEO·CFO·CTO 종합 평가 (persona="ALL")
+             └─ mna_executive_summary.review_executive_summary
         ↓
-구조화된 평가 결과 반환
+구조화된 평가 결과 반환 (tool_end 이벤트로 UI에도 전달)
         ↓
-LLM 자연어 보고서 작성
-        ↓
-주요 수치·권고·인수 조건 검증
-        ├─ 통과 → 최종 응답 반환
-        └─ 실패 → 기존 Tool 결과 기반 재작성
-                       ↓
-                    재검증
+경영자문 Agent가 결과를 근거로 최종 응답 작성 (agent_token으로 실시간 스트리밍 → agent_end)
 ```
-
-검증에 실패한 보고서는 정상적인 최종 분석 결과로 취급하지 않으며, 재검증에도 실패하면 오류를 반환합니다.
 
 ### M&A 분석 Tool
 
@@ -419,11 +393,11 @@ python -m pytest tests -q -k "mna or advisory"
 - 기존 M&A 평가 로직 및 기업별 조건 처리
 - What-if 입력값과 변경 전후 평가 비교
 - CEO·CFO·CTO 종합 평가
-- 보고서 주요 수치 및 권고 일치 여부
-- 보고서 검증 실패 시 재작성 처리
 - 회의 맥락을 반영한 평가
+- K · 그룹 경영자문 Agent의 실행 (`test_advisory.py`, scripted model): lifecycle 이벤트의 실시간 전달, Tool 실행 후 실패 시 이벤트 보존,
+  Tool `error` → 모델의 자체 정정, ALL · What-if 결과 전달, K Super 위임(A2A 수신 경로)
 
-위 결과는 경영자문 관련 테스트를 선택하여 실행한 결과이며, 전체 백엔드 테스트 또는 실제 웹 UI 통합 검증 결과와는 구분합니다.
+위 결과는 경영자문 관련 테스트를 선택하여 실행한 결과이며 (skip 3건은 LLM key가 필요한 `test_agents.py`), 전체 백엔드 테스트 또는 실제 웹 UI 통합 검증 결과와는 구분합니다.
 
 ### 구현 범위와 제한사항
 
