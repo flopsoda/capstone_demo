@@ -57,7 +57,10 @@ def test_tool_definition_is_the_source_of_truth():
     cap = get_capability("run_mna_review")
     assert isinstance(cap.impl, BaseTool)
     assert cap.description == cap.impl.description and "persona" in cap.description
-    assert set(cap.impl.args) == {"query", "company", "persona", "context"}
+    assert set(cap.impl.args) == {
+    "query", "company", "persona", "context",
+    "asking_trillion_krw", "operating_margin", "revenue_share"
+    }
     out = cap.impl.invoke({"query": "인수 검토", "company": "뉴로엣지", "persona": "CFO"})
     assert out["recommendation"] == "CONDITIONAL_PROCEED" and out["persona"] == "CFO"
 
