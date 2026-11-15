@@ -16,6 +16,7 @@ from langchain_core.tools import BaseTool, tool
 
 from ...runtime.llm import LLMConfigError, get_chat_model
 from ..workflows import news_briefing as workflow
+from ..workflows.news.mode import DEMO, data_mode
 
 TOOL_NAME = "run_news_briefing"
 
@@ -34,7 +35,7 @@ def _llm():
 
 
 def make_run_news_briefing(fixture: Path) -> BaseTool:
-    """Tool instance whose sources are the live web news and this system's demo fixture (data/news.json)."""
+    """Tool instance: real news in live mode, this system's demo fixture (data/news.json) in demo mode."""
 
     @tool(TOOL_NAME)
     def run_news_briefing(query: str, purpose: str = "general", days: int = 7) -> dict[str, Any]:
@@ -47,9 +48,13 @@ def make_run_news_briefing(fixture: Path) -> BaseTool:
         purpose: 분석 목적. "general"(기본: 일반 동향) 또는 "risk"(주제마다 리스크 종류·수준·확인 사항 추가).
         days: 며칠 전 기사까지 볼지 (기본 7).
     """
-        return workflow.run_news_briefing(  # not the Tool itself: it has the same name
-            query, purpose=purpose, days=max(1, min(int(days), 30)),
-            sources=[workflow.GoogleNewsSource(), workflow.FixtureSource(fixture)], llm=_llm(),
-        )
+        days = max(1, min(int(days), 30))
+        if data_mode() == DEMO:  # offline, on the scenario's own calendar
+            demo = workflow.FixtureSource(fixture)
+            result = workflow.run_news_briefing(  # not the Tool itself: it has the same name
+                query, purpose=purpose, days=days, sources=[demo], llm=_llm(), today=demo.latest())
+        else:
+            result = workflow.run_news_briefing(query, purpose=purpose, days=days, sources=[workflow.GoogleNewsSource()], llm=_llm())
+        return {"dataset": data_mode(), **result}
 
     return run_news_briefing

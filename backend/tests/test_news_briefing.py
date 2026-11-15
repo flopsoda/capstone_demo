@@ -102,7 +102,7 @@ def test_a_failing_source_does_not_stop_the_others():
 
 
 def test_demo_scenario_runs_through_the_same_workflow():
-    out = run_news_briefing("뉴로엣지", purpose="risk", sources=[FixtureSource(DATA_DIR / "news.json")], today=date(2026, 10, 10))
+    out = run_news_briefing("뉴로엣지", purpose="risk", days=30, sources=[FixtureSource(DATA_DIR / "news.json")], today=date(2026, 10, 10))
     labels = sorted((t["risk"]["label"], t["article_count"]) for t in out["topics"] if t.get("risk"))
     assert ("특허 소송", 2) in labels  # the lawsuit and the injunction: one matter
     assert any(t["sentiment"] == "positive" for t in out["topics"])  # the appliance-maker deal
@@ -129,8 +129,10 @@ def test_a_long_model_made_query_retries_with_its_first_words():
 
 
 def test_the_fictional_scenario_is_scored_from_its_own_last_day():
-    out = run_news_briefing("뉴로엣지", purpose="risk", sources=[FixtureSource(DATA_DIR / "news.json")], today=date(2027, 1, 1))
-    assert out["topics"][0]["importance"] >= 50 and out["negative_alerts"]  # a month later, still news
+    fixture = FixtureSource(DATA_DIR / "news.json")
+    assert fixture.latest() == date(2026, 10, 8)
+    out = run_news_briefing("뉴로엣지", purpose="risk", days=30, sources=[fixture], today=fixture.latest())
+    assert out["topics"][0]["importance"] >= 50 and out["negative_alerts"]
 
 
 def test_content_adjusts_the_filter_score():
@@ -148,9 +150,30 @@ def test_the_agent_tool_runs_the_workflow_not_itself(monkeypatch):
     from app.systems.k_electronics.tools.run_news_briefing import run_news_briefing as tool
 
     monkeypatch.setattr(tool_module, "_llm", lambda: None)
-    monkeypatch.setattr(tool_module.workflow, "GoogleNewsSource", lambda: google("<rss><channel></channel></rss>"))
-    out = tool.invoke({"query": "뉴로엣지", "purpose": "risk", "days": 400})
+    out = tool.invoke({"query": "뉴로엣지", "purpose": "risk", "days": 30})
     assert out["topic_count"] >= 1 and out["purpose"] == "risk"
+
+
+def test_demo_mode_is_the_fixture_on_its_own_calendar(monkeypatch):
+    from app.library.tools import run_news_briefing as tool_module
+    from app.systems.k_electronics.tools.run_news_briefing import run_news_briefing as tool
+
+    monkeypatch.setattr(tool_module, "_llm", lambda: None)
+    out = tool.invoke({"query": "뉴로엣지", "days": 7})  # the scenario ends 2026-10-08
+    assert out["dataset"] == "demo" and out["period"] == {"from": "2026-10-01", "to": "2026-10-08"}
+    dates = [a["date"] for t in out["topics"] for a in t["articles"]]
+    assert dates and min(dates) >= "2026-10-01"  # the window applies to the fixture too
+
+
+def test_live_mode_never_serves_fictional_articles(monkeypatch):
+    from app.library.tools import run_news_briefing as tool_module
+    from app.systems.k_electronics.tools.run_news_briefing import run_news_briefing as tool
+
+    monkeypatch.setenv("NEWS_DATA_MODE", "live")
+    monkeypatch.setattr(tool_module, "_llm", lambda: None)
+    monkeypatch.setattr(tool_module.workflow, "GoogleNewsSource", lambda: google("<rss><channel></channel></rss>"))
+    out = tool.invoke({"query": "뉴로엣지", "days": 30})
+    assert out["dataset"] == "live" and out["topics"] == []
 
 
 def test_live_results_that_never_name_the_query_are_dropped():

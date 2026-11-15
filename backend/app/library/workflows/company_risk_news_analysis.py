@@ -315,7 +315,7 @@ def analyze_company_risk_news(
     """
     topics = topics or []
     categories = requested_categories(query, topics)
-    articles = [*load_articles(path), *(load_articles(collected) if collected else [])]
+    articles = [*load_articles(path), *(load_articles(collected) if collected else [])]  # a missing store is empty
     about = [a for a in articles if _about_company(a, company)]
 
     risky = [a for a in about if a.get("risk") and (not categories or a["risk"]["category"] in categories)]

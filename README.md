@@ -41,6 +41,7 @@ Step 8  REAL   그룹 최종 판단                                            G
 요구 버전: **Node `^20.19 || >=22.12`** (Vite 8 · oxlint), **Python `>=3.12`** (3.13으로 검증). 외부 의존은 LLM API key(기본 Ollama Cloud, `LLM_PROVIDER=openai`면 OpenAI 호환 API)와
 미팅 에이전트의 회의 저장소 **Postgres 15+**(`MEETINGS_DATABASE_URL`, `pg_trgm` 사용)입니다 — `backend/.env.example`.
 각 system은 처음 쓸 때 자기 schema(K `kelec`, Group `grp`)를 만들고 `data/meetings.json`으로 채웁니다. 저장소가 없으면 미팅 Tool은 오류 결과를 돌려줍니다.
+뉴스 데이터는 system마다 `NEWS_DATA_MODE`로 정합니다: `live`(기본, 실제 뉴스만) 또는 `demo`(가상 fixture `data/news.json`만, 네트워크 없이 시나리오 날짜 기준). 둘은 섞이지 않으며 Tool 결과의 `dataset`에 표시됩니다.
 
 ```bash
 # 1) Python backend — K Electronics system (별도 터미널)
@@ -51,6 +52,10 @@ cp .env.example .env            # OLLAMA_API_KEY 입력 (https://ollama.com/sett
 
 # 1b) Python backend — Group system (별도 터미널, 같은 venv/.env). Group Super가 K에 A2A로 요청한다
 .venv/bin/uvicorn app.systems.group.app:app --port 8001 --reload
+
+# NeuroEdge 데모(가상 뉴스)는 두 backend 모두 NEWS_DATA_MODE=demo로 띄운다. 기본값 live는 실제 뉴스만 쓴다
+NEWS_DATA_MODE=demo .venv/bin/uvicorn app.main:app --port 8000 --reload
+NEWS_DATA_MODE=demo .venv/bin/uvicorn app.systems.group.app:app --port 8001 --reload
 
 # 2) React frontend
 npm install

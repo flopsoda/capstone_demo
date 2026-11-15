@@ -190,7 +190,7 @@ Advisory Agent  → run_mna_review
   `create`의 `carry_over_from`은 이전 회의의 보류 안건과 미결 쟁점(`issue`)을 새 회의 안건으로 이월한다. 시각은 한국 시간이며 `list`는 `today`(요일 포함)를 준다.
   예약된 회의의 회의록은 같은 id로 `save_meeting_minutes`에 쓴다.
 - `backend/app/library/tools/run_news_briefing.py`: `make_run_news_briefing(fixture)` → `@tool("run_news_briefing")`, 인자 `query: str, purpose: str = "general", days: int = 7`(1~30).
-  News Agent의 기본 파이프라인. 기업 · 산업 · 시장 · 규제 · 인물 등 어떤 주제든 받는다. 출처는 Google 뉴스 RSS(실시간)와 system의 가상 fixture(`data/news.json`, 데모 시나리오). LLM은 runtime의 설정 모델(`get_chat_model`), 설정이 없으면 규칙만 쓴다.
+  News Agent의 기본 파이프라인. 기업 · 산업 · 시장 · 규제 · 인물 등 어떤 주제든 받는다. 출처는 `NEWS_DATA_MODE`(`library/workflows/news/mode.py`)가 정한다: live(기본)는 실제 뉴스만, demo는 system의 가상 fixture(`data/news.json`)만 시나리오의 마지막 날을 오늘로 보고 읽는다. 결과에 `dataset`. LLM은 runtime의 설정 모델(`get_chat_model`), 설정이 없으면 규칙만 쓴다.
 - `backend/app/library/workflows/news_briefing.py`: 순수 함수 `run_news_briefing(query, purpose, days, sources, llm, today, log)`가 한 요청 안에서
   수집(출처마다 `Article`로 정규화, 한 출처 실패는 `failed_sources`에 적고 계속) → 필터링(같은 링크 · 같은 매체의 거의 같은 제목 제거, 다른 매체의 같은 이야기는 topic 하나로 묶음, 중요도 0~100 = 보도 매체 수 + 최신성 + 제목의 검색어 비율) →
   분석(규칙으로 요약 · 핵심 사실 · 긍정/부정을 먼저 채우고, LLM이 있으면 JSON 한 번 호출로 topic별 요약과 전체 `trend` · `so_what`을 덮어씀. 답이 JSON이 아니거나 호출이 실패하면 규칙 결과 유지, `analysis: "rule" | "llm"`) →
@@ -648,7 +648,7 @@ LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`http
 | A2A | REAL: Group Tool → K `/api/a2a/run` HTTP, 최종 응답만 Agent에 전달, lifecycle은 관찰용 relay. Group UI가 Group backend를 쓴다 | 같음 |
 | Meeting 데이터 | Postgres 회의 저장소(system별 schema, fixture로 seed). 회의록 · 결정 · Action Item · 진행 이력 · 일정. 키워드 점수 조회 | + 녹음 transcript 저장과 보존 기간 삭제, 의미 검색(임베딩) |
 | 사용자 맥락 | 요청 body의 `principal`(gateway가 보냄)을 run이 들고 Tool이 읽음. 미팅 Tool만 사용 (뉴스는 공개 자료) | 자문 자료 등급도 같은 규칙 |
-| News 데이터 | `data/news.json` 가상 fixture + 수집기(`news_collection`)가 채우는 `data/collected/news.json`을 함께 조회, 후속 보도를 사안 단위로 묶음 | 실제 뉴스 API / 검색 / RAG (`analyze_company_risk_news` 본문만 교체) |
+| News 데이터 | system별 `NEWS_DATA_MODE`: `live`(기본) = 실제 뉴스만(수집 store), `demo` = 가상 fixture `data/news.json`만(오프라인, 시나리오 날짜 기준). 결과에 `dataset` 표시, 후속 보도를 사안 단위로 묶음 | 실제 뉴스 API / 검색 / RAG (`analyze_company_risk_news` 본문만 교체) |
 | Advisory 데이터 | `data/companies.json` 고정 fixture + 결정적 규칙 evaluator | 실제 재무 모델 / 밸류에이션 / 실사 데이터 (evaluator만 교체) |
 | Workflow 결과 렌더링 | `toolResultBlocks`가 Tool 이름별 `switch` (meeting, news, advisory 전용 렌더) | Tool이 늘어나도 frontend가 Tool별 지식을 과도하게 갖지 않는 방식 (미결정) |
 | 상위 Agent로의 결과 전달 | 최종 응답 문자열만 `ToolMessage`. Advisory에 필요한 이전 결과는 K Super가 쓴 `task` 문장으로만 전달. 종합도 K Super가 history의 텍스트만 보고 쓴다 | 필요 시 범용 `artifacts` / `context` 구조 (미결정) |

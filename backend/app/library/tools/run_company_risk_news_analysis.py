@@ -3,8 +3,8 @@ over the company_risk_news_analysis workflow (app/library/workflows/).
 
 Shared library: the system that owns the data binds it with
 make_run_company_risk_news_analysis(path) and registers the Tool in its own Registry.
-News is public, so the call does not depend on who asks. Next to the fixture the Tool reads
-the system's collected store (news_collection), when there is one.
+News is public, so the call does not depend on who asks. Demo mode (NEWS_DATA_MODE=demo) reads
+the system's fixture only; live mode (the default) reads only real news.
 """
 
 from __future__ import annotations
@@ -15,14 +15,15 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from ..workflows.company_risk_news_analysis import analyze_company_risk_news
+from ..workflows.news.mode import DEMO, data_mode
 from ..workflows.news_collection import COLLECTED_FILE
 
 TOOL_NAME = "run_company_risk_news_analysis"
 
 
 def make_run_company_risk_news_analysis(path: Path) -> BaseTool:
-    """Tool instance bound to one system's data store at `path` (data/news.json); the collected
-    store is <its folder>/collected/news.json."""
+    """Tool instance bound to one system's demo fixture at `path` (data/news.json); live news is the
+    collected store <its folder>/collected/news.json."""
     collected = path.parent / COLLECTED_FILE
 
     @tool(TOOL_NAME)
@@ -36,6 +37,10 @@ def make_run_company_risk_news_analysis(path: Path) -> BaseTool:
         company: 조사 대상 기업명 (예: "뉴로엣지").
         topics: 우선 확인할 리스크 주제 목록 (예: ["주요 고객", "법적 분쟁", "핵심인력"]). 비우면 모든 리스크를 반환한다.
     """
-        return analyze_company_risk_news(query, company, topics, path=path, collected=collected)
+        if data_mode() == DEMO:
+            result = analyze_company_risk_news(query, company, topics, path=path)
+        else:
+            result = analyze_company_risk_news(query, company, topics, path=collected)
+        return {"dataset": data_mode(), **result}
 
     return run_company_risk_news_analysis

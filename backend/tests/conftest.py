@@ -9,7 +9,8 @@ that variable is not set. Without a principal, runs see everything there (anonym
 Outbound network: a test may only open sockets to this machine (the test database, a local
 server). Tests that really call a model or a website are marked `network` (tests/test_agents.py).
 
-The session fails if a test run left anything new in a system's data/ folder.
+News data: the suite runs the demo scenario (NEWS_DATA_MODE=demo) unless a test switches to live,
+the default outside tests. The session fails if a test run left anything new in a system's data/ folder.
 """
 
 import os
@@ -42,6 +43,11 @@ def data_folders_unchanged():
 
 def _host(address) -> str:
     return address[0] if isinstance(address, tuple) else str(address)
+
+
+@pytest.fixture(autouse=True)
+def news_demo_mode(monkeypatch):
+    monkeypatch.setenv("NEWS_DATA_MODE", "demo")
 
 
 @pytest.fixture(autouse=True)

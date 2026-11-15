@@ -94,7 +94,7 @@ class GoogleNewsSource:
 
 
 class FixtureSource:
-    """The demo scenario's fictional articles (data/news.json) as one more source. An article
+    """The demo scenario's fictional articles (data/news.json): the only source in demo mode. An article
     matches when the query names one of its companies, or when every query word appears in it."""
 
     name = "demo_fixture"
@@ -102,19 +102,28 @@ class FixtureSource:
     def __init__(self, path: Path):
         self.path = path
 
+    def latest(self) -> date | None:
+        """The scenario's last day: demo runs use it as today (the scenario is set in a fixed time)."""
+        if not self.path.exists():
+            return None
+        dates = [a["date"] for a in json.loads(self.path.read_text(encoding="utf-8"))["articles"]]
+        return date.fromisoformat(max(dates)) if dates else None
+
     def search(self, query: str, since: date) -> list[Article]:
         if not self.path.exists():
             return []
         terms, q = _terms(query), query.lower()
         out = []
         for a in json.loads(self.path.read_text(encoding="utf-8"))["articles"]:
+            if date.fromisoformat(a["date"]) < since:
+                continue
             text = " ".join([a["headline"], a["summary"], *a.get("companies", [])]).lower()
             named = any(c.lower() in q for c in a.get("companies", []))
             if named or (terms and all(t in text for t in terms)):
                 out.append(Article(a["id"], a["headline"], a["summary"], a.get("url", ""), a["source"], a["date"],
                                    self.name, {"risk": a.get("risk"), "key_facts": a.get("key_facts", []),
                                                "companies": a.get("companies", [])}))
-        return out  # fictional articles keep their dates: the scenario is set in a fixed time
+        return out
 
 
 # ── 3. Filter ───────────────────────────────────────────────────────────────

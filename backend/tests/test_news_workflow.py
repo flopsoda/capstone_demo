@@ -128,18 +128,35 @@ def test_collected_store_is_read_next_to_the_fixture(tmp_path):
     assert analyze_company_risk_news("최근 악재", "뉴로엣지", collected=tmp_path / "none.json")["matched"] == 3
 
 
-def test_tool_reads_the_collected_store_beside_its_fixture(tmp_path):
+def test_demo_mode_reads_the_fixture_and_live_mode_only_real_news(tmp_path, monkeypatch):
     from app.library.tools.run_company_risk_news_analysis import make_run_company_risk_news_analysis
     from app.library.workflows.news_collection import COLLECTED_FILE
 
     fixture = tmp_path / "news.json"
     fixture.write_text((DATA_DIR / "news.json").read_text(encoding="utf-8"), encoding="utf-8")
     tool = make_run_company_risk_news_analysis(fixture)
-    assert tool.invoke({"query": "리스크", "company": "뉴로엣지"})["matched"] == 3
+    demo = tool.invoke({"query": "리스크", "company": "뉴로엣지"})
+    assert demo["dataset"] == "demo" and demo["matched"] == 3
+
+    monkeypatch.setenv("NEWS_DATA_MODE", "live")
+    live = tool.invoke({"query": "리스크", "company": "뉴로엣지"})
+    assert live["dataset"] == "live" and live["matched"] == 0  # no fictional article in live mode
     store = tmp_path / COLLECTED_FILE
     store.parent.mkdir()
     store.write_text(json.dumps({"articles": [{
         "id": "LIVE-x", "date": "2026-10-21", "source": "s", "headline": "뉴로엣지 노조 파업 예고", "summary": "",
         "companies": ["뉴로엣지"], "key_facts": ["파업 예고"], "risk": {"category": "labor_dispute", "label": "노사 분쟁", "level": "MEDIUM"},
     }]}, ensure_ascii=False), encoding="utf-8")
-    assert tool.invoke({"query": "리스크", "company": "뉴로엣지"})["matched"] == 4  # picked up without a restart
+    live = tool.invoke({"query": "리스크", "company": "뉴로엣지"})
+    assert [r["source"]["id"] for r in live["risks"]] == ["LIVE-x"]
+
+
+def test_news_mode_defaults_to_live(monkeypatch):
+    from app.library.workflows.news.mode import data_mode
+
+    monkeypatch.delenv("NEWS_DATA_MODE")
+    assert data_mode() == "live"
+    monkeypatch.setenv("NEWS_DATA_MODE", "DEMO")
+    assert data_mode() == "demo"
+    monkeypatch.setenv("NEWS_DATA_MODE", "something")
+    assert data_mode() == "live"
