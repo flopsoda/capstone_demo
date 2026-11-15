@@ -1,9 +1,21 @@
+"""M&A What-if 시나리오: 기업 데이터 변경 함수와 변경 전후 비교 workflow.
 
-"""M&A What-if 시나리오용 기업 데이터 변경 함수."""
+`review_what_if(..., path=...)`가 run_mna_review Tool의 What-if 경로 진입점이다.
+"""
 
 from copy import deepcopy
 from math import isfinite
+from pathlib import Path
 from typing import Any
+
+from .mna_review import (
+    PERSONAS,
+    RECOMMENDATION_LABELS,
+    evaluate_all,
+    extract_context_signals,
+    find_company,
+    summarize_inputs,
+)
 
 
 def apply_price_scenario(
@@ -110,6 +122,34 @@ def apply_customer_scenario(
     return scenario_company
 
 
+def apply_scenarios(
+    company: dict[str, Any],
+    *,
+    asking_trillion_krw: float | None = None,
+    operating_margin: float | None = None,
+    revenue_share: float | None = None,
+) -> dict[str, Any]:
+    """주어진 변경 조건을 모두 적용한 기업 데이터 복사본. 원본은 바꾸지 않는다."""
+
+    scenario_company = deepcopy(company)
+
+    if asking_trillion_krw is not None:
+        scenario_company = apply_price_scenario(
+            scenario_company, asking_trillion_krw
+        )
+
+    if operating_margin is not None:
+        scenario_company = apply_profitability_scenario(
+            scenario_company, operating_margin
+        )
+
+    if revenue_share is not None:
+        scenario_company = apply_customer_scenario(
+            scenario_company, revenue_share
+        )
+
+    return scenario_company
+
 
 def compare_mna_scenarios(
     company: dict[str, Any],
@@ -138,23 +178,12 @@ def compare_mna_scenarios(
         raise ValueError("최소 하나 이상의 변경 조건이 필요합니다.")
 
     # 원본 기업 데이터를 보존한다.
-    scenario_company = deepcopy(company)
-
-    if asking_trillion_krw is not None:
-        scenario_company = apply_price_scenario(
-            scenario_company, asking_trillion_krw
-        )
-
-    if operating_margin is not None:
-        scenario_company = apply_profitability_scenario(
-            scenario_company, operating_margin
-        )
-
-    if revenue_share is not None:
-        scenario_company = apply_customer_scenario(
-            scenario_company, revenue_share
-        )
-
+    scenario_company = apply_scenarios(
+        company,
+        asking_trillion_krw=asking_trillion_krw,
+        operating_margin=operating_margin,
+        revenue_share=revenue_share,
+    )
 
     # 기존 회의 맥락을 변경 전후 평가에 동일하게 반영한다.
     context_signals = extract_context_signals(context)
@@ -280,3 +309,89 @@ def compare_persona_scenarios(
     result["changes"] = changes
 
     return result
+
+
+def review_what_if(
+    query: str,
+    company: str,
+    persona: str = "CEO",
+    context: str | None = None,
+    *,
+    path: Path,
+    asking_trillion_krw: float | None = None,
+    operating_margin: float | None = None,
+    revenue_share: float | None = None,
+) -> dict[str, Any]:
+    """What-if 진입점 (run_mna_review의 변경 조건 경로). `path`는 system이 바인딩한 기업 store.
+
+    변경 전후 비교(compare_persona_scenarios)에 기존 평가 결과와 같은 이름의 필드
+    (inputs · assessments · recommendation · conditions …)를 더해 돌려준다. 모르는 기업 ·
+    지원하지 않는 persona · 잘못된 변경 값은 예외 대신 found: false / error로 돌려준다.
+    """
+
+    target = find_company(company, path)
+
+    if target is None:
+        return {
+            "query": query,
+            "company": company,
+            "found": False,
+            "message": f"'{company}'에 대한 기업 데이터가 없습니다.",
+        }
+
+    if persona.upper() not in ("CEO", "CFO", "CTO"):
+        return {
+            "error": f"지원하지 않는 persona: {persona!r}",
+            "supported_personas": ["CEO", "CFO", "CTO"],
+        }
+
+    changes = {
+        "asking_trillion_krw": asking_trillion_krw,
+        "operating_margin": operating_margin,
+        "revenue_share": revenue_share,
+    }
+
+    try:
+        result = compare_persona_scenarios(
+            target, persona=persona, context=context, **changes
+        )
+    except ValueError as exc:
+        return {
+            "query": query,
+            "company": target["name"],
+            "found": True,
+            "error": str(exc),
+            "error_type": "INVALID_SCENARIO",
+        }
+
+    scenario_company = apply_scenarios(target, **changes)
+
+    # 기존 평가 결과와 같은 이름의 필드 (UI · Agent가 같은 방식으로 읽는다)
+    assessments = evaluate_all(
+        scenario_company,
+        extract_context_signals(context),
+    )
+    primary = [assessments[key] for key in PERSONAS[result["persona"]]["criteria"]]
+
+    return {
+        **result,
+
+        # What-if 변경 전후 원본 데이터
+        "before_inputs": summarize_inputs(target),
+        "after_inputs": summarize_inputs(scenario_company),
+
+        "query": query,
+        "found": True,
+        "persona_focus": [item["label"] for item in primary],
+        "inputs": summarize_inputs(scenario_company),
+        "assessments": primary,
+        "recommendation": result["after_recommendation"],
+        "recommendation_label": RECOMMENDATION_LABELS[
+            result["after_recommendation"]
+        ],
+        "conditions": result["after_conditions"],
+
+        # What-if 결과 구분
+        "mode": "what_if",
+        "notice": "변경 조건에 따른 규칙 기반 M&A 분석 결과입니다.",
+    }

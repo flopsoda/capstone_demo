@@ -159,6 +159,23 @@ def test_a2a_tool_reports_an_unreachable_peer(monkeypatch):
     assert info.value.agent == "k_super" and "연결할 수 없습니다" in str(info.value)
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, "http://localhost:8000/api/a2a/run"),  # unset
+        ("", "http://localhost:8000/api/a2a/run"),  # empty, as .env.example ships it
+        ("  ", "http://localhost:8000/api/a2a/run"),
+        (" http://k-electronics:8000/api/a2a/run ", "http://k-electronics:8000/api/a2a/run"),
+    ],
+)
+def test_k_electronics_a2a_url_falls_back_to_the_default_when_unset_or_empty(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("K_ELECTRONICS_A2A_URL", raising=False)
+    else:
+        monkeypatch.setenv("K_ELECTRONICS_A2A_URL", value)
+    assert a2a_tool.k_electronics_a2a_url() == expected
+
+
 def _stream(client, path, request):
     with client.stream("POST", path, json={"request": request}) as res:
         assert res.status_code == 200, res.text

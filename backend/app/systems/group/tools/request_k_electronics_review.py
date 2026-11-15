@@ -23,7 +23,15 @@ PEER_AGENT = "k_super"  # the K Electronics system's Super Agent, as its A2A sur
 PEER_SYSTEM = "k_electronics"
 PEER_DISPLAY = "K전자"
 
-K_ELECTRONICS_A2A_URL = os.environ.get("K_ELECTRONICS_A2A_URL", "http://localhost:8000/api/a2a/run")
+DEFAULT_K_ELECTRONICS_A2A_URL = "http://localhost:8000/api/a2a/run"
+
+
+def k_electronics_a2a_url() -> str:
+    """K's A2A surface. Unset or empty K_ELECTRONICS_A2A_URL (as .env.example ships it) means the default."""
+    return os.environ.get("K_ELECTRONICS_A2A_URL", "").strip() or DEFAULT_K_ELECTRONICS_A2A_URL
+
+
+K_ELECTRONICS_A2A_URL = k_electronics_a2a_url()
 
 
 def make_client() -> httpx.Client:
