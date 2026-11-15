@@ -113,6 +113,10 @@ interface NewsTopic {
   summary: string;
   key_facts: string[];
   sentiment: "positive" | "negative" | "neutral";
+  impact?: "positive" | "negative" | "mixed" | "neutral" | "unknown";
+  implication?: string;
+  divergent_coverage?: boolean;
+  stance_by_outlet?: { outlet: string; stance: string }[];
   risk?: { label: string; level: string } | null;
   articles: { title: string; outlet: string; date: string; url?: string; content_level?: string }[];
 }
@@ -140,9 +144,17 @@ const SENTIMENT_BADGE: Record<string, { text: string; tone: BadgeTone }> = {
 };
 
 const CONTENT_LEVEL_TEXT: Record<string, string> = { full: "본문", partial: "본문 일부", snippet: "요약", title: "제목만" };
+const IMPACT_BADGE: Record<string, { text: string; tone: BadgeTone }> = {
+  positive: { text: "긍정", tone: "ok" },
+  negative: { text: "부정", tone: "high" },
+  mixed: { text: "엇갈림", tone: "warn" },
+  neutral: { text: "중립", tone: "info" },
+  unknown: { text: "판단 보류", tone: "info" },
+};
+const STANCE_TEXT: Record<string, string> = { favorable: "우호", critical: "비판", neutral: "중립", unknown: "판단 불가" };
 
 function newsTopicBlocks(t: NewsTopic): MessageBlock[] {
-  const mood = SENTIMENT_BADGE[t.sentiment] ?? { text: t.sentiment, tone: "info" as const };
+  const mood = (t.impact ? IMPACT_BADGE[t.impact] : SENTIMENT_BADGE[t.sentiment]) ?? { text: t.sentiment, tone: "info" as const };
   const risk = t.risk ? ` · ${t.risk.label} ${RISK_LEVEL_BADGE[t.risk.level]?.text ?? t.risk.level}` : "";
   const lead = t.articles[0];
   const sources = t.articles
@@ -159,6 +171,10 @@ function newsTopicBlocks(t: NewsTopic): MessageBlock[] {
     },
     { kind: "text", text: t.summary },
     ...(t.key_facts.length ? [{ kind: "list" as const, items: t.key_facts }] : []),
+    ...(t.implication ? [{ kind: "text" as const, text: `시사점: ${t.implication}` }] : []),
+    ...(t.divergent_coverage && t.stance_by_outlet
+      ? [{ kind: "label" as const, text: `보도 관점 엇갈림: ${t.stance_by_outlet.map((s) => `${s.outlet} ${STANCE_TEXT[s.stance] ?? s.stance}`).join(" · ")}` }]
+      : []),
     ...(sources.length ? [{ kind: "list" as const, items: sources }] : []),
   ];
 }

@@ -5,7 +5,8 @@ Shared library: the system that owns the data binds it with
 make_run_company_risk_news_analysis(fixture, store) and registers the Tool in its own Registry.
 News is public, so the call does not depend on who asks. Demo mode (NEWS_DATA_MODE=demo) reads
 the system's fixture only; live mode (the default) runs the news pipeline for the company and reads
-only real news from the system's news store. The result keeps the `risks[]` contract either way.
+only real news from the system's news store; the model reads each article's risk and stance toward
+the company (news/analysis.py, cached per version). The result keeps the `risks[]` contract either way.
 """
 
 from __future__ import annotations
@@ -17,14 +18,31 @@ from langchain_core.tools import BaseTool, tool
 
 from ..workflows.company_risk_news_analysis import analyze_company_risk_news, risk_articles
 from ..workflows.meeting_store import StoreUnavailable
+from ..workflows.news.analysis import analyze_with_store
 from ..workflows.news.feeds import DEFAULT_FEEDS, load_feeds
 from ..workflows.news.fetch import Fetcher
 from ..workflows.news.mode import DEMO, data_mode
 from ..workflows.news.pipeline import gather
 from ..workflows.news.store import NewsStore
+from ..workflows.news.text import target as target_of
+from . import run_news_briefing as briefing_tool  # its _llm(): one place for the runtime model + timeout
 
 TOOL_NAME = "run_company_risk_news_analysis"
 LIVE_DAYS = 30  # a company's risks: the last month of stored news
+ANALYZED = 40  # articles the model reads per call of the Tool (the rest keep the keyword rules)
+
+
+def _analysis_input(row: dict[str, Any]) -> dict[str, Any]:
+    body, notice = row.get("body") or "", row.get("usage_notice")
+    if body and not notice:
+        text, basis = body[:600], "body"
+    elif body:
+        text, basis = body[:200], "lead"
+    elif row.get("summary"):
+        text, basis = row["summary"][:300], "snippet"
+    else:
+        text, basis = row["title"], "title"
+    return {"id": row["id"], "title": row["title"], "outlet": row["outlet"], "text": text, "basis": basis}
 
 
 def make_run_company_risk_news_analysis(path: Path, store: NewsStore | None = None, *, feeds: Path = DEFAULT_FEEDS,
@@ -54,7 +72,11 @@ def make_run_company_risk_news_analysis(path: Path, store: NewsStore | None = No
             except StoreUnavailable as e:
                 result = {"query": query, "company": company, "matched": 0, "risks": [], "error": str(e)}
             else:
-                result = analyze_company_risk_news(query, company, topics, articles=risk_articles(found["articles"], company))
+                rows = found["articles"]
+                # The model reads the articles that name the company in the headline first, newest first.
+                ranked = sorted(rows, key=lambda r: (company.lower() not in r["title"].lower(), -r["published_at"].timestamp()))
+                analyses = analyze_with_store([_analysis_input(r) for r in ranked[:ANALYZED]], target_of(company), briefing_tool._llm(), store)
+                result = analyze_company_risk_news(query, company, topics, articles=risk_articles(rows, company, analyses))
                 result.update(freshness=found["freshness"], coverage=found["coverage"])
         return {"dataset": data_mode(), **result}
 

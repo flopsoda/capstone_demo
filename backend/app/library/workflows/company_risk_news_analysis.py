@@ -101,8 +101,14 @@ def group_issues(articles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return list(groups.values())
 
 
+STANCE_SENTIMENT = {"favorable": "positive", "critical": "negative", "neutral": "neutral", "unknown": "neutral"}
+
+
 def _sentiment(article: dict[str, Any]) -> str:
-    """negative (a risk) | positive | neutral. Fixture articles without a risk are good news."""
+    """How the article reports the company. Live articles carry their own stance (independent of any
+    risk they report); fixture articles: a risk is negative, no risk is good news."""
+    if article.get("stance"):
+        return STANCE_SENTIMENT.get(article["stance"], "neutral")
     if article.get("risk"):
         return "negative"
     return article.get("sentiment", "positive")
@@ -267,25 +273,35 @@ def _facts(text: str, limit: int = 2) -> list[str]:
     return [s[:90] for s in sentences[:limit]]
 
 
-def risk_articles(rows: list[dict[str, Any]], company: str) -> list[dict[str, Any]]:
+def risk_articles(rows: list[dict[str, Any]], company: str,
+                  analyses: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Stored articles (news/store rows, found by searching for `company`) → this workflow's article
-    shape, labeled by the keyword rules. An article whose headline does not name the company only
-    mentions it in passing: neutral, never a risk or good news of that company. The event an article
-    belongs to is its matter (`issue`)."""
+    shape. With `analyses` (news/analysis.py, toward the company) the article's own risk, stance and
+    facts are used; without, keyword rules — and an article whose headline does not name the company
+    only mentions it in passing (neutral, never a risk or good news of that company). The event an
+    article belongs to is its matter (`issue`)."""
     out = []
     for r in rows:
         title, summary, body = r["title"], r.get("summary") or "", r.get("body") or ""
-        named = company.lower() in title.lower()
-        text = f"{title} {summary} {body[:1500]}"
-        risk = rule_risk(text, title) if named else None
-        sentiment = "negative" if risk else (rule_sentiment(text) if named else "neutral")
-        if sentiment == "negative" and not risk:
-            sentiment = "neutral"
-        out.append({
+        a = (analyses or {}).get(r["id"])
+        if a is not None:
+            risk, stance, facts, by = a.get("risk"), a["stance"], a.get("key_facts") or [title], a["method"]
+            sentiment = STANCE_SENTIMENT.get(stance, "neutral")
+        else:
+            named = company.lower() in title.lower()
+            text = f"{title} {summary} {body[:1500]}"
+            risk = rule_risk(text, title) if named else None
+            sentiment = "negative" if risk else (rule_sentiment(text) if named else "neutral")
+            if sentiment == "negative" and not risk:
+                sentiment = "neutral"
+            stance, facts, by = None, _facts(body or summary) or [title], "rule"
+        article = {
             "id": r["id"], "date": r["published_at"].astimezone(_KST).date().isoformat(), "source": r["outlet"],
             "headline": title, "summary": summary or body[:200], "companies": [company], "risk": risk,
-            "sentiment": sentiment, "key_facts": _facts(body or summary) or [title], "url": r["url"],
-            "labeled_by": "rule", "issue": str(r["event_id"]) if r.get("event_id") else None,
-            "content_level": r.get("content_level"),
-        })
+            "sentiment": sentiment, "key_facts": facts, "url": r["url"], "labeled_by": by,
+            "issue": str(r["event_id"]) if r.get("event_id") else None, "content_level": r.get("content_level"),
+        }
+        if stance:
+            article["stance"] = stance
+        out.append(article)
     return out

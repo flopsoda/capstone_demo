@@ -137,3 +137,43 @@ def test_a_wire_story_run_by_two_outlets_counts_once(news_db):
     top = out["topics"][0]
     assert top["article_count"] == 2 and top["outlet_count"] == 2 and top["independent_outlet_count"] == 1  # one wire story, credited to 연합뉴스
     assert top["evidence"] == {"body": 2, "snippet": 0, "title": 0}
+
+
+def test_article_analyses_are_stored_and_reused(news_db):
+    from tests.test_news_briefing import fake_llm
+
+    calls: list[str] = []
+    first = run_live_briefing("가온반도체", store=news_db, feeds=FEEDS, fetcher=Fetcher(web(), host_gap=0), now=NOW,
+                              budget=BUDGET, llm=fake_llm({}, calls=calls))
+    assert calls.count("article") == 1 and first["article_analysis"] == ["llm"]
+    calls.clear()
+    again = run_live_briefing("가온반도체", store=news_db, feeds=FEEDS, fetcher=Fetcher(web(), host_gap=0),
+                              now=NOW + timedelta(minutes=5), budget=BUDGET, llm=fake_llm({}, calls=calls))
+    assert calls == ["event"]  # articles already analyzed for this target and version
+    with news_db.connect() as conn:
+        rows = conn.execute("SELECT target, analyzer_version, stance, basis FROM news_article_analysis").fetchall()
+        events = conn.execute("SELECT event_id::text AS id, impact FROM news_event_analysis").fetchall()
+    assert {r["target"] for r in rows} == {"가온반도체"} and {r["analyzer_version"] for r in rows} == {"article-v1"}
+    assert {r["basis"] for r in rows} == {"body", "snippet"} and all(r["stance"] == "unknown" for r in rows if r["basis"] == "snippet")
+    assert {e["id"] for e in events} == {t["event_id"] for t in again["topics"]}
+
+
+def test_the_live_risk_view_reads_each_articles_own_risk_and_stance(news_db, monkeypatch, tmp_path):
+    from app.library.tools import run_news_briefing as briefing_module
+
+    def llm(system, user):  # the customer cut is a risk to 가온반도체; the plant is good news, no risk
+        arts = json.loads(user.split("\n\n기사:\n", 1)[1])
+        return json.dumps([{"id": a["id"], "stance": "critical" if "물량" in a["title"] else "favorable", "article_type": "report",
+                            "risk": {"category": "customer_concentration", "level": "HIGH"} if "물량" in a["title"] else None,
+                            "key_facts": [a["title"]]} for a in arts], ensure_ascii=False)
+
+    monkeypatch.setenv("NEWS_DATA_MODE", "live")
+    monkeypatch.setattr(briefing_module, "_llm", lambda: llm)
+    feeds = tmp_path / "feeds.json"
+    feeds.write_text(json.dumps({"feeds": [{"outlet": f.outlet, "url": f.url} for f in FEEDS]}, ensure_ascii=False), encoding="utf-8")
+    risk = make_run_company_risk_news_analysis(DATA_DIR / "news.json", news_db, feeds=feeds, fetcher=Fetcher(web(), host_gap=0))
+    r = risk.invoke({"query": "가온반도체 리스크", "company": "가온반도체"})
+    assert [(x["category"], x["level"]) for x in r["risks"]] == [("customer_concentration", "HIGH")]
+    assert [p["headline"] for p in r["positive_signals"]] == ["가온반도체 신공장 착공"]
+    tone = {o["outlet"]: (o["negative"], o["positive"]) for o in r["outlet_tone"]}
+    assert tone["가상일보"] == (1, 1)  # one critical, one favorable article: the outlet's own articles, one by one

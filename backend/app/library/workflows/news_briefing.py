@@ -5,8 +5,10 @@
              matter, then reuse everything the system's news store holds; duplicates out, events
              (persisted: an article keeps its event id)
       demo : the scenario's fictional articles (FixtureSource), grouped the same way, in memory
-      then : every event (topic) scored for importance (coverage, recency, how squarely it is about the
-             query) → analysis (an LLM when configured, rules otherwise) → a structured result
+      then : every event (topic) scored for importance (independent coverage, recency, how squarely it is
+             about the query) → news.analysis: each kept article's stance toward the target, type, risk and
+             facts (cached per version in the live store), then each event's summary, evidence-backed facts,
+             impact, implication → outlet tone from the articles' stances → a structured result
 
 `purpose` selects optional analysis steps on top of the general ones. "general" is the default;
 "risk" adds a risk category, level and check points per topic.
@@ -26,12 +28,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
-from .news import cluster
+from .news import analysis, cluster
 from .news.feeds import KST, Feed
 from .news.fetch import Fetcher
-from .news.labels import CATEGORY_LABELS, CHECK_POINTS, parse_json_object, rule_risk, rule_sentiment
 from .news.pipeline import REQUEST_BUDGET, Budget, gather, lead_of
 from .news.store import NewsStore
+from .news.text import target as target_of
 from .news.text import terms as query_terms
 
 LLM = Callable[[str, str], str]
@@ -39,6 +41,7 @@ Log = Callable[[str, dict], None]
 
 PURPOSES = ("general", "risk")
 TEXT_FOR_LLM = 600  # characters of an article's text the analysis reads
+ARTICLES_PER_TOPIC = 6  # articles of a topic the article-level analysis reads
 
 
 # ── Articles ────────────────────────────────────────────────────────────────
@@ -169,76 +172,6 @@ def adjusted_importance(t: dict[str, Any]) -> float:
     return round(max(0.0, min(100.0, score)), 1)
 
 
-# ── Analyze ─────────────────────────────────────────────────────────────────
-
-ANALYZE_SYSTEM = """너는 경영진에게 뉴스를 보고하는 분석가다. 주제(topic)별로 묶인 기사 목록을 읽고 JSON 객체 하나만 출력한다. 설명 문장은 쓰지 않는다.
-{{"topics": [{{"id": 주제 id, "summary": 무슨 일인지 1~2문장, "key_facts": 기사에 적힌 사실 1~3개,
-              "sentiment": "positive" | "negative" | "neutral" (요청 대상에게 좋은 소식/나쁜 소식/중립),
-              "importance": "high" | "medium" | "low"{risk_fields}}}],
- "trend": 전체 기사에서 보이는 흐름 2~3문장,
- "so_what": 요청 목적({purpose}) 관점에서 경영진이 알아야 할 시사점 2~3문장}}
-- 기사에 없는 사실이나 수치를 만들지 않는다. 추측성 보도와 칼럼은 그렇다고 밝힌다.
-- 기사의 text는 본문 일부(basis "body"), 본문 앞부분("lead"), 요약("snippet"), 제목("title") 중 하나다. 근거가 약한 기사로 단정하지 않는다.
-- 모든 문장은 한국어로만 쓴다 (중국어·일본어 한자 표현, 영어 문장 금지. 고유명사와 약어는 그대로)."""
-
-RISK_FIELDS = (',\n              "risk": 리스크가 아니면 null, 리스크면 {"category": '
-               + " | ".join(f'"{k}"' for k in CATEGORY_LABELS) + ', "level": "HIGH" | "MEDIUM" | "LOW"}')
-
-
-def analyze(topics: list[dict[str, Any]], query: str, purpose: str, llm: LLM | None) -> tuple[str, str, str]:
-    """Fills summary, key_facts, sentiment (and risk for purpose="risk") on each topic in place.
-    Returns (trend, so_what, method)."""
-    for t in topics:  # the rule pass first: every field has a value even if the model fails
-        lead = t["articles"][0]
-        text = " ".join(a["title"] + " " + a["text"] for a in t["articles"])
-        hint = t.pop("_hint", None) or {}
-        t["summary"] = lead["title"]
-        t["key_facts"] = hint.get("key_facts") or list(dict.fromkeys(a["title"] for a in t["articles"]))[:3]
-        t["sentiment"] = "negative" if hint.get("risk") else rule_sentiment(text)
-        if purpose == "risk":
-            risk = hint.get("risk") or rule_risk(text, lead["title"])
-            t["risk"] = risk
-            t["check_points"] = list(CHECK_POINTS.get(risk["category"], ())) if risk else []
-    if not (llm and topics):
-        return "", "", "rule"
-
-    payload = [{"id": t["id"], "articles": [{"title": a["title"], "text": a["text"], "basis": a["basis"], "outlet": a["outlet"],
-                                             "date": a["date"]} for a in t["articles"][:5]]} for t in topics]
-    system = ANALYZE_SYSTEM.format(purpose="리스크 점검" if purpose == "risk" else "일반 동향 파악",
-                                   risk_fields=RISK_FIELDS if purpose == "risk" else "")
-    user = f"요청: {query}\n\n주제별 기사:\n{json.dumps(payload, ensure_ascii=False)}"
-    try:
-        answer = parse_json_object(llm(system, user))
-    except Exception:  # network, quota, model errors: the rule pass stands
-        answer = None
-    if not answer:
-        return "", "", "rule"
-    by_id = {t["id"]: t for t in topics}
-    for row in answer.get("topics") or []:
-        t = by_id.get(row.get("id")) if isinstance(row, dict) else None
-        if not t:
-            continue
-        if isinstance(row.get("summary"), str) and row["summary"].strip():
-            t["summary"] = row["summary"].strip()
-        facts = [str(f).strip() for f in row.get("key_facts") or [] if str(f).strip()]
-        if facts:
-            t["key_facts"] = facts[:3]
-        if row.get("sentiment") in ("positive", "negative", "neutral"):
-            t["sentiment"] = row["sentiment"]
-        if row.get("importance") in ("high", "medium", "low"):
-            t["importance_llm"] = row["importance"]
-        if purpose == "risk" and "risk" in row:
-            r = row["risk"]
-            if r is None:
-                t["risk"], t["check_points"] = None, []
-            elif isinstance(r, dict) and r.get("category") in CATEGORY_LABELS and r.get("level") in ("HIGH", "MEDIUM", "LOW"):
-                t["risk"] = {"category": r["category"], "label": CATEGORY_LABELS[r["category"]], "level": r["level"]}
-                t["check_points"] = list(CHECK_POINTS.get(r["category"], ()))
-    trend = answer.get("trend") if isinstance(answer.get("trend"), str) else ""
-    so_what = answer.get("so_what") if isinstance(answer.get("so_what"), str) else ""
-    return trend.strip(), so_what.strip(), "llm"
-
-
 # ── Brief: events → result ──────────────────────────────────────────────────
 
 def _article_out(a: Article) -> dict[str, Any]:
@@ -252,16 +185,32 @@ def _article_out(a: Article) -> dict[str, Any]:
     return out
 
 
+def article_analyses(topics: list[dict[str, Any]], by_id: dict[str, Article], target: str, llm: LLM | None,
+                     store: NewsStore | None) -> dict[str, dict[str, Any]]:
+    """Per-article analysis of the kept topics' articles: the fixture's labels (demo), the store's earlier
+    analysis of the same version (live), the model for the rest, rules when there is none."""
+    wanted = [a for t in topics for a in t["articles"][:ARTICLES_PER_TOPIC]]
+    out: dict[str, dict[str, Any]] = {}
+    for a in wanted:
+        hint = by_id[a["id"]].hint
+        if hint is not None:
+            out[a["id"]] = analysis.fixture_article(a, hint)
+    out.update(analysis.analyze_with_store([a for a in wanted if a["id"] not in out], target, llm, store))
+    return out
+
+
 def brief(articles: list[Article], assignment: dict[str, str], query: str, *, purpose: str, today: date, since: date,
-          limit: int, llm: LLM | None, log: Log) -> dict[str, Any]:
+          limit: int, llm: LLM | None, log: Log, store: NewsStore | None = None) -> dict[str, Any]:
     by_id = {a.id: a for a in articles}
+    target = target_of(query)
     groups = cluster.groups([a.item() for a in articles], assignment)
     # Recency counts from the newest article: live news ends today, the fictional scenario ends on its
     # own last day, and either way the latest story scores as new.
     as_of = min(today, max((date.fromisoformat(a.date) for a in articles), default=today))
     topics = []
     for g in groups:
-        members = sorted((by_id[i.id] for i in g), key=lambda a: (a.date, a.id), reverse=True)
+        members = sorted((by_id[i.id] for i in g), key=lambda a: (a.content_level not in ("full", "partial"), a.date, a.id))
+        members.sort(key=lambda a: a.date, reverse=True)
         topic = {
             "importance": importance(members, query, as_of),
             "article_count": len(members),
@@ -271,7 +220,6 @@ def brief(articles: list[Article], assignment: dict[str, str], query: str, *, pu
             "first_reported": min(a.date for a in members),
             "last_reported": max(a.date for a in members),
             "articles": [_article_out(a) for a in members],
-            "_hint": next((a.hint for a in members if a.hint), None),
         }
         if members[0].event_id:
             topic["event_id"] = members[0].event_id
@@ -284,15 +232,30 @@ def brief(articles: list[Article], assignment: dict[str, str], query: str, *, pu
         t["id"] = f"topic-{n}"
     log("filter", {"articles": len(articles), "topics": topic_count, "kept": len(topics)})
 
-    trend, so_what, method = analyze(topics, query, purpose, llm)
+    analyses = article_analyses(topics, by_id, target, llm, store)
+    trend, so_what, method = analysis.analyze_events(topics, analyses, query, purpose, llm)
+    tone_rows = []
     for t in topics:
         t["importance"] = adjusted_importance(t)
+        t["sentiment"] = analysis.SENTIMENT_OF_IMPACT[t["impact"]]
+        t["key_facts"] = [f["text"] for f in t["evidence_facts"]]
+        t["stance_by_outlet"], t["divergent_coverage"] = analysis.stance_by_outlet(t["articles"], analyses)
         t["timeline"] = [{"date": a["date"], "outlet": a["outlet"], "title": a["title"]}
                          for a in sorted(t["articles"], key=lambda a: a["date"])]
         for a in t["articles"]:
             a.pop("text", None)
+            r = analyses.get(a["id"])
+            if r:
+                a.update(stance=r["stance"], article_type=r["article_type"])
+                tone_rows.append((a["outlet"], r["stance"], bool(a.get("syndicated_from")) or r["article_type"] == "wire_copy"))
     topics.sort(key=lambda t: t["importance"], reverse=True)  # ids stay: the LLM answered by id
-    log("analyze", {"method": method})
+    log("analyze", {"method": method, "articles": len(analyses)})
+    if store is not None:
+        store.save_event_analyses({
+            "event_id": t["event_id"], "target": target, "analyzer_version": analysis.EVENT_VERSION, "summary": t["summary"],
+            "key_facts": t["evidence_facts"], "impact": t["impact"], "risk_category": (t.get("risk") or {}).get("category"),
+            "risk_level": (t.get("risk") or {}).get("level"), "importance_llm": t.get("importance_llm"),
+            "implication": t.get("implication", ""), "method": method} for t in topics if t.get("event_id"))
     levels: dict[str, int] = {}
     for a in articles:
         levels[a.content_level] = levels.get(a.content_level, 0) + 1
@@ -304,10 +267,12 @@ def brief(articles: list[Article], assignment: dict[str, str], query: str, *, pu
         "content_levels": levels,
         "topic_count": topic_count,
         "analysis": method,
+        "article_analysis": sorted({r["method"] for r in analyses.values()}),
         "trend": trend,
         "so_what": so_what,
         "topics": topics,
-        "negative_alerts": [t["id"] for t in topics if t["sentiment"] == "negative" and t["importance"] >= 50],
+        "negative_alerts": [t["id"] for t in topics if t["impact"] == "negative" and t["importance"] >= 50],
+        "outlet_tone": analysis.outlet_tone(tone_rows),
     }
 
 
@@ -359,7 +324,7 @@ def run_live_briefing(query: str, *, store: NewsStore, feeds: list[Feed], fetche
     articles = [article_from_row(r) for r in found["articles"]]
     assignment = {a.id: a.event_id for a in articles}
     result = brief(articles, assignment, query, purpose=purpose, today=now.date(), since=(now - timedelta(days=days)).date(),
-                   limit=limit, llm=llm, log=log)
+                   limit=limit, llm=llm, log=log, store=store)
     log("respond", {"topics": len(result["topics"])})
     return {**result, "duplicates_removed": found["duplicates"], "freshness": found["freshness"], "coverage": found["coverage"]}
 

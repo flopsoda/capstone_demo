@@ -198,7 +198,8 @@ backend/
         news/                        뉴스 파이프라인(Tool · 주기 수집 공용): mode.py(NEWS_DATA_MODE) · feeds.py(언론사 RSS/Atom/뉴스 sitemap, feeds.json)
                                      · fetch.py(robots.txt · 시간 제한 · 차단 감지) · extract.py(trafilatura 본문 + 정제 + content_level)
                                      · store.py(NewsStore: system별 schema, sql/NNN_*.sql 버전 관리, KG용 조회) · pipeline.py(ingest · gather)
-                                     · cluster.py(중복 · 영속 사건 배정) · labels.py(리스크 분류 · 확인 사항 · 규칙) · text.py · collect.py(주기 수집 CLI)
+                                     · cluster.py(중복 · 전재 · 영속 사건 배정) · analysis.py(기사별 보도 관점 · 리스크, 사건 영향 · 근거 · 시사점, 매체별 논조)
+                                     · labels.py(리스크 분류 · 확인 사항 · 규칙) · text.py · collect.py(주기 수집 CLI)
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
         mna_scenario.py              What-if: review_what_if(path) — 인수가격·영업이익률·고객 비중 변경 전후 평가 · 권고 · 조건 비교 (context 신호 반영)
         mna_executive_summary.py     persona "ALL": review_executive_summary(path) — CEO·CFO·CTO 평가 통합, 핵심 위험·기회·인수 조건 · 권고

@@ -20,10 +20,12 @@ NEWS_BRIEFING = Skill(
   있으니, 본문 없이 요약·제목만 있는 기사에 기댄 내용은 단정하지 않는다.
 - 최종 응답 형식 (순서 고정):
   1) 한눈에 보기 — trend가 있으면 그대로 요약해 2~3문장. 없으면 상위 주제로 한두 문장.
-  2) 주요 이슈 — 중요도(importance) 높은 순으로 주제마다 한 단락: 무슨 일인지(summary), 근거 사실(key_facts, 날짜 포함),
-     긍정/부정, 보도 매체 수(outlet_count), 근거 기사(매체·날짜). purpose가 "risk"면 리스크 종류·수준과 check_points 중 관련 있는 확인 사항.
+  2) 주요 이슈 — 중요도(importance) 높은 순으로 주제마다 한 단락: 무슨 일인지(summary), 근거 사실(evidence_facts, 날짜 포함),
+     대상에 대한 영향(impact: 긍정/부정/엇갈림/중립), 경영적 의미(implication, 있을 때), 보도 매체 수(independent_outlet_count가 더 작으면
+     "독립 보도 n곳"), 근거 기사(매체·날짜). divergent_coverage가 true면 stance_by_outlet으로 "매체별로 보도 관점이 엇갈림
+     (A 우호, B 비판)"을 한 줄 덧붙인다. purpose가 "risk"면 리스크 종류·수준과 check_points 중 관련 있는 확인 사항.
   3) 시사점(So-What) — so_what이 있으면 그 내용을, 없으면 주요 이슈에서 근거가 분명한 것만 1~2문장.
   4) 알림 — negative_alerts에 든 주제가 있으면 "부정 기사 알림"으로 한 줄씩.
-  5) 매체별 논조 — 결과에 outlet_tone이 있고 "판단 보류"가 아닌 매체가 있을 때만 한 줄.
+  5) 매체별 논조 — outlet_tone(기사별 보도 관점을 매체마다 모은 것)에서 "판단 보류"가 아닌 매체가 있을 때만 한 줄.
 - 불필요한 서론과 결론은 생략한다.""",
 )

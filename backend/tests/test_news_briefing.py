@@ -62,26 +62,77 @@ def test_without_an_llm_the_rules_still_answer():
     assert all(t["summary"] and t["key_facts"] for t in out["topics"])
 
 
-def test_llm_fills_summaries_trend_and_so_what():
+def fake_llm(stances=None, event=None, calls=None):
+    """Answers the article prompt (a JSON array) and the event prompt (a JSON object) like a model would."""
+    stances = stances or {}
+
     def llm(system, user):
-        topics = json.loads(user.split("주제별 기사:\n", 1)[1])
+        if calls is not None:
+            calls.append("article" if "\n\n기사:\n" in user else "event")
+        if "\n\n기사:\n" in user:
+            arts = json.loads(user.split("\n\n기사:\n", 1)[1])
+            return json.dumps([{"id": a["id"], "stance": stances.get(a["id"], "neutral"), "article_type": "report",
+                                "risk": None, "key_facts": [f"{a['title']} 사실"], "entities": ["가온"]} for a in arts], ensure_ascii=False)
+        topics = json.loads(user.split("사건별 기사:\n", 1)[1])
         return "```json\n" + json.dumps({
-            "topics": [{"id": t["id"], "summary": f"요약 {t['id']}", "key_facts": ["사실"], "sentiment": "negative",
-                        "importance": "high"} for t in topics],
-            "trend": "공급 부족과 규제가 겹친다.", "so_what": "조달 계획을 점검해야 한다.",
+            "topics": [{"id": t["id"], "summary": f"요약 {t['id']}", "impact": "negative", "importance": "high",
+                        "key_facts": [{"text": "사실", "article_ids": [t["articles"][0]["id"], "made-up"]}],
+                        "implication": "조달 계획 점검 필요"} for t in topics],
+            "trend": "공급 부족과 규제가 겹친다.", "so_what": "조달 계획을 점검해야 한다.", **(event or {}),
         }, ensure_ascii=False) + "\n```"
 
-    out = run(llm=llm)
-    assert out["analysis"] == "llm" and out["trend"] and out["so_what"]
-    assert out["topics"][0]["summary"] == "요약 topic-1" and out["topics"][0]["sentiment"] == "negative"
+    return llm
+
+
+def test_llm_fills_summaries_trend_and_so_what():
+    out = run(llm=fake_llm())
+    assert out["analysis"] == "llm" and out["trend"] and out["so_what"] and out["article_analysis"] == ["llm"]
+    top = out["topics"][0]
+    assert top["summary"] == "요약 topic-1" and top["impact"] == "negative" and top["sentiment"] == "negative"
+    assert top["evidence_facts"] == [{"text": "사실", "article_ids": [top["articles"][0]["id"]]}]  # unknown ids dropped
+    assert top["key_facts"] == ["사실"] and top["implication"] == "조달 계획 점검 필요"
     assert out["negative_alerts"] == ["topic-1"]  # important and negative
+
+
+def test_outlets_reporting_one_event_differently_keep_their_own_stance():
+    body = "가온반도체가 새 공장을 짓는다는 소식에 대해 평가가 엇갈린다. " * 12
+    one_event = [
+        Article("p1", "가온반도체 신공장 착공, 성장 동력 확보", "", "https://p.example/1", "가상일보", "2026-11-09", "t",
+                content_level="full", body=body),
+        Article("p2", "가온반도체 신공장 착공, 과잉 투자 논란", "", "https://p.example/2", "모의경제", "2026-11-09", "t",
+                content_level="full", body=body.replace("평가", "우려")),
+        Article("p3", "가온반도체 신공장 착공 소식", "착공 소식 요약", "https://p.example/3", "제목일보", "2026-11-09", "t",
+                content_level="snippet"),
+    ]
+    out = run("가온반도체", sources=[ListSource(one_event)],
+              llm=fake_llm({"p1": "favorable", "p2": "critical", "p3": "favorable"}))
+    top = out["topics"][0]
+    assert top["article_count"] == 3  # one event…
+    stances = {r["outlet"]: r["stance"] for r in top["stance_by_outlet"]}
+    assert stances == {"가상일보": "favorable", "모의경제": "critical", "제목일보": "unknown"}  # …reported three ways
+    assert top["divergent_coverage"] is True and top["impact"] == "negative"  # the event's impact is a separate answer
+    tone = {r["outlet"]: (r["favorable"], r["critical"], r["unknown"]) for r in out["outlet_tone"]}
+    assert tone == {"가상일보": (1, 0, 0), "모의경제": (0, 1, 0), "제목일보": (0, 0, 1)}  # per article, never the topic's value
+
+
+def test_risk_is_independent_of_stance():
+    from app.library.workflows.news.analysis import analyze_articles
+
+    def llm(system, user):
+        return json.dumps([{"id": "x", "stance": "favorable", "article_type": "report",
+                            "risk": {"category": "regulatory", "level": "MEDIUM"}, "key_facts": ["규제 심사"]}])
+
+    r = analyze_articles([{"id": "x", "title": "가온, 수출 호조 속 규제 심사", "outlet": "o", "text": "본문", "basis": "body"}], "가온", llm)["x"]
+    assert r["stance"] == "favorable" and r["risk"]["category"] == "regulatory" and r["method"] == "llm"
 
 
 def test_a_broken_llm_falls_back_to_the_rules():
     def broken(system, user):
         raise TimeoutError
 
-    assert run(llm=broken)["analysis"] == "rule"
+    out = run(llm=broken)
+    assert out["analysis"] == "rule" and out["article_analysis"] == ["rule"]
+    assert all(a["stance"] == "unknown" for t in out["topics"] for a in t["articles"] if "stance" in a)  # rules never guess a stance
     assert run(llm=lambda s, u: "모르겠습니다")["analysis"] == "rule"
 
 
