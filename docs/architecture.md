@@ -194,7 +194,7 @@ Advisory Agent  → run_mna_review
 - `backend/app/library/workflows/news/`: 뉴스 파이프라인(요청 시 수집 · 주기 수집 공용, Agent-visible 아님).
   `feeds.py` — 언론사 자체 RSS 2.0 / Atom / 뉴스 sitemap을 한 파서로 읽음(EUC-KR, 깨진 XML 허용, 추적 파라미터를 뺀 URL이 기사 identity), 기본 목록 `feeds.json`(언론사 29곳, 피드 36개). 검색 API(네이버 · Google 뉴스 등)는 쓰지 않는다.
   `fetch.py` — 자체 User-Agent, robots.txt(RFC 9309, protego; 4xx = 제한 없음, 5xx · 연결 실패 = 전체 불허), 시간 제한, 3MB 상한, host별 간격. 차단(401/403/429 등) · 봇 확인 페이지 · robots 불허는 우회하지 않고 상태로 기록.
-  `extract.py` — trafilatura 본문(`deduplicate=False`: 문서 간 중복 제거 캐시가 다른 매체의 같은 통신사 문단을 지우므로) + 한국어 기사 공통 정제(저작권 문구, 기자 이메일 · 문단 끝 서명, 많이 본 뉴스, 등록 · 수정 시각 줄, 맨 위 제목 반복, 언론사 기계 요약과 그 안내문 등; 실측 161건에서 잔여물 85건 → 7건) → `content_level`(full ≥ 400자 / partial ≥ 150자 / snippet = 페이지·피드 설명 / title). "AI 학습·활용 금지" 고지는 `usage_notice`로 기록하고 그 기사는 LLM에 본문 앞부분만 넘긴다.
+  `extract.py` — trafilatura 본문(`deduplicate=False`: 문서 간 중복 제거 캐시가 다른 매체의 같은 통신사 문단을 지우므로) + 한국어 기사 공통 정제(저작권 문구, 기자 이메일 · 문단 끝 서명, 많이 본 뉴스, 등록 · 수정 시각 줄, 맨 위 제목 반복, 언론사 기계 요약과 그 안내문 등; 실측 178건에서 잔여물 85건 → 2건) → `content_level`(full ≥ 400자 / partial ≥ 150자 / snippet = 페이지·피드 설명 / title). "AI 학습·활용 금지" 고지는 `usage_notice`로 기록하고 그 기사는 LLM에 본문 앞부분만 넘긴다.
   `store.py` — `NewsStore(schema)`: system별 schema(K `kelec_news`, Group `grp_news`), `NEWS_DATABASE_URL`(없으면 `MEETINGS_DATABASE_URL`), `sql/NNN_*.sql`을 순서대로 한 번씩 적용하고 `schema_version`에 기록. 테이블: `news_outlets`, `news_feeds`, `news_articles`(id = `art_` + 정규화 URL의 sha256, 출처 URL · 발견 · 수집 시각 · 수집 결과 · 본문 · content_level), `news_mentions`(표면형 + KG가 채울 `entity_ref`), `news_events`(UUID) · `news_event_articles`(기사는 한 사건에 한 번 배정되고 유지), `news_article_analysis` · `news_event_analysis`(대상 · 분석기 버전별), `news_ingest_runs`.
   다른 구성요소(Enterprise KG)가 읽는 인터페이스: `get_article(s)`, `get_event`, `events_for(surface | entity_ref)`, `provenance` — 안정 id, LLM · 네트워크 없음.
   `pipeline.py` — `ingest()`: TTL(15분)이 지난 피드만 수집 → 모든 항목을 피드 데이터로 저장(같은 URL은 한 번) → 지금 필요한 기사(요청: 피드 제목 · 설명에 질의어가 모두 있는 것, 주기 수집: 전부)의 본문만 시간 · 건수 예산(요청 12초 · 15건) 안에서 가져옴 → 추출 결과 저장. 실패는 기록하고 계속, 예산을 넘긴 기사는 다음 실행으로 남김.
@@ -687,7 +687,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | --- | --- | --- | --- |
 | Agent core | Specialist core · Super core · invocation 개념 | | `AGENT_ID` · `IDENTITY` · SPEC |
 | Capability | `Skill` / `Capability` 타입, Registry 메커니즘 | 회의 · 외부 리스크 · M&A 검토 · 위임 Skill 본문, 데이터 경로를 받는 workflow 함수, Tool factory | Registry 내용(`CAPABILITIES`, `allowed_agents`), 라이브러리 Tool을 자기 데이터에 바인딩한 instance, `delegate_to_*`, A2A client Tool |
-| Data | | | fixture 파일 (K와 Group이 같은 구조의 데이터를 따로 가진다. Group이 K 데이터를 읽지 않는다) |
+| Data | | 뉴스 피드 목록(`news/feeds.json`), schema SQL | fixture 파일, Postgres의 자기 schema(회의 `kelec` / `grp`, 뉴스 `kelec_news` / `grp_news`) (K와 Group이 같은 구조의 데이터를 따로 가진다. Group이 K 데이터를 읽지 않는다) |
 | 이벤트 · API | emit / run context(run_id · system · origin · trace) / stream_run / 관찰 hub + SSE / NDJSON 래퍼 / A2A 요청·응답 형식 | | 엔드포인트 목록, 포트, 오류 귀속 기본 Agent |
 | Frontend | NDJSON client · SSE client · mapper · reducer · Sidebar/ChatPanel/SessionWindows · 표시 이름 catalog | | 플랫폼 설정(탭, 헤더, backend 주소), Tool별 결과 렌더 |
 
@@ -777,6 +777,13 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 16. **회의 저장소 schema 변경.** schema는 없을 때만 만든다 (`meeting_schema.sql`). 테이블을 바꾸려면 migration 방식을 정해야 한다 (현재 도구 없음).
 17. **새 미팅 Tool 결과의 frontend 렌더.** Vite 제품 UI의 `toolResultBlocks`는 `run_meeting_context_retrieval`만 전용 렌더가 있고 나머지 네 Tool 결과는 JSON으로 보인다 (4번과 같은 문제).
 18. **뉴스 Tool 두 개의 관계.** 기본 파이프라인 `run_news_briefing`(어떤 주제든)과 `run_company_risk_news_analysis`(기업 리스크)가 함께 있다. 내부 파이프라인(`library/workflows/news/`)은 이미 하나이고, 남은 것은 외부 Tool 계약을 합칠지다. 선택지: (a) 그대로 두고 News Agent가 요청에 따라 고름, (b) `run_news_briefing(purpose="risk")`로 합치고 frontend 렌더와 gateway 감사(`risks[].source.id`)를 새 결과 모양에 맞춤, (c) 리스크 Tool을 내부 함수로만 남김. 추천은 (b)이지만 frontend · gateway가 함께 바뀌므로 팀 결정이 필요하다.
+
+19. **뉴스 수집 범위 (RSS만).** live 뉴스는 언론사 29곳의 RSS · 뉴스 sitemap에서만 모은다(검색 API 없음, 팀 결정). 피드는 최근 항목(수 시간~며칠)만 주므로 좁은 주제나 과거 기사는 저장소에 쌓인 만큼만 찾는다. 결과의 `coverage`(`low` · `relaxed_terms`)가 이를 밝힌다.
+    주기 수집 CLI를 계속 돌리면 저장소가 쌓여 나아진다. 검색 API(네이버 등)를 더할지는 약관(API 결과의 저장 금지 조항)과 함께 다시 정해야 한다. 두 system이 같은 피드를 각자 수집 · 저장한다(system별 schema의 대가). 공용 뉴스 서비스로 옮길 때는 URL 기반 기사 id가 그대로 이어진다.
+20. **"AI 학습·활용 금지" 고지가 있는 기사.** 본문은 저장해 중복 · 전재 · 사건 판단에 쓰고, LLM에는 본문 첫머리(200자)만 넘긴다(`usage_notice`). 이 해석이 충분한지는 팀(필요하면 법률) 확인이 필요하다. 원문 전체를 외부에 다시 내보내는 기능은 없다(결과에는 출처 URL과 짧은 요약 · 사실만).
+21. **뉴스 분석의 비용과 지연.** live 브리핑 한 번에 LLM 호출이 기사 분석(새 기사 8건당 1회, 병렬 3) + 사건 분석 1회다. 기사 분석은 (기사, 대상, `article-v1`)로 저장해 같은 대상의 다음 요청은 사건 분석만 부른다. 분석 프롬프트를 바꾸면 버전을 올려야 하고, 과거 기사 재분석 작업은 없다.
+    요청 시 본문 수집은 15건 · 12초 예산이라, 기사가 많은 주제는 처음 몇 번의 요청에서 요약 수준 기사가 남는다(주기 수집이 채움).
+22. **뉴스 저장소의 크기와 정리.** 보존 기간 · 정리 작업은 두지 않았다(이번 범위의 결정). 피드 항목은 모두 저장되고 본문은 필요할 때 채워지므로, 오래 돌리면 테이블이 계속 커진다. 필요해지면 오래된 기사 삭제(사건 · 분석은 cascade)나 본문만 비우는 작업을 더한다.
 
 ---
 
