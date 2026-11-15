@@ -59,6 +59,12 @@ class Article:
     published: datetime | None = None
     body_hash: str | None = None
     event_id: str | None = None
+    syndicated_from: str | None = None  # another outlet's story this article ran
+
+    @property
+    def reporter(self) -> str:
+        """Whose reporting it is (a wire story counts for its agency, a copy for nobody new)."""
+        return cluster.independent_outlet(self.outlet, (self.body or self.summary)[:80])
 
     def text_for_analysis(self) -> tuple[str, str]:
         """(text, basis): the body when there is one — only its lead under an "AI 학습·활용 금지"
@@ -74,7 +80,7 @@ class Article:
     def item(self) -> cluster.Item:
         published = self.published or datetime.fromisoformat(self.date).replace(tzinfo=KST)
         return cluster.Item(self.id, self.title, self.outlet, published, self.url,
-                            (self.body or self.summary)[:200], self.body_hash, self.event_id, self.hint)
+                            (self.body or self.summary)[:200], self.body_hash, self.event_id, self.hint, bool(self.body))
 
 
 class Source(Protocol):
@@ -121,15 +127,16 @@ def article_from_row(row: dict[str, Any]) -> Article:
     return Article(row["id"], row["title"], row["summary"] or lead_of(row), row["url"], row["outlet"],
                    published.date().isoformat(), "news_store", content_level=row["content_level"], body=row["body"],
                    usage_notice=row["usage_notice"], published=published, body_hash=row["body_hash"],
-                   event_id=str(row["event_id"]) if row.get("event_id") else None)
+                   event_id=str(row["event_id"]) if row.get("event_id") else None, syndicated_from=row.get("syndicated_from"))
 
 
 # ── Filter: importance ──────────────────────────────────────────────────────
 
 def importance(topic: list[Article], query: str, today: date) -> float:
-    """0–100 without reading the articles: how widely it was reported (outlets), how recent it is,
-    and whether the query is the subject of the headline rather than a passing mention."""
-    outlets = len({a.outlet for a in topic})
+    """0–100 without reading the articles: how widely it was reported (independent outlets: a copy
+    or a wire story run elsewhere is not more coverage), how recent it is, and whether the query is
+    the subject of the headline rather than a passing mention."""
+    outlets = len(independent_outlets(topic))
     newest = max(date.fromisoformat(a.date) for a in topic)
     age = max(0, (today - newest).days)
     terms = query_terms(query)
@@ -138,6 +145,18 @@ def importance(topic: list[Article], query: str, today: date) -> float:
     in_title = sum(sum(t in a.title.lower() for t in terms) / len(terms) for a in topic) / len(topic) if terms else 0
     score = min(outlets, 5) * 10 + max(0, 30 - age * 4) + in_title * 20
     return round(min(100.0, score), 1)
+
+
+def independent_outlets(topic: list[Article]) -> set[str]:
+    return {a.reporter for a in topic if not a.syndicated_from}
+
+
+def evidence(topic: list[Article]) -> dict[str, int]:
+    """How much of a topic the analysis could read: articles with a body, a description only, a headline only."""
+    out = {"body": 0, "snippet": 0, "title": 0}
+    for a in topic:
+        out["body" if a.content_level in ("full", "partial") else a.content_level if a.content_level in out else "title"] += 1
+    return out
 
 
 def adjusted_importance(t: dict[str, Any]) -> float:
@@ -228,6 +247,8 @@ def _article_out(a: Article) -> dict[str, Any]:
            "content_level": a.content_level, "text": text, "basis": basis}
     if a.url:
         out["url"] = a.url
+    if a.syndicated_from:
+        out["syndicated_from"] = a.syndicated_from
     return out
 
 
@@ -245,6 +266,8 @@ def brief(articles: list[Article], assignment: dict[str, str], query: str, *, pu
             "importance": importance(members, query, as_of),
             "article_count": len(members),
             "outlet_count": len({a.outlet for a in members}),
+            "independent_outlet_count": len(independent_outlets(members)),
+            "evidence": evidence(members),
             "first_reported": min(a.date for a in members),
             "last_reported": max(a.date for a in members),
             "articles": [_article_out(a) for a in members],

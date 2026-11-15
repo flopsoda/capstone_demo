@@ -1,7 +1,11 @@
-"""Duplicates and events: which articles are copies, and which report the same matter.
+"""Duplicates, syndication and events: which articles are copies, which ran another outlet's story,
+and which report the same matter.
 
     dedupe  the same link, the same text (body hash), or a near-identical headline from the same
             outlet is one article. Other outlets' reports of a story stay: they are its coverage.
+    syndicated  another outlet running the same text (body hash, or nearly the same opening of
+            the body), or a wire story credited in its first line ("(서울=연합뉴스)"): coverage counts
+            the story once, not once per outlet that ran it.
     assign  each article joins the event of an earlier article that reports the same matter
             (headline bigram similarity with the query words removed, or the same opening text,
             within EVENT_WINDOW_DAYS of it), else starts a new event. Articles that already have
@@ -13,6 +17,7 @@ one matter even when the headlines differ (a lawsuit, then an injunction in it).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -22,7 +27,15 @@ from .text import similarity
 SAME_STORY = 0.25  # headline similarity (query words removed) for two reports of one story
 SAME_LEAD = 0.45  # opening-text similarity: a wire story rewritten lightly by another outlet
 SAME_ARTICLE = 0.6  # same outlet, this similar a headline: one article seen twice
+SAME_COPY = 0.85  # different outlets, this similar an opening of the body: one ran the other's text
 EVENT_WINDOW_DAYS = 3
+# A wire story credits its agency in the first line: "(서울=연합뉴스) 홍길동 기자 =", "[서울=뉴시스]".
+_WIRE = re.compile(r"[(\[](?:[가-힣A-Za-z]+\s*=\s*)?(연합뉴스|뉴시스|뉴스1)[)\]]")
+
+
+def wire_agency(lead: str) -> str | None:
+    m = _WIRE.search(lead[:80])
+    return m.group(1) if m else None
 
 
 @dataclass
@@ -38,6 +51,7 @@ class Item:
     body_hash: str | None = None
     group: str | None = None  # event already given (live) or None
     hint: dict[str, Any] | None = field(default=None, repr=False)
+    has_body: bool = False
 
 
 def dedupe(items: list[Item]) -> tuple[list[Item], dict[str, str]]:
@@ -52,6 +66,27 @@ def dedupe(items: list[Item]) -> tuple[list[Item], dict[str, str]]:
         else:
             kept.append(a)
     return kept, dropped
+
+
+def syndicated(items: list[Item]) -> dict[str, str]:
+    """copy id → original id: a later article from another outlet with the same body, or with nearly
+    the same opening text, ran the earlier one's story."""
+    out: dict[str, str] = {}
+    seen: list[Item] = []
+    for a in sorted(items, key=lambda a: a.published):
+        original = next((o for o in seen if o.outlet != a.outlet and (
+            (a.body_hash and a.body_hash == o.body_hash)
+            or (a.has_body and o.has_body and similarity(a.lead, o.lead) >= SAME_COPY))), None)
+        if original:
+            out[a.id] = out.get(original.id, original.id)
+        seen.append(a)
+    return out
+
+
+def independent_outlet(outlet: str, lead: str) -> str:
+    """Whose reporting this is: the wire agency a story credits, else the outlet itself."""
+    agency = wire_agency(lead)
+    return agency if agency and agency not in outlet else outlet
 
 
 def _same_labeled_matter(a: Item, b: Item) -> bool:

@@ -246,3 +246,30 @@ def test_store_unavailable_without_a_database():
 
     with pytest.raises(StoreUnavailable):
         NewsStore("nowhere").migrate()
+
+
+def test_korean_page_furniture_is_cleaned():
+    text = "\n".join([
+        "가온반도체, 라인 증설",  # the headline again at the top
+        "회사 측 \"수요 견조\"",  # machine summary lines …
+        "전체 내용을 이해하기 위해서는 기사 본문과 함께 읽어야 합니다",  # … and its disclaimer
+        "등록 2026.11.15 09:00:00수정 2026.11.15 10:00:00",
+        "가온반도체는 15일 생산라인 증설 계획을 발표했다. 투자 규모는 1,200억 원이다. 홍길동 기자 gildong@",
+        "◎공감언론 가상통신 [email protected]",
+        "AI 추천 뉴스",
+    ])
+    assert clean_body(text, "가온반도체, 라인 증설") == "가온반도체는 15일 생산라인 증설 계획을 발표했다. 투자 규모는 1,200억 원이다."
+
+
+def test_copies_and_wire_stories_are_found():
+    from app.library.workflows.news.cluster import Item, independent_outlet, syndicated
+
+    lead = "(서울=연합뉴스) 김기자 = 가온반도체가 최대 고객사로부터 물량 축소 통보를 받았다고 14일 밝혔다. 회사는 대응책을 마련 중이다."
+    t0 = datetime(2026, 11, 14, 9, tzinfo=KST)
+    items = [Item("a", "물량 축소", "연합뉴스", t0, lead=lead, body_hash="h1", has_body=True),
+             Item("b", "물량 축소 통보", "지역일보", t0 + timedelta(hours=1), lead=lead, body_hash="h2", has_body=True),
+             Item("c", "다른 기사", "모의경제", t0 + timedelta(hours=2), lead="전혀 다른 문장으로 시작하는 기사 본문입니다. 다른 내용이다.", has_body=True),
+             Item("d", "같은 본문", "다른일보", t0 + timedelta(hours=3), lead="x", body_hash="h1")]
+    assert syndicated(items) == {"b": "a", "d": "a"}
+    assert independent_outlet("지역일보", lead) == "연합뉴스" and independent_outlet("연합뉴스", lead) == "연합뉴스"
+    assert independent_outlet("모의경제", items[2].lead) == "모의경제"

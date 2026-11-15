@@ -108,6 +108,8 @@ interface NewsTopic {
   importance: number;
   article_count: number;
   outlet_count: number;
+  independent_outlet_count?: number;
+  evidence?: { body: number; snippet: number; title: number };
   summary: string;
   key_facts: string[];
   sentiment: "positive" | "negative" | "neutral";
@@ -148,7 +150,13 @@ function newsTopicBlocks(t: NewsTopic): MessageBlock[] {
     .map((a) => `${a.date} ${a.outlet}${a.content_level ? ` (${CONTENT_LEVEL_TEXT[a.content_level] ?? a.content_level})` : ""}${a.url ? ` ${a.url}` : ""}`);
   return [
     { kind: "badge", text: `중요도 ${Math.round(t.importance)} · ${mood.text}${risk}`, tone: mood.tone },
-    { kind: "label", text: `${lead ? `${lead.date} · ${lead.outlet} · ` : ""}기사 ${t.article_count}건 · 매체 ${t.outlet_count}곳` },
+    {
+      kind: "label",
+      text:
+        `${lead ? `${lead.date} · ${lead.outlet} · ` : ""}기사 ${t.article_count}건 · 매체 ${t.outlet_count}곳` +
+        (t.independent_outlet_count !== undefined && t.independent_outlet_count < t.outlet_count ? ` (독립 보도 ${t.independent_outlet_count}곳)` : "") +
+        (t.evidence ? ` · 본문 확보 ${t.evidence.body}/${t.article_count}` : ""),
+    },
     { kind: "text", text: t.summary },
     ...(t.key_facts.length ? [{ kind: "list" as const, items: t.key_facts }] : []),
     ...(sources.length ? [{ kind: "list" as const, items: sources }] : []),

@@ -122,3 +122,18 @@ def test_a_database_that_is_down_is_an_error_result_not_a_crash(monkeypatch):
     tool = make_run_news_briefing(DATA_DIR / "news.json", NewsStore("nowhere", dsn="postgresql://nobody@127.0.0.1:1/none"))
     out = tool.invoke({"query": "가온반도체"})
     assert out["dataset"] == "live" and "연결할 수 없습니다" in out["error"]
+
+
+def test_a_wire_story_run_by_two_outlets_counts_once(news_db):
+    wire = ("(서울=연합뉴스) 김기자 = 가온반도체가 최대 고객사로부터 물량 축소 통보를 받았다고 14일 밝혔다. "
+            "한빛모바일은 가온반도체 매출의 41%를 차지한다. 회사는 신규 고객 확보로 공백을 메우겠다는 입장이다. ")
+    c, d = Feed("지역일보", "https://c.example/rss.xml"), Feed("모의신문", "https://d.example/rss.xml")
+    pages = {c.url: (200, rss([("가온반도체 물량 축소 통보", "https://c.example/5", "가온반도체 물량 축소", "Sat, 14 Nov 2026 02:00:00 GMT")])),
+             d.url: (200, rss([("가온반도체, 최대 고객사 물량 축소 통보받아", "https://d.example/6", "가온반도체 물량 축소", "Sat, 14 Nov 2026 04:00:00 GMT")])),
+             "https://c.example/5": (200, article_html("가온반도체 물량 축소 통보", paragraph=wire)),
+             "https://d.example/6": (200, article_html("가온반도체, 최대 고객사 물량 축소 통보받아", paragraph=wire + "추가 문단. "))}
+    w = FakeWeb(pages, robots={"c.example": (200, "User-agent: *\nAllow: /"), "d.example": (200, "User-agent: *\nAllow: /")})
+    out = run_live_briefing("가온반도체", store=news_db, feeds=[c, d], fetcher=Fetcher(w, host_gap=0), now=NOW, budget=BUDGET)
+    top = out["topics"][0]
+    assert top["article_count"] == 2 and top["outlet_count"] == 2 and top["independent_outlet_count"] == 1  # one wire story, credited to 연합뉴스
+    assert top["evidence"] == {"body": 2, "snippet": 0, "title": 0}

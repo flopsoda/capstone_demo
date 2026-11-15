@@ -156,10 +156,14 @@ def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *,
     stats = ingest(store, feeds, fetcher, terms=terms, days=days, budget=budget, query=query, now=now, log=log)
     rows = store.search(terms, since=now - timedelta(days=days), until=now + timedelta(hours=1))
     items = [cluster.Item(r["id"], r["title"], r["outlet"], r["published_at"], r["url"], lead_of(r), r["body_hash"],
-                          str(r["event_id"]) if r["event_id"] else None) for r in rows]
+                          str(r["event_id"]) if r["event_id"] else None, has_body=bool(r["body"])) for r in rows]
     kept, dropped = cluster.dedupe(items)
     keep = {i.id for i in kept}
     rows = [r for r in rows if r["id"] in keep]
+    copies = cluster.syndicated(kept)
+    store.mark_syndicated(copies.items())
+    for r in rows:
+        r["syndicated_from"] = r.get("syndicated_from") or copies.get(r["id"])
 
     mention_rows = []
     for r in rows:
