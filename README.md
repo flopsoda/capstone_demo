@@ -192,6 +192,9 @@ backend/
         meeting_schedule.py          회의 일정 조회 · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소
         company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(fixture + 수집분) 조회, 후속 보도를 사안으로 묶음
         news_collection.py           실제 뉴스 수집 CLI: 네이버 API / Google 뉴스 RSS → LLM·규칙 라벨 → data/collected/news.json
+        news/                        뉴스 파이프라인(Tool · 주기 수집 공용): mode.py(NEWS_DATA_MODE) · feeds.py(언론사 RSS/Atom/뉴스 sitemap, feeds.json)
+                                     · fetch.py(robots.txt · 시간 제한 · 차단 감지) · extract.py(trafilatura 본문 + 정제 + content_level)
+                                     · store.py(NewsStore: system별 schema, sql/NNN_*.sql 버전 관리) · pipeline.py(ingest: 피드 → 발견 → 본문 → 저장)
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
         mna_scenario.py              What-if: review_what_if(path) — 인수가격·영업이익률·고객 비중 변경 전후 평가 · 권고 · 조건 비교 (context 신호 반영)
         mna_executive_summary.py     persona "ALL": review_executive_summary(path) — CEO·CFO·CTO 평가 통합, 핵심 위험·기회·인수 조건 · 권고

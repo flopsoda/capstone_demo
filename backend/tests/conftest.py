@@ -21,10 +21,13 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from app.systems.group import MEETING_STORE as GROUP_STORE
-from app.systems.k_electronics import MEETING_STORE as K_STORE
+from app.library.workflows.news.store import NewsStore
+from app.systems.group import MEETING_STORE as GROUP_STORE, NEWS_STORE as GROUP_NEWS
+from app.systems.k_electronics import MEETING_STORE as K_STORE, NEWS_STORE as K_NEWS
 
 STORES = (K_STORE, GROUP_STORE)
+NEWS_STORES = (K_NEWS, GROUP_NEWS)
+TEST_NEWS_SCHEMA = "test_news"
 SYSTEMS_DIR = Path(__file__).resolve().parent.parent / "app" / "systems"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
@@ -76,10 +79,11 @@ def no_outbound_network(request, monkeypatch):
 @pytest.fixture(autouse=True)
 def no_configured_meeting_db(monkeypatch):
     monkeypatch.delenv("MEETINGS_DATABASE_URL", raising=False)
-    for store in STORES:
+    monkeypatch.delenv("NEWS_DATABASE_URL", raising=False)
+    for store in (*STORES, *NEWS_STORES):
         store.reset()
     yield
-    for store in STORES:
+    for store in (*STORES, *NEWS_STORES):
         store.reset()
 
 
@@ -97,3 +101,23 @@ def meeting_db(no_configured_meeting_db, monkeypatch):
     monkeypatch.setenv("MEETINGS_DATABASE_URL", dsn)
     monkeypatch.setenv("MEETINGS_ANONYMOUS_CLEARANCE", "4")
     return dsn
+
+
+def _test_dsn() -> str:
+    dsn = os.environ.get("MEETINGS_TEST_DATABASE_URL", "")
+    if not dsn:
+        pytest.skip("MEETINGS_TEST_DATABASE_URL is not set (disposable Postgres for the store tests)")
+    return dsn
+
+
+@pytest.fixture
+def news_db(no_configured_meeting_db, monkeypatch):
+    """Both systems' news stores (and a NewsStore("test_news") for workflow tests) on a fresh test database."""
+    dsn = _test_dsn()
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        if "test" not in conn.info.dbname:
+            pytest.fail("MEETINGS_TEST_DATABASE_URL must name a database called *test*")
+        for schema in (*(s.schema for s in NEWS_STORES), TEST_NEWS_SCHEMA):
+            conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
+    monkeypatch.setenv("NEWS_DATABASE_URL", dsn)
+    return NewsStore(TEST_NEWS_SCHEMA)

@@ -209,6 +209,11 @@ Advisory Agent  → run_mna_review
 - `backend/app/library/workflows/news_collection.py`: 실제 뉴스를 모으는 고정 절차. Agent-visible이 아니며 CLI로 실행한다(`python -m app.library.workflows.news_collection --data-dir <system data>`).
   관심 기업(system의 `companies.json` + `--company`) → 네이버 뉴스 검색 API(`NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET`) 또는 키가 없으면 Google 뉴스 RSS → 기사마다 category · level · key_facts 라벨(설정된 LLM, 없거나 답이 쓸 수 없으면 키워드 규칙) → `data/collected/news.json`에 fixture와 같은 모양으로 병합(같은 링크, 같은 매체의 거의 같은 제목은 건너뜀. 다른 매체의 같은 기사는 보도 수를 세기 위해 남김. 제목에 기업명이 없는 기사는 지나가는 언급으로 보고 중립(`sentiment: neutral`), `--keep-days`보다 오래된 기사는 삭제).
   수집 store는 실제 기사이므로 Git에 넣지 않는다(`.gitignore`). 한 기업의 수집 실패는 나머지를 멈추지 않는다.
+- `backend/app/library/workflows/news/`: 뉴스 파이프라인(요청 시 수집 · 주기 수집 공용, Agent-visible 아님). `feeds.py` — 언론사 자체 RSS 2.0 / Atom / 뉴스 sitemap을 한 파서로 읽음(EUC-KR, 깨진 XML 허용, 추적 파라미터 제거한 URL이 기사 identity), 기본 목록 `feeds.json`(언론사 29곳, 피드 36개).
+  `fetch.py` — 자체 User-Agent, robots.txt(RFC 9309, protego; 4xx = 제한 없음, 5xx · 연결 실패 = 전체 불허), 시간 제한, 3MB 상한, host별 간격. 차단(401/403/429 등) · 봇 확인 페이지 · robots 불허는 우회하지 않고 상태로 기록.
+  `extract.py` — trafilatura 본문 + 한국어 기사 공통 정제(저작권 문구, 기자 이메일, 많이 본 뉴스 등) → `content_level`(full ≥ 400자 / partial ≥ 150자 / snippet = 페이지·피드 설명 / title). "AI 학습·활용 금지" 고지는 `usage_notice`로 기록.
+  `store.py` — `NewsStore(schema)`: system별 schema(K `kelec_news`, Group `grp_news`), `NEWS_DATABASE_URL`(없으면 `MEETINGS_DATABASE_URL`), `sql/NNN_*.sql`을 순서대로 한 번씩 적용하고 `schema_version`에 기록.
+  `pipeline.py` — `ingest()`: TTL(15분)이 지난 피드만 수집 → 모든 항목을 피드 데이터로 저장(같은 URL은 한 번) → 지금 필요한 기사(요청: 피드 제목·설명에 질의어가 모두 있는 것, 주기 수집: 전부)의 본문만 시간 · 건수 예산 안에서 가져옴 → 추출 결과 저장. 실패는 기록하고 계속, 예산을 넘긴 기사는 다음 실행으로 남김.
 - `backend/app/library/tools/run_mna_review.py`: `make_run_mna_review(path)` → `@tool("run_mna_review")`, 인자 `query: str, company: str, persona: str = "CEO", context: str | None`,
   What-if 변경 조건 `asking_trillion_krw` · `operating_margin` · `revenue_share: float | None`. Tool은 인자로 workflow를 고르기만 한다:
   `persona="ALL"` → `mna_executive_summary.review_executive_summary`(변경 조건과 함께면 `error`), 변경 조건이 있으면 → `mna_scenario.review_what_if`, 그 외 → `mna_review.review_acquisition`.
