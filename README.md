@@ -64,6 +64,22 @@ npm run build    # tsc + vite build
 #                                   Group backend의 /api/events(SSE)를 구독해 전체 Agent Graph · Step 1~8 · 협업 세션을 실제 이벤트로만 보여준다
 ```
 
+뉴스 브리핑 파이프라인(News Agent 기본 Tool `run_news_briefing`): 요청 하나가 수집(Google 뉴스 RSS + 가상 fixture) → 중복 제거 · 주제 묶기 · 중요도 → LLM 분석(요약 · 흐름 · 시사점, 키 없으면 규칙) → 응답을 한 번에 실행합니다. 뉴스 탭에 `HBM 시장 최근 동향 알려줘.` 같은 어떤 주제든 요청할 수 있습니다.
+설치 없이 단계별 결과와 LLM 모델 비교(분석 · 속도 · Tool 호출 정확도)를 보려면 backend/에서 `python briefing_demo.py "HBM 시장" --compare gpt-oss:20b-cloud,gemma4:31b-cloud` (키는 `backend/.env`의 `OLLAMA_API_KEY`).
+개인화 · 발송: 뉴스 탭에 `내 관심사 브리핑 텔레그램으로 보내줘.`, `관심 주제에 삼성전자 추가해줘.` (가상 구독자 `data/news_subscribers.json`). 정기 발송은 OS 스케줄러로:
+```bash
+python -m app.library.workflows.news_delivery --data-dir app/systems/k_electronics/data --dry-run          # 보내지 않고 출력
+python -m app.library.workflows.news_delivery --data-dir app/systems/k_electronics/data --mode alerts --watch 30   # 30분마다 새 부정 기사 알림
+# 받는 곳은 .env의 NEWS_TELEGRAM_BOT_TOKEN · NEWS_TELEGRAM_CHAT_ID (텔레그램 @BotFather), NEWS_SMTP_USER · NEWS_SMTP_PASSWORD(Gmail 앱 비밀번호) · NEWS_EMAIL_TO
+```
+
+실제 뉴스 수집 (선택, backend/에서). 결과는 `data/collected/news.json`(Git 제외)에 쌓이고 뉴스 Tool이 fixture와 함께 읽습니다:
+
+```bash
+.venv/bin/python -m app.library.workflows.news_collection --data-dir app/systems/k_electronics/data --company 삼성전자 --days 7
+# NAVER_CLIENT_ID / NAVER_CLIENT_SECRET이 .env에 있으면 네이버 뉴스 API, 없으면 Google 뉴스 RSS. LLM 키가 없거나 --no-llm이면 키워드 규칙으로 분류
+```
+
 backend 테스트:
 
 ```bash
@@ -176,7 +192,8 @@ backend/
         meeting_minutes.py           회의록 초안 저장 · 확정(담당 · 기한 검사) · 확정본 정정(사유 + 이전 버전 snapshot)
         action_items.py              Action Item 진행 조회(지연 순, 상태별 건수) · 갱신(이력 기록)
         meeting_schedule.py          회의 일정 조회 · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소
-        company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(path) 조회
+        company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(fixture + 수집분) 조회, 후속 보도를 사안으로 묶음
+        news_collection.py           실제 뉴스 수집 CLI: 네이버 API / Google 뉴스 RSS → LLM·규칙 라벨 → data/collected/news.json
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
         mna_scenario.py              What-if: review_what_if(path) — 인수가격·영업이익률·고객 비중 변경 전후 평가 · 권고 · 조건 비교 (context 신호 반영)
         mna_executive_summary.py     persona "ALL": review_executive_summary(path) — CEO·CFO·CTO 평가 통합, 핵심 위험·기회·인수 조건 · 권고

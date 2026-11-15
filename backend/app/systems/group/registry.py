@@ -9,6 +9,7 @@ the Tools' descriptions.
 from __future__ import annotations
 
 from ...library.skills.external_risk_analysis import EXTERNAL_RISK_ANALYSIS
+from ...library.skills.news_briefing import NEWS_BRIEFING
 from ...library.skills.meeting_context_analysis import MEETING_CONTEXT_ANALYSIS
 from ...library.skills.meeting_follow_up import MEETING_FOLLOW_UP
 from ...library.skills.meeting_minutes_writing import MEETING_MINUTES_WRITING
@@ -21,6 +22,8 @@ from .tools.delegate_to_meeting_agent import delegate_to_meeting_agent
 from .tools.delegate_to_news_agent import delegate_to_news_agent
 from .tools.request_k_electronics_review import request_k_electronics_review
 from .tools.run_company_risk_news_analysis import run_company_risk_news_analysis
+from .tools.news_personalization import manage_news_interests, run_personal_news_briefing
+from .tools.run_news_briefing import run_news_briefing
 from .tools.run_action_item_tracking import run_action_item_tracking
 from .tools.run_meeting_context_retrieval import run_meeting_context_retrieval
 from .tools.run_meeting_schedule import run_meeting_schedule
@@ -53,6 +56,10 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(run_meeting_schedule, frozenset({MEETING})),
     # News Agent (Group's article store)
     Capability(EXTERNAL_RISK_ANALYSIS, frozenset({NEWS})),
+    Capability(NEWS_BRIEFING, frozenset({NEWS})),
+    Capability(run_news_briefing, frozenset({NEWS})),
+    Capability(run_personal_news_briefing, frozenset({NEWS})),
+    Capability(manage_news_interests, frozenset({NEWS})),
     Capability(run_company_risk_news_analysis, frozenset({NEWS})),
     # Management Advisory Agent (Group's company store)
     Capability(MNA_FEASIBILITY_REVIEW, frozenset({ADVISORY})),
