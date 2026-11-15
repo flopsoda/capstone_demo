@@ -1,4 +1,4 @@
-"""Test isolation: meeting database, outbound network, runtime state.
+"""Test isolation: meeting database, outbound network, system data folders.
 
 Tests never touch a configured MEETINGS_DATABASE_URL: it is cleared for every test. A test
 that needs meeting records asks for `meeting_db`, which points both systems' stores at
@@ -9,24 +9,19 @@ that variable is not set. Without a principal, runs see everything there (anonym
 Outbound network: a test may only open sockets to this machine (the test database, a local
 server). Tests that really call a model or a website are marked `network` (tests/test_agents.py).
 
-Runtime state: NEWS_STATE_DIR points at a temporary folder before the systems are imported, and
-the session fails if a test run left anything new in a system's data/ folder.
+The session fails if a test run left anything new in a system's data/ folder.
 """
 
 import os
 import socket
-import tempfile
 from pathlib import Path
 
+import psycopg
 import pytest
+from psycopg import sql
 
-os.environ["NEWS_STATE_DIR"] = tempfile.mkdtemp(prefix="news-state-test-")
-
-import psycopg  # noqa: E402
-from psycopg import sql  # noqa: E402
-
-from app.systems.group import MEETING_STORE as GROUP_STORE  # noqa: E402
-from app.systems.k_electronics import MEETING_STORE as K_STORE  # noqa: E402
+from app.systems.group import MEETING_STORE as GROUP_STORE
+from app.systems.k_electronics import MEETING_STORE as K_STORE
 
 STORES = (K_STORE, GROUP_STORE)
 SYSTEMS_DIR = Path(__file__).resolve().parent.parent / "app" / "systems"
@@ -47,12 +42,6 @@ def data_folders_unchanged():
 
 def _host(address) -> str:
     return address[0] if isinstance(address, tuple) else str(address)
-
-
-@pytest.fixture(autouse=True)
-def own_news_state(tmp_path, monkeypatch):
-    """Each test gets its own runtime state folder (nothing carries over between tests)."""
-    monkeypatch.setenv("NEWS_STATE_DIR", str(tmp_path / "news-state"))
 
 
 @pytest.fixture(autouse=True)

@@ -65,13 +65,6 @@ npm run build    # tsc + vite build
 ```
 
 뉴스 브리핑 파이프라인(News Agent 기본 Tool `run_news_briefing`): 요청 하나가 수집(Google 뉴스 RSS + 가상 fixture) → 중복 제거 · 주제 묶기 · 중요도 → LLM 분석(요약 · 흐름 · 시사점, 키 없으면 규칙) → 응답을 한 번에 실행합니다. 뉴스 탭에 `HBM 시장 최근 동향 알려줘.` 같은 어떤 주제든 요청할 수 있습니다.
-설치 없이 단계별 결과와 LLM 모델 비교(분석 · 속도 · Tool 호출 정확도)를 보려면 backend/에서 `python briefing_demo.py "HBM 시장" --compare gpt-oss:20b-cloud,gemma4:31b-cloud` (키는 `backend/.env`의 `OLLAMA_API_KEY`).
-개인화 · 발송: 뉴스 탭에 `내 관심사 브리핑 텔레그램으로 보내줘.`, `관심 주제에 삼성전자 추가해줘.` (가상 구독자 `data/news_subscribers.json`). 정기 발송은 OS 스케줄러로:
-```bash
-python -m app.library.workflows.news_delivery --data-dir app/systems/k_electronics/data --dry-run          # 보내지 않고 출력
-python -m app.library.workflows.news_delivery --data-dir app/systems/k_electronics/data --mode alerts --watch 30   # 30분마다 새 부정 기사 알림
-# 받는 곳은 .env의 NEWS_TELEGRAM_BOT_TOKEN · NEWS_TELEGRAM_CHAT_ID (텔레그램 @BotFather), NEWS_SMTP_USER · NEWS_SMTP_PASSWORD(Gmail 앱 비밀번호) · NEWS_EMAIL_TO
-```
 
 실제 뉴스 수집 (선택, backend/에서). 결과는 `data/collected/news.json`(Git 제외)에 쌓이고 뉴스 Tool이 fixture와 함께 읽습니다:
 
