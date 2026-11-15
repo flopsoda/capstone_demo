@@ -4,29 +4,36 @@ collect → normalize → filter → analyze → respond. No network, no LLM key
 import json
 from datetime import date
 
-from app.library.workflows.news_briefing import FixtureSource, GoogleNewsSource, run_news_briefing
+from app.library.workflows.news_briefing import Article, FixtureSource, run_news_briefing
 from app.systems.k_electronics import DATA_DIR
 
 TODAY = date(2026, 11, 10)
 
-RSS = """<?xml version="1.0" encoding="UTF-8"?><rss><channel>
-<item><title>HBM 시장, 내년 공급 부족 전망…가격 상승 - 테크신문</title><link>https://n.example/1</link>
-<pubDate>Mon, 09 Nov 2026 01:00:00 GMT</pubDate><description>HBM 시장 공급 부족 전망.</description><source url="x">테크신문</source></item>
-<item><title>HBM 시장 내년 공급 부족 전망, 가격 오른다 - 경제일보</title><link>https://n.example/2</link>
-<pubDate>Mon, 09 Nov 2026 03:00:00 GMT</pubDate><description>HBM 공급 부족.</description><source url="x">경제일보</source></item>
-<item><title>HBM 시장 내년 공급 부족 전망, 가격 오른다 - 경제일보</title><link>https://n.example/2</link>
-<pubDate>Mon, 09 Nov 2026 03:00:00 GMT</pubDate><description>같은 기사 중복.</description><source url="x">경제일보</source></item>
-<item><title>美 HBM 수출 통제 강화 검토 - 산업일보</title><link>https://n.example/3</link>
-<pubDate>Wed, 04 Nov 2026 01:00:00 GMT</pubDate><description>수출 통제 강화가 검토된다.</description><source url="x">산업일보</source></item>
-</channel></rss>"""
+
+def art(id_, title, summary, outlet, day, url):
+    return Article(id_, title, summary, url, outlet, day, "test", content_level="snippet")
 
 
-def google(body=RSS):
-    return GoogleNewsSource(fetch=lambda url, headers: body.encode())
+ARTICLES = [
+    art("a1", "HBM 시장, 내년 공급 부족 전망…가격 상승", "HBM 시장 공급 부족 전망.", "테크신문", "2026-11-09", "https://n.example/1"),
+    art("a2", "HBM 시장 내년 공급 부족 전망, 가격 오른다", "HBM 공급 부족.", "경제일보", "2026-11-09", "https://n.example/2"),
+    art("a2b", "HBM 시장 내년 공급 부족 전망, 가격 오른다", "같은 기사 중복.", "경제일보", "2026-11-09", "https://n.example/2"),
+    art("a3", "美 HBM 수출 통제 강화 검토", "수출 통제 강화가 검토된다.", "산업일보", "2026-11-04", "https://n.example/3"),
+]
+
+
+class ListSource:
+    name = "list"
+
+    def __init__(self, articles=ARTICLES):
+        self.articles = articles
+
+    def search(self, query, since):
+        return [a for a in self.articles if date.fromisoformat(a.date) >= since]
 
 
 def run(query="HBM 시장", **kw):
-    kw.setdefault("sources", [google()])
+    kw.setdefault("sources", [ListSource()])
     return run_news_briefing(query, today=TODAY, **kw)
 
 
@@ -97,7 +104,7 @@ def test_a_failing_source_does_not_stop_the_others():
         def search(self, query, since):
             raise OSError
 
-    out = run(sources=[Down(), google()])
+    out = run(sources=[Down(), ListSource()])
     assert out["failed_sources"] == ["down"] and out["collected"] == 4
 
 
@@ -108,24 +115,8 @@ def test_demo_scenario_runs_through_the_same_workflow():
     assert any(t["sentiment"] == "positive" for t in out["topics"])  # the appliance-maker deal
 
 
-def test_outlet_tone_needs_two_articles():
-    out = run()
-    assert {r["outlet"]: r["tone"] for r in out["outlet_tone"]}["산업일보"] == "판단 보류"
-
-
 def test_empty_query():
     assert "error" in run_news_briefing(" ", sources=[])
-
-
-def test_a_long_model_made_query_retries_with_its_first_words():
-    asked = []
-
-    def fetch(url, headers):
-        asked.append(url)
-        return (RSS if len(asked) > 1 else "<rss><channel></channel></rss>").encode()
-
-    out = run("HBM 시장 리스크 논란 분쟁", sources=[GoogleNewsSource(fetch=fetch)])
-    assert len(asked) == 2 and out["collected"] == 4
 
 
 def test_the_fictional_scenario_is_scored_from_its_own_last_day():
@@ -171,11 +162,5 @@ def test_live_mode_never_serves_fictional_articles(monkeypatch):
 
     monkeypatch.setenv("NEWS_DATA_MODE", "live")
     monkeypatch.setattr(tool_module, "_llm", lambda: None)
-    monkeypatch.setattr(tool_module.workflow, "GoogleNewsSource", lambda: google("<rss><channel></channel></rss>"))
-    out = tool.invoke({"query": "뉴로엣지", "days": 30})
-    assert out["dataset"] == "live" and out["topics"] == []
-
-
-def test_live_results_that_never_name_the_query_are_dropped():
-    rss = RSS.replace("美 HBM 수출 통제 강화 검토", "유럽 냉장고 해킹 확산").replace("수출 통제 강화가 검토된다.", "마트 비상.")
-    assert run(sources=[google(rss)])["collected"] == 3
+    out = tool.invoke({"query": "뉴로엣지", "days": 30})  # no news database configured in this test
+    assert out["dataset"] == "live" and out["topics"] == [] and "저장소" in out["error"]

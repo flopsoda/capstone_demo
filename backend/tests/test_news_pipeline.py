@@ -22,8 +22,9 @@ PARAGRAPH = ("가온반도체는 15일 차세대 전력반도체 생산라인을
 
 
 def article_html(title: str, paragraphs: int = 4, *, notice: str = "ⓒ 가상일보, 무단 전재 및 재배포 금지",
-                 description: str = "가온반도체가 전력반도체 생산라인 증설에 나선다.", extra: str = "") -> bytes:
-    body = "".join(f"<p>{PARAGRAPH}{i}</p>" for i in range(paragraphs))
+                 description: str = "가온반도체가 전력반도체 생산라인 증설에 나선다.", extra: str = "",
+                 paragraph: str = PARAGRAPH) -> bytes:
+    body = "".join(f"<p>{paragraph}{i}</p>" for i in range(paragraphs))
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>{title}</title>
 <meta property="og:title" content="{title}"><meta property="og:description" content="{description}">
 <link rel="canonical" href="https://news.example/articles/1">

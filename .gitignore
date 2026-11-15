@@ -16,8 +16,6 @@ dist-ssr
 .env
 
 # Python backend
-# Collected real-world news (news_collection CLI): runtime data, never committed
-backend/app/systems/*/data/collected/
 backend/.venv
 __pycache__/
 .pytest_cache/

@@ -113,42 +113,29 @@ def test_follow_ups_merge_for_key_personnel_too():
     assert any("스톡옵션" in f for f in people["key_facts"])
 
 
-def test_collected_store_is_read_next_to_the_fixture(tmp_path):
-    collected = tmp_path / "collected.json"
-    collected.write_text(json.dumps({"articles": [{
-        "id": "LIVE-abc", "date": "2026-10-20", "source": "example.com", "url": "https://example.com/a",
+def test_live_articles_are_read_the_same_way():
+    live = [{
+        "id": "art_x", "date": "2026-10-20", "source": "example.com", "url": "https://example.com/a",
         "headline": "뉴로엣지 노조 설립 움직임", "summary": "임금 협상 결렬 시 쟁의 가능성.",
-        "companies": ["뉴로엣지", "NeuroEdge"], "key_facts": ["노조 설립 움직임"],
+        "companies": ["뉴로엣지"], "key_facts": ["노조 설립 움직임"], "labeled_by": "rule",
         "risk": {"category": "labor_dispute", "label": "노사 분쟁", "level": "LOW"},
-    }]}, ensure_ascii=False), encoding="utf-8")
-    out = analyze_company_risk_news("최근 악재", "뉴로엣지", collected=collected)
-    labor = _risk(out, "labor_dispute")
-    assert out["matched"] == 4 and labor["source"]["url"] == "https://example.com/a"
-    # A store that does not exist yet is simply empty.
-    assert analyze_company_risk_news("최근 악재", "뉴로엣지", collected=tmp_path / "none.json")["matched"] == 3
+    }]
+    out = analyze_company_risk_news("최근 악재", "뉴로엣지", articles=live)
+    assert out["matched"] == 1 and out["risks"][0]["source"]["url"] == "https://example.com/a"
 
 
 def test_demo_mode_reads_the_fixture_and_live_mode_only_real_news(tmp_path, monkeypatch):
     from app.library.tools.run_company_risk_news_analysis import make_run_company_risk_news_analysis
-    from app.library.workflows.news_collection import COLLECTED_FILE
 
     fixture = tmp_path / "news.json"
     fixture.write_text((DATA_DIR / "news.json").read_text(encoding="utf-8"), encoding="utf-8")
-    tool = make_run_company_risk_news_analysis(fixture)
+    tool = make_run_company_risk_news_analysis(fixture)  # no news store bound
     demo = tool.invoke({"query": "리스크", "company": "뉴로엣지"})
     assert demo["dataset"] == "demo" and demo["matched"] == 3
 
     monkeypatch.setenv("NEWS_DATA_MODE", "live")
     live = tool.invoke({"query": "리스크", "company": "뉴로엣지"})
-    assert live["dataset"] == "live" and live["matched"] == 0  # no fictional article in live mode
-    store = tmp_path / COLLECTED_FILE
-    store.parent.mkdir()
-    store.write_text(json.dumps({"articles": [{
-        "id": "LIVE-x", "date": "2026-10-21", "source": "s", "headline": "뉴로엣지 노조 파업 예고", "summary": "",
-        "companies": ["뉴로엣지"], "key_facts": ["파업 예고"], "risk": {"category": "labor_dispute", "label": "노사 분쟁", "level": "MEDIUM"},
-    }]}, ensure_ascii=False), encoding="utf-8")
-    live = tool.invoke({"query": "리스크", "company": "뉴로엣지"})
-    assert [r["source"]["id"] for r in live["risks"]] == ["LIVE-x"]
+    assert live["dataset"] == "live" and live["matched"] == 0 and live["risks"] == []  # never the fixture in live mode
 
 
 def test_news_mode_defaults_to_live(monkeypatch):

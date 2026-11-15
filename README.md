@@ -69,13 +69,16 @@ npm run build    # tsc + vite build
 #                                   Group backend의 /api/events(SSE)를 구독해 전체 Agent Graph · Step 1~8 · 협업 세션을 실제 이벤트로만 보여준다
 ```
 
-뉴스 브리핑 파이프라인(News Agent 기본 Tool `run_news_briefing`): 요청 하나가 수집(Google 뉴스 RSS + 가상 fixture) → 중복 제거 · 주제 묶기 · 중요도 → LLM 분석(요약 · 흐름 · 시사점, 키 없으면 규칙) → 응답을 한 번에 실행합니다. 뉴스 탭에 `HBM 시장 최근 동향 알려줘.` 같은 어떤 주제든 요청할 수 있습니다.
+뉴스 파이프라인(live 모드): 뉴스 탭에 `HBM 시장 최근 동향 알려줘.`처럼 어떤 주제든 요청하면, 저장된 뉴스를 찾고 필요하면 언론사 RSS(29곳, `news/feeds.json`)에서
+새 기사를 모아 본문을 추출 · 정제(trafilatura) → 중복 제거 → 사건 묶기 → 분석(LLM, 키 없으면 규칙) → system별 Postgres 뉴스 저장소(`NEWS_DATABASE_URL`, 없으면
+`MEETINGS_DATABASE_URL`; K `kelec_news`, Group `grp_news`)에 저장 · 재사용 → 사건별 브리핑으로 답합니다. 검색 API는 쓰지 않으므로 RSS에 실린 기사(와 저장소에 쌓인 기사)만 찾습니다.
+robots.txt를 지키고 차단 · 로그인 · 봇 확인 페이지는 우회하지 않으며, 본문을 못 얻은 기사는 요약 · 제목 수준(`content_level`)으로 표시합니다.
 
-실제 뉴스 수집 (선택, backend/에서). 결과는 `data/collected/news.json`(Git 제외)에 쌓이고 뉴스 Tool이 fixture와 함께 읽습니다:
+주기 수집 (선택, backend/에서; 요청 시 수집과 같은 파이프라인). cron · 작업 스케줄러로 돌리거나 `--watch`로 반복합니다:
 
 ```bash
-.venv/bin/python -m app.library.workflows.news_collection --data-dir app/systems/k_electronics/data --company 삼성전자 --days 7
-# NAVER_CLIENT_ID / NAVER_CLIENT_SECRET이 .env에 있으면 네이버 뉴스 API, 없으면 Google 뉴스 RSS. LLM 키가 없거나 --no-llm이면 키워드 규칙으로 분류
+.venv/bin/python -m app.library.workflows.news.collect --schema kelec_news               # K전자 저장소에 한 번
+.venv/bin/python -m app.library.workflows.news.collect --schema grp_news --watch 30      # 그룹 저장소에 30분마다
 ```
 
 backend 테스트:
@@ -190,11 +193,12 @@ backend/
         meeting_minutes.py           회의록 초안 저장 · 확정(담당 · 기한 검사) · 확정본 정정(사유 + 이전 버전 snapshot)
         action_items.py              Action Item 진행 조회(지연 순, 상태별 건수) · 갱신(이력 기록)
         meeting_schedule.py          회의 일정 조회 · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소
-        company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(fixture + 수집분) 조회, 후속 보도를 사안으로 묶음
-        news_collection.py           실제 뉴스 수집 CLI: 네이버 API / Google 뉴스 RSS → LLM·규칙 라벨 → data/collected/news.json
+        company_risk_news_analysis.py 리스크 view: 기업 alias + 리스크 category 키워드로 기사(demo fixture | live 저장소) 조회, 후속 보도를 사안으로 묶음
+        news_briefing.py             브리핑 view: live = gather → 사건별 중요도 · 분석, demo = fixture를 같은 묶기 · 분석으로
         news/                        뉴스 파이프라인(Tool · 주기 수집 공용): mode.py(NEWS_DATA_MODE) · feeds.py(언론사 RSS/Atom/뉴스 sitemap, feeds.json)
                                      · fetch.py(robots.txt · 시간 제한 · 차단 감지) · extract.py(trafilatura 본문 + 정제 + content_level)
-                                     · store.py(NewsStore: system별 schema, sql/NNN_*.sql 버전 관리) · pipeline.py(ingest: 피드 → 발견 → 본문 → 저장)
+                                     · store.py(NewsStore: system별 schema, sql/NNN_*.sql 버전 관리, KG용 조회) · pipeline.py(ingest · gather)
+                                     · cluster.py(중복 · 영속 사건 배정) · labels.py(리스크 분류 · 확인 사항 · 규칙) · text.py · collect.py(주기 수집 CLI)
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
         mna_scenario.py              What-if: review_what_if(path) — 인수가격·영업이익률·고객 비중 변경 전후 평가 · 권고 · 조건 비교 (context 신호 반영)
         mna_executive_summary.py     persona "ALL": review_executive_summary(path) — CEO·CFO·CTO 평가 통합, 핵심 위험·기회·인수 조건 · 권고
@@ -226,6 +230,7 @@ backend/
         data/news.json               뉴스 fixture (NeuroEdge 리스크 기사 3건 + 무관한 기업 기사 2건)
         data/companies.json          인수 대상 기업 fixture (NeuroEdge 재무 · 가치 · 고객 · 기술 · 전략)
     tests/                             test_workflow.py · test_meeting_records.py (회의 저장소 필요: conftest.py의 meeting_db) · test_news_workflow.py · test_mna_review_workflow.py
+                                     · test_news_briefing.py · test_news_pipeline.py · test_news_live.py (뉴스 저장소: conftest.py의 news_db, 가짜 웹)
                                      · test_capabilities.py · test_k_super.py · test_k_app.py · test_events.py · test_group.py · test_group_workflows.py
                                      · test_boundaries.py(runtime/library/system import 경계)
                                      · test_mna_scenario.py (What-if) · test_mna_executive_summary.py (CEO·CFO·CTO 종합 평가)

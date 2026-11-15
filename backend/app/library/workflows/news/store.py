@@ -139,8 +139,8 @@ class NewsStore:
             conn.execute("INSERT INTO news_outlets (domain, name) VALUES (%s, %s) ON CONFLICT (domain) DO NOTHING",
                          (r["domain"], r["outlet"]))
             cur = conn.execute(
-                """INSERT INTO news_articles (id, url, outlet_domain, title, summary, content_level, published_at, feed_url)
-                   VALUES (%(id)s, %(url)s, %(domain)s, %(title)s, %(summary)s, %(content_level)s, %(published)s, %(feed_url)s)
+                """INSERT INTO news_articles (id, url, outlet_domain, title, summary, content_level, published_at, feed_url, discovered_at)
+                   VALUES (%(id)s, %(url)s, %(domain)s, %(title)s, %(summary)s, %(content_level)s, %(published)s, %(feed_url)s, %(discovered)s)
                    ON CONFLICT DO NOTHING""", r)
             added += cur.rowcount
         return added

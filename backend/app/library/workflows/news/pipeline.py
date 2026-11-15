@@ -1,5 +1,5 @@
 """The news pipeline — one ingest() for the Tools (a request's collection) and for scheduled
-collection (collect.py):
+collection (collect.py), and gather() for a request on top of it:
 
     feeds     poll the publisher feeds not polled within FEED_TTL_MINUTES (simple TTL freshness)
       → discover : every feed item is stored once (normalized URL → stable id), feed data only
@@ -8,6 +8,10 @@ collection (collect.py):
                    inside a time / count budget — what does not fit stays pending for later
       → extract  : article text (trafilatura + clean-up), content level, page metadata
       → store    : the better content replaces the feed data; a failure records why
+
+    gather   ingest for the query, then search everything stored (earlier requests and scheduled
+             runs included) → duplicates out → mentions of the query terms → events (persisted,
+             an article keeps its event) → the articles and their events for a view to analyze
 
 A failing feed or page never stops the run: it is counted and recorded.
 """
@@ -21,10 +25,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from . import cluster
 from .extract import SNIPPET_CHARS, extract
 from .feeds import KST, Feed, parse_feed
 from .fetch import Fetcher, FetchError
 from .store import NewsStore, article_id
+from .text import terms as query_terms
 
 FEED_TTL_MINUTES = 15.0
 
@@ -88,7 +94,7 @@ def poll_feeds(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, *, now: da
             discovered += store.add_discovered(conn, ({
                 "id": article_id(i.url), "url": i.url, "domain": i.domain, "outlet": feed.outlet, "title": i.title,
                 "summary": i.summary, "content_level": "snippet" if len(i.summary) >= SNIPPET_CHARS else "title",
-                "published": i.published or now, "feed_url": feed.url} for i in items))
+                "published": i.published or now, "feed_url": feed.url, "discovered": now} for i in items))
     return {"feeds_total": len(feeds), "feeds_polled": len(results), "feeds_fresh": len(feeds) - len(due),
             "feeds_unfinished": unfinished, "feeds_failed": failed, "discovered": discovered}
 
@@ -131,3 +137,58 @@ def ingest(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, *, terms: list
     log("fetch", {k: stats[k] for k in ("pages_tried", "pages_unfinished", "page_results")})
     store.record_run(trigger=trigger, query=query, started=now, finished=datetime.now(KST), stats=stats)
     return stats
+
+
+LOW_COVERAGE = 3  # fewer stored matches than this: say the result is thin
+LEAD_CHARS = 200
+
+
+def lead_of(row: dict[str, Any]) -> str:
+    return (row.get("body") or row.get("summary") or "")[:LEAD_CHARS]
+
+
+def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *, days: int = 7,
+           budget: Budget = REQUEST_BUDGET, now: datetime | None = None, log: Log | None = None) -> dict[str, Any]:
+    """One request's news: collect what is due, then reuse everything stored. Returns
+    {"articles": rows (newest first, duplicates out, each with event_id), "duplicates", "freshness", "coverage"}."""
+    now = now or datetime.now(KST)
+    terms = query_terms(query)
+    stats = ingest(store, feeds, fetcher, terms=terms, days=days, budget=budget, query=query, now=now, log=log)
+    rows = store.search(terms, since=now - timedelta(days=days), until=now + timedelta(hours=1))
+    items = [cluster.Item(r["id"], r["title"], r["outlet"], r["published_at"], r["url"], lead_of(r), r["body_hash"],
+                          str(r["event_id"]) if r["event_id"] else None) for r in rows]
+    kept, dropped = cluster.dedupe(items)
+    keep = {i.id for i in kept}
+    rows = [r for r in rows if r["id"] in keep]
+
+    mention_rows = []
+    for r in rows:
+        title, text = r["title"].lower(), f"{r['title']} {r['summary']} {r['body']}".lower()
+        mention_rows.extend((r["id"], t, text.count(t), t in title) for t in terms)
+    store.save_mentions(mention_rows)
+
+    assignment = cluster.assign(kept, terms)
+    event_of = store.assign_events(assignment, {r["id"]: r["title"] for r in rows})
+    for r in rows:
+        r["event_id"] = event_of[r["id"]]
+
+    fetched_now = sum(1 for r in rows if r["fetch_status"] == "ok" and r["fetched_at"] is not None and r["fetched_at"] >= now)
+    discovered_now = sum(1 for r in rows if r["discovered_at"] >= now)
+    unfinished = stats["feeds_unfinished"] + stats["pages_unfinished"]
+    status = "low" if len(rows) < LOW_COVERAGE else "partial" if unfinished else "ok"
+    log and log("search", {"stored_matches": len(rows), "events": len(set(event_of.values()))})
+    return {
+        "articles": rows,
+        "duplicates": len(dropped),
+        "freshness": {
+            "feed_ttl_minutes": FEED_TTL_MINUTES,
+            "feeds_polled_now": stats["feeds_polled"],
+            "feeds_fresh": stats["feeds_fresh"],
+            "feeds_failed": len(stats["feeds_failed"]),
+            "discovered_now": discovered_now,
+            "fetched_now": fetched_now,
+            "reused_from_store": len(rows) - discovered_now,
+        },
+        "coverage": {"status": status, "stored_matches": len(rows), "unfinished": unfinished,
+                     "note": "언론사 RSS로 수집된 기사만 검색됩니다 (검색 API 미사용)."},
+    }

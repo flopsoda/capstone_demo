@@ -1,7 +1,7 @@
 """Company risk news analysis — implementation workflow behind the
 run_company_risk_news_analysis Tool (app/library/tools/).
 
-    articles about the company (the fixture + what news_collection gathered)
+    articles about the company (demo: the fixture; live: the news pipeline's stored articles)
       → topics   : narrow to the risk categories the request asks about
       → issues   : follow-up reports of one matter become one risk (level = its highest)
       → order    : HIGH first; within a level, the newest report first
@@ -13,8 +13,8 @@ without a risk (`"risk": null`) are favourable or neutral news and come back sep
 as `positive_signals`, so the agent can weigh them against the risks.
 
 News is public: every caller sees the same articles (no clearance filter here).
-Real news comes in through news_collection.py, which writes the same article shape to a
-second store (`collected`); this workflow reads both.
+Live articles come from the news pipeline (news/pipeline.gather) and are turned into the same
+article shape by risk_articles(); each persisted event is one matter (`issue`).
 
 This module is not agent-visible and has no LangChain dependency.
 """
@@ -24,65 +24,17 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable
-from datetime import date
+from datetime import date, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .news.labels import CHECK_POINTS, rule_risk, rule_sentiment
+from .news.labels import requested_categories as requested_categories
+
 
 _MIN_TOKEN_LEN = 2
-
-# Risk category id → keywords that select it from a natural-language request.
-# Matching is case-insensitive substring, so "고객" also covers "주요 고객사".
-RISK_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "customer_concentration": ("고객", "매출 의존", "매출의존", "집중도", "customer", "concentration"),
-    "legal_dispute": ("법적", "소송", "특허", "분쟁", "legal", "lawsuit", "litigation", "patent"),
-    "key_personnel": ("핵심인력", "핵심 인력", "인력", "창업자", "cto", "이탈", "retention", "personnel", "talent"),
-    "labor_dispute": ("노사", "노조", "파업", "labor", "strike", "union"),
-    "regulatory": ("규제", "제재", "당국", "법안", "regulation", "sanction"),
-    "market_reaction": ("주가", "주주", "투자자", "시장 반응", "stock", "shareholder"),
-    "operations": ("생산", "공급망", "감산", "수율", "공장", "production", "supply chain"),
-}
-
-# What a decision maker should confirm for each kind of risk. The agent turns these into
-# the "확인이 필요한 사항" part of its answer; they are questions, not findings.
-CHECK_POINTS: dict[str, tuple[str, ...]] = {
-    "customer_concentration": (
-        "최대 고객의 매출 비중과 공급계약 잔여 기간",
-        "고객 다변화 계획과 신규 고객 확보 현황",
-        "최대 고객 이탈 시 매출·가치 하락 폭",
-    ),
-    "legal_dispute": (
-        "분쟁 상대와 쟁점, 지금 어느 단계인지 (제기·심리·판결)",
-        "예상 배상액과 판매금지(가처분) 등 사업에 미칠 영향",
-        "거래 계약의 진술·보장, 손해배상 조항 반영 여부",
-    ),
-    "key_personnel": (
-        "핵심 인력 명단과 잔류 조건(리텐션 보상, 스톡옵션 행사 시점)",
-        "통합 후 조직 운영·연구 자율성 보장 방안",
-        "핵심 인력 이탈 시 기술 이전·개발 일정 영향",
-    ),
-    "labor_dispute": (
-        "쟁의 일정과 핵심 쟁점",
-        "생산·납기에 미치는 영향 범위",
-        "노사 협의 대응 계획",
-    ),
-    "regulatory": (
-        "적용되는 규제·법 조항과 시행 시점",
-        "사업 계획·주주환원에 미치는 영향 범위",
-        "당국·국회 논의 동향과 대응 창구",
-    ),
-    "market_reaction": (
-        "주가 하락·비판의 직접 원인 (실적·주주환원·업황)",
-        "주요 주주·외국인 투자자의 반응",
-        "IR·주주 소통 계획",
-    ),
-    "operations": (
-        "영향받는 제품·생산 라인과 기간",
-        "납기·매출에 미치는 규모",
-        "대체 생산·공급처 확보 여부",
-    ),
-}
+_KST = timezone(timedelta(hours=9))
 
 _LEVEL_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 _MAX_OUTLETS = 6
@@ -94,8 +46,7 @@ _MAX_POSITIVES = 3
 
 
 def load_articles(path: Path) -> list[dict[str, Any]]:
-    """The store's articles; re-read when the file changes (the collector rewrites it while
-    the backend runs). A missing store is empty."""
+    """The fixture's articles; re-read when the file changes. A missing file is empty."""
     try:
         stat = path.stat()
     except FileNotFoundError:
@@ -128,12 +79,6 @@ def _about_company(article: dict[str, Any], company: str) -> bool:
     return False
 
 
-def requested_categories(query: str, topics: list[str]) -> set[str]:
-    """Risk categories the request mentions. Empty means "no restriction"."""
-    text = f"{query} {' '.join(topics)}".lower()
-    return {cat for cat, keys in RISK_CATEGORY_KEYWORDS.items() if any(k in text for k in keys)}
-
-
 def issue_key(article: dict[str, Any]) -> tuple[str, ...]:
     """Articles with the same key report one matter. A fixture may name the issue
     explicitly (`"issue"`); otherwise reports of the same risk category about exactly the
@@ -143,12 +88,12 @@ def issue_key(article: dict[str, Any]) -> tuple[str, ...]:
     return ("auto", article["risk"]["category"], *sorted(a.lower() for a in article["companies"]))
 
 
-# Collected (real) news: two reports are one story only when their headlines, minus the company's
+# Live (real) news: two reports are one story only when their headlines, minus the company's
 # own name, share enough. Same category + same company is not enough there (a company can face a
 # shareholder suit and a patent suit at once). Fixture articles keep the plain key above.
 SAME_STORY = 0.25
 # Market reaction is one theme told in many words ("주가 급락", "외신 비판", "개미들 비명"):
-# collected reports of it within a few days are one matter, whatever the headlines say.
+# live reports of it within a few days are one matter, whatever the headlines say.
 THEME_CATEGORIES = {"market_reaction": 3}
 COVERAGE_ESCALATION = 3  # outlets
 _NON_WORD = re.compile(r"[^0-9A-Za-z가-힣]")
@@ -239,7 +184,7 @@ def _trend(reports: list[dict[str, Any]]) -> str:
     last = _LEVEL_ORDER.get(reports[-1]["risk"]["level"], 9)
     if last < first:
         return "확대"
-    # Collected news: a later outlet's milder wording is not an easing of the matter.
+    # Live news: a later outlet's milder wording is not an easing of the matter.
     if last > first and not any(r.get("labeled_by") for r in reports):
         return "완화"
     return f"지속 (후속 보도 {len(reports) - 1}건)"
@@ -247,7 +192,7 @@ def _trend(reports: list[dict[str, Any]]) -> str:
 
 def _source(article: dict[str, Any]) -> dict[str, str]:
     source = {"id": article["id"], "date": article["date"], "name": article["source"]}
-    if article.get("url"):  # collected (real) articles link to the original
+    if article.get("url"):  # live (real) articles link to the original
         source["url"] = article["url"]
     return source
 
@@ -263,7 +208,7 @@ def _risk_item(reports: list[dict[str, Any]]) -> dict[str, Any]:
     category = lead["risk"]["category"]
     outlets = len({a["source"] for a in reports})
     level = lead["risk"]["level"]
-    # Collected news labeled by rules sees one article at a time; a story three or more outlets
+    # Live news labeled by rules sees one article at a time; a story three or more outlets
     # carry matters more than any one headline says, so it goes up one level (and says so).
     escalated = outlets >= COVERAGE_ESCALATION and level != "HIGH" and any(a.get("labeled_by") == "rule" for a in reports)
     if escalated:
@@ -293,12 +238,11 @@ def analyze_company_risk_news(
     topics: list[str] | None = None,
     *,
     limit: int = 5,
-    path: Path,
-    collected: Path | None = None,
+    path: Path | None = None,
+    articles: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Pure function so the workflow can be unit-tested without an LLM.
-    `path` is the article store this system owns (bound by the system's Tool), `collected`
-    the store news_collection fills (optional; missing = nothing collected yet).
+    Articles: `articles` (live, from risk_articles()) or the JSON store at `path` (the system's demo fixture).
 
     Returns:
         {
@@ -315,7 +259,8 @@ def analyze_company_risk_news(
     """
     topics = topics or []
     categories = requested_categories(query, topics)
-    articles = [*load_articles(path), *(load_articles(collected) if collected else [])]  # a missing store is empty
+    if articles is None:  # a missing store is empty
+        articles = load_articles(path) if path else []
     about = [a for a in articles if _about_company(a, company)]
 
     risky = [a for a in about if a.get("risk") and (not categories or a["risk"]["category"] in categories)]
@@ -325,7 +270,7 @@ def analyze_company_risk_news(
     risks.sort(key=lambda r: _LEVEL_ORDER.get(r["level"], 9))
     risks = risks[:limit]
 
-    # No risk and not marked neutral: fixture articles with "risk": null are good news; collected ones say so.
+    # No risk and not marked neutral: fixture articles with "risk": null are good news; live ones say so.
     # Many outlets write the same good news (an earnings record): one entry per story, the most covered first.
     stories: list[list[dict[str, Any]]] = []
     for a in sorted((a for a in about if not a.get("risk") and a.get("sentiment", "positive") == "positive"),
@@ -350,3 +295,37 @@ def analyze_company_risk_news(
             for st in stories[:_MAX_POSITIVES]
         ],
     }
+
+
+# ── Live articles → the risk view's article shape ───────────────────────────
+
+_SENTENCE = re.compile(r"(?<=[.!?다])\s+")
+
+
+def _facts(text: str, limit: int = 2) -> list[str]:
+    sentences = [s.strip() for s in _SENTENCE.split(text) if len(s.strip()) >= 12]
+    return [s[:90] for s in sentences[:limit]]
+
+
+def risk_articles(rows: list[dict[str, Any]], company: str) -> list[dict[str, Any]]:
+    """Stored articles (news/store rows, found by searching for `company`) → this workflow's article
+    shape, labeled by the keyword rules. An article whose headline does not name the company only
+    mentions it in passing: neutral, never a risk or good news of that company. The event an article
+    belongs to is its matter (`issue`)."""
+    out = []
+    for r in rows:
+        title, summary, body = r["title"], r.get("summary") or "", r.get("body") or ""
+        named = company.lower() in title.lower()
+        text = f"{title} {summary} {body[:1500]}"
+        risk = rule_risk(text, title) if named else None
+        sentiment = "negative" if risk else (rule_sentiment(text) if named else "neutral")
+        if sentiment == "negative" and not risk:
+            sentiment = "neutral"
+        out.append({
+            "id": r["id"], "date": r["published_at"].astimezone(_KST).date().isoformat(), "source": r["outlet"],
+            "headline": title, "summary": summary or body[:200], "companies": [company], "risk": risk,
+            "sentiment": sentiment, "key_facts": _facts(body or summary) or [title], "url": r["url"],
+            "labeled_by": "rule", "issue": str(r["event_id"]) if r.get("event_id") else None,
+            "content_level": r.get("content_level"),
+        })
+    return out

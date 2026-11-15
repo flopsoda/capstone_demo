@@ -66,6 +66,7 @@ function meetingContextBlocks(result: unknown): MessageBlock[] {
 /** Shape returned by run_company_risk_news_analysis (backend/app/workflows). */
 interface CompanyRiskNewsResult {
   matched: number;
+  error?: string;
   risks: {
     category: string;
     label: string;
@@ -89,6 +90,7 @@ const RISK_LEVEL_BADGE: Record<string, { text: string; tone: BadgeTone }> = {
 
 function companyRiskNewsBlocks(result: unknown): MessageBlock[] {
   if (!isCompanyRiskNewsResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  if (result.error) return [{ kind: "text", text: result.error }];
   if (result.risks.length === 0) return [{ kind: "text", text: "관련 리스크 기사를 찾지 못했습니다." }];
   return result.risks.flatMap((r): MessageBlock[] => {
     const level = RISK_LEVEL_BADGE[r.level] ?? { text: r.level, tone: "info" as const };
@@ -101,7 +103,7 @@ function companyRiskNewsBlocks(result: unknown): MessageBlock[] {
   });
 }
 
-/** One topic of run_news_briefing (backend news_briefing.py). */
+/** One topic (event) of run_news_briefing (backend news_briefing.py). */
 interface NewsTopic {
   importance: number;
   article_count: number;
@@ -110,18 +112,23 @@ interface NewsTopic {
   key_facts: string[];
   sentiment: "positive" | "negative" | "neutral";
   risk?: { label: string; level: string } | null;
-  articles: { title: string; outlet: string; date: string; url?: string }[];
+  articles: { title: string; outlet: string; date: string; url?: string; content_level?: string }[];
 }
 
 interface NewsBriefingResult {
   query: string;
+  dataset?: "live" | "demo";
   collected: number;
-  duplicates_removed: number;
+  duplicates_removed?: number;
+  content_levels?: Record<string, number>;
   trend: string;
   so_what: string;
   topics: NewsTopic[];
   negative_alerts: string[];
-  outlet_tone: { outlet: string; tone: string }[];
+  outlet_tone?: { outlet: string; tone: string }[];
+  freshness?: { fetched_now: number; discovered_now: number; reused_from_store: number; feeds_polled_now: number };
+  coverage?: { status: string; stored_matches: number };
+  error?: string;
 }
 
 const SENTIMENT_BADGE: Record<string, { text: string; tone: BadgeTone }> = {
@@ -130,32 +137,48 @@ const SENTIMENT_BADGE: Record<string, { text: string; tone: BadgeTone }> = {
   neutral: { text: "중립", tone: "info" },
 };
 
+const CONTENT_LEVEL_TEXT: Record<string, string> = { full: "본문", partial: "본문 일부", snippet: "요약", title: "제목만" };
+
 function newsTopicBlocks(t: NewsTopic): MessageBlock[] {
   const mood = SENTIMENT_BADGE[t.sentiment] ?? { text: t.sentiment, tone: "info" as const };
   const risk = t.risk ? ` · ${t.risk.label} ${RISK_LEVEL_BADGE[t.risk.level]?.text ?? t.risk.level}` : "";
   const lead = t.articles[0];
+  const sources = t.articles
+    .slice(0, 3)
+    .map((a) => `${a.date} ${a.outlet}${a.content_level ? ` (${CONTENT_LEVEL_TEXT[a.content_level] ?? a.content_level})` : ""}${a.url ? ` ${a.url}` : ""}`);
   return [
     { kind: "badge", text: `중요도 ${Math.round(t.importance)} · ${mood.text}${risk}`, tone: mood.tone },
     { kind: "label", text: `${lead ? `${lead.date} · ${lead.outlet} · ` : ""}기사 ${t.article_count}건 · 매체 ${t.outlet_count}곳` },
     { kind: "text", text: t.summary },
     ...(t.key_facts.length ? [{ kind: "list" as const, items: t.key_facts }] : []),
+    ...(sources.length ? [{ kind: "list" as const, items: sources }] : []),
   ];
 }
 
 function isNewsBriefingResult(v: unknown): v is NewsBriefingResult {
-  return typeof v === "object" && v !== null && Array.isArray((v as { topics?: unknown }).topics) && "negative_alerts" in v;
+  return typeof v === "object" && v !== null && Array.isArray((v as { topics?: unknown }).topics);
 }
 
 function newsBriefingBlocks(result: unknown): MessageBlock[] {
   if (!isNewsBriefingResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  if (result.error) return [{ kind: "text", text: result.error }];
+  const levels = result.content_levels ?? {};
+  const withBody = (levels.full ?? 0) + (levels.partial ?? 0);
   const head: MessageBlock[] = [
-    { kind: "label", text: `기사 ${result.collected}건 수집 · 중복 ${result.duplicates_removed}건 제거 · 주제 ${result.topics.length}개` },
+    {
+      kind: "label",
+      text: `기사 ${result.collected}건 (본문 확보 ${withBody}건) · 중복 ${result.duplicates_removed ?? 0}건 제거 · 주제 ${result.topics.length}개${result.dataset === "demo" ? " · 데모 데이터" : ""}`,
+    },
   ];
+  if (result.freshness) {
+    const f = result.freshness;
+    head.push({ kind: "label", text: `이번 요청에서 새로 발견 ${f.discovered_now}건 · 본문 수집 ${f.fetched_now}건 · 저장된 기사 재사용 ${f.reused_from_store}건` });
+  }
   if (result.topics.length === 0) return [...head, { kind: "text", text: "기간 안에 관련 기사를 찾지 못했습니다." }];
   if (result.trend) head.push({ kind: "label", text: "한눈에 보기" }, { kind: "text", text: result.trend });
   const tail: MessageBlock[] = [];
   if (result.so_what) tail.push({ kind: "label", text: "시사점 (So-What)" }, { kind: "text", text: result.so_what });
-  const tones = result.outlet_tone.filter((o) => o.tone !== "판단 보류");
+  const tones = (result.outlet_tone ?? []).filter((o) => o.tone !== "판단 보류");
   if (tones.length) tail.push({ kind: "label", text: "매체별 논조" }, { kind: "kv", items: tones.map((o) => ({ k: o.outlet, v: o.tone })) });
   return [...head, { kind: "label", text: "주요 이슈" }, ...result.topics.flatMap(newsTopicBlocks), ...tail];
 }
