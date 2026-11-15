@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from functools import partial
 
 from app.library.workflows.company_risk_news_analysis import analyze_company_risk_news as _analyze_company_risk_news, requested_categories
@@ -147,3 +148,28 @@ def test_news_mode_defaults_to_live(monkeypatch):
     assert data_mode() == "demo"
     monkeypatch.setenv("NEWS_DATA_MODE", "something")
     assert data_mode() == "live"
+
+
+# ── Golden outputs: the demo scenario's results stay the same across refactors ──
+
+GOLDEN = json.loads((Path(__file__).with_name("news_risk_golden.json")).read_text(encoding="utf-8"))
+
+
+def test_demo_risk_results_match_the_golden_file():
+    for case in GOLDEN["risk"]:
+        path = (DATA_DIR if case["system"] == "K" else GROUP_DATA_DIR) / "news.json"
+        r = _analyze_company_risk_news(case["query"], case["company"], case["topics"], path=path)
+        got = [{k: x[k] for k in ("category", "level", "report_count", "outlet_count", "trend", "escalated_by_coverage")}
+               | {"source_id": x["source"]["id"], "timeline": [e["id"] for e in x["timeline"]]} for x in r["risks"]]
+        assert r["matched"] == case["matched"] and got == case["risks"], case["company"]
+        assert [p["source"]["id"] for p in r["positive_signals"]] == case["positive"], case["company"]
+
+
+def test_demo_briefing_topics_match_the_golden_file():
+    from app.library.workflows.news_briefing import FixtureSource, run_news_briefing
+
+    for name, ids in GOLDEN["briefing_topics"].items():
+        data_dir, query = (DATA_DIR, "뉴로엣지") if name.startswith("K-") else (GROUP_DATA_DIR, name[2:])
+        fixture = FixtureSource(data_dir / "news.json")
+        r = run_news_briefing(query, purpose="risk", days=30, sources=[fixture], today=fixture.latest())
+        assert sorted(sorted(a["id"] for a in t["articles"]) for t in r["topics"]) == ids, name

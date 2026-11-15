@@ -24,16 +24,16 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable
-from datetime import date, timedelta, timezone
+from datetime import timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from .news.labels import CHECK_POINTS, rule_risk, rule_sentiment
+from .news.text import similarity
 from .news.labels import requested_categories as requested_categories
 
 
-_MIN_TOKEN_LEN = 2
 _KST = timezone(timedelta(hours=9))
 
 _LEVEL_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -60,10 +60,6 @@ def _load(path: Path, mtime_ns: int, size: int) -> list[dict[str, Any]]:
         return json.load(f)["articles"]
 
 
-def _tokens(text: str) -> list[str]:
-    return [t for t in re.findall(r"[0-9A-Za-z가-힣&.\-]+", text.lower()) if len(t) >= _MIN_TOKEN_LEN]
-
-
 def _about_company(article: dict[str, Any], company: str) -> bool:
     """True when any alias of the article's companies appears in `company` (or vice versa).
 
@@ -80,65 +76,29 @@ def _about_company(article: dict[str, Any], company: str) -> bool:
 
 
 def issue_key(article: dict[str, Any]) -> tuple[str, ...]:
-    """Articles with the same key report one matter. A fixture may name the issue
-    explicitly (`"issue"`); otherwise reports of the same risk category about exactly the
+    """Articles with the same key report one matter: a live article's event id or a fixture's
+    explicit `"issue"`; otherwise (fixture) reports of the same risk category about exactly the
     same set of companies (the subject and, e.g., the plaintiff or customer) are one matter."""
     if article.get("issue"):
         return ("issue", str(article["issue"]))
     return ("auto", article["risk"]["category"], *sorted(a.lower() for a in article["companies"]))
 
 
-# Live (real) news: two reports are one story only when their headlines, minus the company's
-# own name, share enough. Same category + same company is not enough there (a company can face a
-# shareholder suit and a patent suit at once). Fixture articles keep the plain key above.
-SAME_STORY = 0.25
-# Market reaction is one theme told in many words ("주가 급락", "외신 비판", "개미들 비명"):
-# live reports of it within a few days are one matter, whatever the headlines say.
-THEME_CATEGORIES = {"market_reaction": 3}
 COVERAGE_ESCALATION = 3  # outlets
-_NON_WORD = re.compile(r"[^0-9A-Za-z가-힣]")
-
-
-def _bigrams(text: str) -> set[str]:
-    t = _NON_WORD.sub("", text.lower())
-    return {t[i : i + 2] for i in range(len(t) - 1)}
+SAME_STORY = 0.25  # favourable reports of one story: headline similarity with the company's names removed
 
 
 def headline_similarity(a: dict[str, Any], b: dict[str, Any]) -> float:
-    names = sorted({*a["companies"], *b["companies"]}, key=len, reverse=True)
-
-    def strip(h: str) -> str:
-        for n in names:
-            h = h.replace(n, " ")
-        return h
-
-    x, y = _bigrams(strip(a["headline"])), _bigrams(strip(b["headline"]))
-    return len(x & y) / len(x | y) if x and y else 0.0
-
-
-def _same_matter(a: dict[str, Any], members: list[dict[str, Any]]) -> bool:
-    window = THEME_CATEGORIES.get(a["risk"]["category"])
-    if window is not None:
-        latest = max(date.fromisoformat(m["date"]) for m in members)
-        return (date.fromisoformat(a["date"]) - latest).days <= window
-    return max(headline_similarity(a, m) for m in members) >= SAME_STORY
+    return similarity(a["headline"], b["headline"], sorted({*a["companies"], *b["companies"]}))
 
 
 def group_issues(articles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Risk articles → one list per matter (oldest first inside)."""
-    groups: list[tuple[tuple[str, ...], list[dict[str, Any]]]] = []
+    """Risk articles → one list per matter (oldest first inside). A live article's matter is its
+    persistent event (news/cluster.py), so the pipeline's grouping is the risk view's grouping."""
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
     for a in sorted(articles, key=lambda a: a["date"]):
-        key = issue_key(a)
-        for g_key, members in groups:
-            if g_key != key:
-                continue
-            if a.get("labeled_by") and not a.get("issue") and not _same_matter(a, members):
-                continue
-            members.append(a)
-            break
-        else:
-            groups.append((key, [a]))
-    return [members for _, members in groups]
+        groups.setdefault(issue_key(a), []).append(a)
+    return list(groups.values())
 
 
 def _sentiment(article: dict[str, Any]) -> str:

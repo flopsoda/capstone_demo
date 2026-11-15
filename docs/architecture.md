@@ -209,7 +209,7 @@ Advisory Agent  → run_mna_review
 - `backend/app/library/tools/run_company_risk_news_analysis.py`: `make_run_company_risk_news_analysis(fixture, store)` → `@tool("run_company_risk_news_analysis")`, 인자 `query: str, company: str, topics: list[str] | None`. demo는 fixture, live는 `gather(company, 30일)`의 기사를 `risk_articles()`로 같은 기사 모양(규칙 라벨, 사건 = 사안 `issue`)으로 바꿔 같은 workflow에 넣는다. 결과의 `risks[]` 계약(`source.id` 포함)은 같고 live는 `freshness` · `coverage`를 더한다.
 - `backend/app/library/workflows/company_risk_news_analysis.py`: 순수 함수 `analyze_company_risk_news(query, company, topics, path=... | articles=...)`.
   `company`를 기사 `companies` alias와 대조해 대상 기업 기사만 남기고, `query`/`topics`에서 리스크 category 키워드(`labels.RISK_CATEGORY_KEYWORDS`)를 찾아 좁힌다. 키워드가 없으면 그 기업의 모든 리스크를 돌려준다.
-  같은 사안의 후속 보도(`issue` 필드가 같거나, 없으면 같은 category · 같은 `companies` 집합. live 기사는 여기에 더해 기업명을 뺀 제목이 비슷해야 한다. 단 `market_reaction`은 한 주제를 여러 표현으로 쓰므로 3일 안의 보도를 한 사안으로 본다)는 리스크 하나로 묶는다: 수준은 보도 중 가장 높은 것, 대표 보도(`headline` · `summary` · `source`)는 그 수준의 최신 보도, `key_facts`는 모든 보도의 사실(최대 6개).
+  같은 사안의 후속 보도(`issue`가 같음: live 기사는 파이프라인의 영속 사건 id, fixture는 명시한 `issue` 또는 같은 category · 같은 `companies` 집합)는 리스크 하나로 묶는다: 수준은 보도 중 가장 높은 것, 대표 보도(`headline` · `summary` · `source`)는 그 수준의 최신 보도, `key_facts`는 모든 보도의 사실(최대 6개).
   정렬은 HIGH → MEDIUM → LOW, 같은 수준이면 대표 보도 최신순. `"risk": null`인 기사는 리스크가 아닌 우호적 보도로 `positive_signals`에 따로 담는다.
   반환은 dict (`matched` = 리스크 수, `risks[]`에 `category, label, level, headline, summary, key_facts, source{id,date,name,url?}` + `report_count, outlet_count, first_reported, last_reported, trend`(단일 보도 / 확대 / 완화 / 지속; live 기사는 매체마다 표현이 달라 완화로 보지 않는다), 규칙으로 분류한 live 기사가 3곳 이상 매체에 실리면 수준을 한 단계 올리고 `escalated_by_coverage`로 표시, `timeline[]`(오래된 순), `check_points[]`(리스크 종류별 확인 사항), `positive_signals[]`: 같은 이야기는 하나로 묶고 `outlet_count`가 큰 순, `outlet_tone[]`: 매체별 부정·긍정·중립 기사 수와 논조 — 우호/비우호/중립, 기사 2건 미만은 판단 보류).
   뉴스는 공개 자료라 호출 사용자(principal)에 따라 결과가 달라지지 않는다.
@@ -624,7 +624,7 @@ LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`http
 | --- | --- | --- |
 | `backend/tests/test_workflow.py` | 아니오 (테스트 DB) | 회의 조회 workflow — 회의 저장소 seed 위에서 기존 검색 결과 그대로, 등급 필터(대외비 회의는 사내 사용자에게 읽히지 않음), id · 기간 조회 |
 | `backend/tests/test_meeting_records.py` | 아니오 (테스트 DB) | 회의록 초안 → 확정(담당 · 기한 없으면 확정 안 됨) → 정정(사유 필수, snapshot, Action Item 유지), 쓰기 권한(등급 · A2A), 진행 조회(지연 순 · 건수 · 담당 · 기간 · 키워드), 갱신 이력과 후보, 일정 예약 · 이월 · 취소, viewer가 run의 principal에서 오는지, system별 저장소 분리, 저장소 없음 → 오류 결과 |
-| `backend/tests/test_news_workflow.py` | 아니오 | 뉴스 리스크 workflow (기업 alias, category 필터, 정렬, 후속 보도 묶기 · 추세, 확인 사항, 우호적 보도, live 기사 입력, demo/live 분리, 기본 모드 live) |
+| `backend/tests/test_news_workflow.py` | 아니오 | 뉴스 리스크 workflow (기업 alias, category 필터, 정렬, 후속 보도 묶기 · 추세, 확인 사항, 우호적 보도, live 기사 입력, demo/live 분리, 기본 모드 live), NeuroEdge · Group 데모 결과가 `tests/news_risk_golden.json`과 같은지(리팩터링 회귀 방지) |
 | `backend/tests/test_news_briefing.py` | 아니오 | 브리핑 view (단계 순서, 다른 매체의 같은 이야기 = 한 topic, 규칙 · LLM 분석과 실패 시 규칙, risk purpose, demo는 fixture를 시나리오 날짜로, live는 fixture를 쓰지 않음) |
 | `backend/tests/test_news_pipeline.py` | 아니오 (가짜 웹, 저장소 테스트는 테스트 DB) | 피드 파싱(RSS · Atom · sitemap · EUC-KR · 깨진 XML), URL identity, 본문 추출 · 정제 · fallback · `usage_notice`, robots · 차단 · 봇 확인 페이지 · 연결 오류, schema 버전 적용, 발견 · 본문 예산 · TTL · 중복 저장 방지 · 실패 기록 · 본문 검색 |
 | `backend/tests/test_news_live.py` | 아니오 (가짜 웹 + 테스트 DB) | 요청 한 번으로 전체 파이프라인, 두 번째 요청은 저장소 재사용(요청 0건) · 사건 id 유지, 다른 매체 후속 보도가 기존 사건에 합류, live 브리핑의 출처 · freshness · coverage, 두 Tool의 live 계약(`risks[].source.id`), DB 중단 시 오류 결과 |
