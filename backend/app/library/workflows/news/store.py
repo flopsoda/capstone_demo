@@ -153,8 +153,8 @@ class NewsStore:
             where.append("(published_at IS NULL OR published_at >= %(since)s)")
             params["since"] = since
         for i, t in enumerate(terms or []):
-            where.append(f"(title || ' ' || summary) ILIKE %(t{i})s")
-            params[f"t{i}"] = f"%{_like(t)}%"
+            where.append(f"{_squeezed('title', 'summary')} LIKE %(t{i})s")
+            params[f"t{i}"] = f"%{_like(squeeze(t))}%"
         with self.connect() as conn:
             return list(conn.execute(
                 f"SELECT id, url, title, summary FROM news_articles WHERE {' AND '.join(where)} "
@@ -193,7 +193,8 @@ class NewsStore:
     # ── search and reuse ─────────────────────────────────────────────────────
 
     def search(self, terms: list[str], *, since: datetime, until: datetime | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        """Stored articles that name every term (title, description or body), published in the window, newest first."""
+        """Stored articles that name every term (title, description or body; spacing and joining marks
+        ignored), published in the window, newest first."""
         if not terms:
             return []
         where = ["published_at >= %(since)s"]
@@ -202,8 +203,8 @@ class NewsStore:
             where.append("published_at <= %(until)s")
             params["until"] = until
         for i, t in enumerate(terms):
-            where.append(f"(a.title || ' ' || a.summary || ' ' || a.body) ILIKE %(t{i})s")
-            params[f"t{i}"] = f"%{_like(t)}%"
+            where.append(f"{_squeezed('a.title', 'a.summary', 'a.body')} LIKE %(t{i})s")
+            params[f"t{i}"] = f"%{_like(squeeze(t))}%"
         with self.connect() as conn:
             return list(conn.execute(
                 f"""SELECT a.*, o.name AS outlet, ea.event_id
@@ -366,6 +367,19 @@ class NewsStore:
                     WHERE {col} = %s AND (%s::timestamptz IS NULL OR e.last_published >= %s)
                     GROUP BY e.id ORDER BY e.last_published DESC NULLS LAST LIMIT %s""",
                 (value, since, since, limit)))
+
+
+_SQUEEZE = re.compile(r"[\s·ㆍ\-‧]+")
+
+
+def squeeze(text: str) -> str:
+    """Spacing and joining marks do not change a word: "원·달러" = "원달러", "2차 전지" = "2차전지"."""
+    return _SQUEEZE.sub("", text.lower())
+
+
+def _squeezed(*columns: str) -> str:
+    joined = " || ' ' || ".join(columns)
+    return f"regexp_replace(lower({joined}), '[[:space:]·ㆍ‧-]+', '', 'g')"
 
 
 def _like(term: str) -> str:

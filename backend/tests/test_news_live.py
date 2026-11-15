@@ -177,3 +177,15 @@ def test_the_live_risk_view_reads_each_articles_own_risk_and_stance(news_db, mon
     assert [p["headline"] for p in r["positive_signals"]] == ["가온반도체 신공장 착공"]
     tone = {o["outlet"]: (o["negative"], o["positive"]) for o in r["outlet_tone"]}
     assert tone["가상일보"] == (1, 1)  # one critical, one favorable article: the outlet's own articles, one by one
+
+
+def test_search_ignores_spacing_marks_and_drops_generic_words_when_too_little(news_db):
+    feed = Feed("가상일보", "https://e.example/rss.xml")
+    items = [("원·달러 환율 1,400원 돌파", "https://e.example/1", "원·달러 환율이 올랐다.", "Sat, 14 Nov 2026 01:00:00 GMT"),
+             ("2차 전지 소재 수출 증가", "https://e.example/2", "2차전지 소재 수출이 늘었다.", "Sat, 14 Nov 2026 02:00:00 GMT")]
+    w = FakeWeb({feed.url: (200, rss(items))}, robots={"e.example": (200, "User-agent: *\nDisallow: /1\nDisallow: /2")})
+    fx = gather(news_db, [feed], Fetcher(w, host_gap=0), "원달러 환율", now=NOW, budget=BUDGET)
+    assert [r["url"] for r in fx["articles"]] == ["https://e.example/1"]  # "원·달러" is "원달러"
+    battery = gather(news_db, [feed], Fetcher(w, host_gap=0), "2차전지 업황", now=NOW, budget=BUDGET)
+    assert [r["url"] for r in battery["articles"]] == ["https://e.example/2"]  # no article says "업황"
+    assert battery["coverage"]["relaxed_terms"] == ["2차전지"] and battery["coverage"]["status"] == "low"

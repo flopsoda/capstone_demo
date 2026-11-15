@@ -29,7 +29,8 @@ from . import cluster
 from .extract import SNIPPET_CHARS, extract
 from .feeds import KST, Feed, parse_feed
 from .fetch import Fetcher, FetchError
-from .store import NewsStore, article_id
+from .store import NewsStore, article_id, squeeze
+from .text import core_terms
 from .text import terms as query_terms
 
 FEED_TTL_MINUTES = 15.0
@@ -153,8 +154,15 @@ def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *,
     {"articles": rows (newest first, duplicates out, each with event_id), "duplicates", "freshness", "coverage"}."""
     now = now or datetime.now(KST)
     terms = query_terms(query)
-    stats = ingest(store, feeds, fetcher, terms=terms, days=days, budget=budget, query=query, now=now, log=log)
-    rows = store.search(terms, since=now - timedelta(days=days), until=now + timedelta(hours=1))
+    core = core_terms(query)
+    # Pages to fetch: those naming the query's subject (generic words like "동향" rarely appear in a headline).
+    stats = ingest(store, feeds, fetcher, terms=core or terms, days=days, budget=budget, query=query, now=now, log=log)
+    window = {"since": now - timedelta(days=days), "until": now + timedelta(hours=1)}
+    rows = store.search(terms, **window)
+    relaxed = None
+    if len(rows) < LOW_COVERAGE and core and core != terms:  # too little with every word: drop the generic ones
+        rows, relaxed = store.search(core, **window), core
+        terms = core
     items = [cluster.Item(r["id"], r["title"], r["outlet"], r["published_at"], r["url"], lead_of(r), r["body_hash"],
                           str(r["event_id"]) if r["event_id"] else None, has_body=bool(r["body"])) for r in rows]
     kept, dropped = cluster.dedupe(items)
@@ -167,8 +175,8 @@ def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *,
 
     mention_rows = []
     for r in rows:
-        title, text = r["title"].lower(), f"{r['title']} {r['summary']} {r['body']}".lower()
-        mention_rows.extend((r["id"], t, text.count(t), t in title) for t in terms)
+        title, text = squeeze(r["title"]), squeeze(f"{r['title']} {r['summary']} {r['body']}")
+        mention_rows.extend((r["id"], t, text.count(squeeze(t)), squeeze(t) in title) for t in terms)
     store.save_mentions(mention_rows)
 
     assignment = cluster.assign(kept, terms)
@@ -194,5 +202,6 @@ def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *,
             "reused_from_store": len(rows) - discovered_now,
         },
         "coverage": {"status": status, "stored_matches": len(rows), "unfinished": unfinished,
+                     **({"relaxed_terms": relaxed} if relaxed else {}),
                      "note": "언론사 RSS로 수집된 기사만 검색됩니다 (검색 API 미사용)."},
     }
