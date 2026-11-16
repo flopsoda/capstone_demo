@@ -9,8 +9,10 @@ that variable is not set. Without a principal, runs see everything there (anonym
 Outbound network: a test may only open sockets to this machine (the test database, a local
 server). Tests that really call a model or a website are marked `network` (tests/test_agents.py).
 
-News data: the suite runs the demo scenario (NEWS_DATA_MODE=demo) unless a test switches to live,
-the default outside tests. The session fails if a test run left anything new in a system's data/ folder.
+News: the systems' news stores need a database (`news_db`: the test database, both systems' news
+schemas dropped, so each is seeded again from its data/news.json on first use). Tests never poll the
+real publisher feeds (news/feeds.json reads as empty); a test that wants feeds passes its own.
+The session fails if a test run left anything new in a system's data/ folder.
 """
 
 import os
@@ -49,8 +51,15 @@ def _host(address) -> str:
 
 
 @pytest.fixture(autouse=True)
-def news_demo_mode(monkeypatch):
-    monkeypatch.setenv("NEWS_DATA_MODE", "demo")
+def no_publisher_feeds(monkeypatch):
+    from app.library.tools import run_company_risk_news_analysis as risk_tool, run_news_briefing as briefing_tool
+    from app.library.workflows.news.feeds import DEFAULT_FEEDS, load_feeds
+
+    def tests_feeds(path=DEFAULT_FEEDS):
+        return [] if path == DEFAULT_FEEDS else load_feeds(path)
+
+    for module in (briefing_tool, risk_tool):
+        monkeypatch.setattr(module, "load_feeds", tests_feeds)
 
 
 @pytest.fixture(autouse=True)
@@ -112,7 +121,8 @@ def _test_dsn() -> str:
 
 @pytest.fixture
 def news_db(no_configured_meeting_db, monkeypatch):
-    """Both systems' news stores (and a NewsStore("test_news") for workflow tests) on a fresh test database."""
+    """Both systems' news stores (seeded again from their data/news.json on first use) and a
+    NewsStore("test_news") for workflow tests, on a fresh test database."""
     dsn = _test_dsn()
     with psycopg.connect(dsn, autocommit=True) as conn:
         if "test" not in conn.info.dbname:

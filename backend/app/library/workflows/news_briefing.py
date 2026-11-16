@@ -1,14 +1,13 @@
 """News Briefing — the briefing view of the news pipeline (library/workflows/news/), one run per request.
 
     query (any: a company, an industry, a market, a regulation, a person)
-      live : news.pipeline.gather — collect what is due from the publisher feeds, fetch the pages that
-             matter, then reuse everything the system's news store holds; duplicates out, events
-             (persisted: an article keeps its event id)
-      demo : the scenario's fictional articles (FixtureSource), grouped the same way, in memory
-      then : every event (topic) scored for importance (independent coverage, recency, how squarely it is
-             about the query) → news.analysis: each kept article's stance toward the target, type, risk and
-             facts (cached per version in the live store), then each event's summary, evidence-backed facts,
-             impact, implication → outlet tone from the articles' stances → a structured result
+      gather : news.pipeline.gather — collect what is due from the publisher feeds, fetch the pages that
+               matter, then reuse everything the system's news store holds (articles it registered from
+               its data file included); duplicates out, events (persisted: an article keeps its event id)
+      brief  : every event (topic) scored for importance (independent coverage, recency, how squarely it is
+               about the query) → news.analysis: each kept article's stance toward the target, type, risk and
+               facts (stored per version and reused), then each event's summary, evidence-backed facts,
+               impact, implication → outlet tone from the articles' stances → a structured result
 
 `purpose` selects optional analysis steps on top of the general ones. "general" is the default;
 "risk" adds a risk category, level and check points per topic.
@@ -21,12 +20,10 @@ Not agent-visible, no LangChain dependency: the Tool passes `llm` as (system, us
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from .news import analysis, cluster
 from .news.feeds import KST, Feed
@@ -51,11 +48,9 @@ class Article:
     id: str
     title: str
     summary: str
-    url: str
+    url: str | None  # None: registered without an original link
     outlet: str
     date: str  # ISO date (Korean time)
-    source: str  # demo_fixture | news_store
-    hint: dict[str, Any] | None = None  # labels a source already carries (the demo fixture's risk)
     content_level: str = "snippet"
     body: str = ""
     usage_notice: bool = False
@@ -82,53 +77,14 @@ class Article:
 
     def item(self) -> cluster.Item:
         published = self.published or datetime.fromisoformat(self.date).replace(tzinfo=KST)
-        return cluster.Item(self.id, self.title, self.outlet, published, self.url,
-                            (self.body or self.summary)[:200], self.body_hash, self.event_id, self.hint, bool(self.body))
-
-
-class Source(Protocol):
-    name: str
-
-    def search(self, query: str, since: date) -> list[Article]: ...
-
-
-class FixtureSource:
-    """The demo scenario's fictional articles (data/news.json): the only source in demo mode. An article
-    matches when the query names one of its companies, or when every query word appears in it."""
-
-    name = "demo_fixture"
-
-    def __init__(self, path: Path):
-        self.path = path
-
-    def _articles(self) -> list[dict[str, Any]]:
-        return json.loads(self.path.read_text(encoding="utf-8"))["articles"] if self.path.exists() else []
-
-    def latest(self) -> date | None:
-        """The scenario's last day: demo runs use it as today (the scenario is set in a fixed time)."""
-        dates = [a["date"] for a in self._articles()]
-        return date.fromisoformat(max(dates)) if dates else None
-
-    def search(self, query: str, since: date) -> list[Article]:
-        terms, q = query_terms(query), query.lower()
-        out = []
-        for a in self._articles():
-            if date.fromisoformat(a["date"]) < since:
-                continue
-            text = " ".join([a["headline"], a["summary"], *a.get("companies", [])]).lower()
-            named = any(c.lower() in q for c in a.get("companies", []))
-            if named or (terms and all(t in text for t in terms)):
-                out.append(Article(a["id"], a["headline"], a["summary"], a.get("url", ""), a["source"], a["date"],
-                                   self.name, {"risk": a.get("risk"), "key_facts": a.get("key_facts", []),
-                                               "companies": a.get("companies", []), "issue": a.get("issue")},
-                                   content_level="snippet"))
-        return out
+        return cluster.Item(self.id, self.title, self.outlet, published, self.url or "",
+                            (self.body or self.summary)[:200], self.body_hash, self.event_id, has_body=bool(self.body))
 
 
 def article_from_row(row: dict[str, Any]) -> Article:
     published = row["published_at"].astimezone(KST)
     return Article(row["id"], row["title"], row["summary"] or lead_of(row), row["url"], row["outlet"],
-                   published.date().isoformat(), "news_store", content_level=row["content_level"], body=row["body"],
+                   published.date().isoformat(), content_level=row["content_level"], body=row["body"],
                    usage_notice=row["usage_notice"], published=published, body_hash=row["body_hash"],
                    event_id=str(row["event_id"]) if row.get("event_id") else None, syndicated_from=row.get("syndicated_from"))
 
@@ -185,27 +141,20 @@ def _article_out(a: Article) -> dict[str, Any]:
     return out
 
 
-def article_analyses(topics: list[dict[str, Any]], by_id: dict[str, Article], target: str, llm: LLM | None,
+def article_analyses(topics: list[dict[str, Any]], target: str, llm: LLM | None,
                      store: NewsStore | None) -> dict[str, dict[str, Any]]:
-    """Per-article analysis of the kept topics' articles: the fixture's labels (demo), the store's earlier
-    analysis of the same version (live), the model for the rest, rules when there is none."""
-    wanted = [a for t in topics for a in t["articles"][:ARTICLES_PER_TOPIC]]
-    out: dict[str, dict[str, Any]] = {}
-    for a in wanted:
-        hint = by_id[a["id"]].hint
-        if hint is not None:
-            out[a["id"]] = analysis.fixture_article(a, hint)
-    out.update(analysis.analyze_with_store([a for a in wanted if a["id"] not in out], target, llm, store))
-    return out
+    """Per-article analysis of the kept topics' articles: the store's earlier analysis of the same version,
+    the model for the rest, rules when there is none."""
+    return analysis.analyze_with_store([a for t in topics for a in t["articles"][:ARTICLES_PER_TOPIC]], target, llm, store)
 
 
 def brief(articles: list[Article], assignment: dict[str, str], query: str, *, purpose: str, today: date, since: date,
           limit: int, llm: LLM | None, log: Log, store: NewsStore | None = None) -> dict[str, Any]:
+    purpose = purpose if purpose in PURPOSES else "general"
     by_id = {a.id: a for a in articles}
     target = target_of(query)
     groups = cluster.groups([a.item() for a in articles], assignment)
-    # Recency counts from the newest article: live news ends today, the fictional scenario ends on its
-    # own last day, and either way the latest story scores as new.
+    # Recency counts from the newest article found: the latest story scores as new.
     as_of = min(today, max((date.fromisoformat(a.date) for a in articles), default=today))
     topics = []
     for g in groups:
@@ -232,7 +181,7 @@ def brief(articles: list[Article], assignment: dict[str, str], query: str, *, pu
         t["id"] = f"topic-{n}"
     log("filter", {"articles": len(articles), "topics": topic_count, "kept": len(topics)})
 
-    analyses = article_analyses(topics, by_id, target, llm, store)
+    analyses = article_analyses(topics, target, llm, store)
     trend, so_what, method = analysis.analyze_events(topics, analyses, query, purpose, llm)
     tone_rows = []
     for t in topics:
@@ -280,43 +229,12 @@ def _no_log(stage: str, detail: dict) -> None:
     return None
 
 
-def run_news_briefing(query: str, *, purpose: str = "general", days: int = 7, limit: int = 8, sources: list[Source],
-                      llm: LLM | None = None, today: date | None = None, log: Log | None = None) -> dict[str, Any]:
-    """Briefing over in-memory sources (the demo fixture): collect → duplicates out → group → analyze."""
-    log = log or _no_log
-    query = (query or "").strip()
-    purpose = purpose if purpose in PURPOSES else "general"
-    today = today or datetime.now(KST).date()
-    if not query:
-        return {"query": "", "error": "검색할 주제가 없습니다.", "topics": []}
-    since = today - timedelta(days=days)
-    articles: list[Article] = []
-    failed: list[str] = []
-    for src in sources:
-        try:
-            found = src.search(query, since)
-        except Exception as e:  # one source down does not stop the others
-            failed.append(src.name)
-            log("collect", {"source": src.name, "error": type(e).__name__})
-            continue
-        log("collect", {"source": src.name, "count": len(found)})
-        articles.extend(found)
-    kept, dropped = cluster.dedupe([a.item() for a in articles])
-    keep = {i.id for i in kept}
-    articles = [a for a in articles if a.id in keep]
-    result = brief(articles, cluster.assign(kept, query_terms(query)), query, purpose=purpose, today=today, since=since,
-                   limit=limit, llm=llm, log=log)
-    log("respond", {"topics": len(result["topics"])})
-    return {**result, "collected": len(articles) + len(dropped), "duplicates_removed": len(dropped), "failed_sources": failed}
-
-
-def run_live_briefing(query: str, *, store: NewsStore, feeds: list[Feed], fetcher: Fetcher, purpose: str = "general",
+def run_news_briefing(query: str, *, store: NewsStore, feeds: list[Feed], fetcher: Fetcher, purpose: str = "general",
                       days: int = 7, limit: int = 8, llm: LLM | None = None, now: datetime | None = None,
                       budget: Budget = REQUEST_BUDGET, log: Log | None = None) -> dict[str, Any]:
-    """Briefing over real news: gather (collect what is due, reuse the store, persisted events) → analyze."""
+    """One briefing: gather (collect what is due, reuse the store, persisted events) → analyze → respond."""
     log = log or _no_log
     query = (query or "").strip()
-    purpose = purpose if purpose in PURPOSES else "general"
     now = now or datetime.now(KST)
     if not query:
         return {"query": "", "error": "검색할 주제가 없습니다.", "topics": []}

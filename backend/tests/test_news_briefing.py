@@ -1,17 +1,19 @@
-"""News briefing workflow (app/library/workflows/news_briefing.py): one request runs
-collect → normalize → filter → analyze → respond. No network, no LLM key: fake sources and a fake model."""
+"""News briefing view (app/library/workflows/news_briefing.py): events → importance → per-article and
+per-event analysis → result. Unit tests give brief() articles directly (no store, no network, a fake
+model); the scenario tests run the Tool over a system's seeded news store."""
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
-from app.library.workflows.news_briefing import Article, FixtureSource, run_news_briefing
-from app.systems.k_electronics import DATA_DIR
+from app.library.workflows.news import cluster
+from app.library.workflows.news.text import terms as query_terms
+from app.library.workflows.news_briefing import Article, brief, run_news_briefing
 
 TODAY = date(2026, 11, 10)
 
 
 def art(id_, title, summary, outlet, day, url):
-    return Article(id_, title, summary, url, outlet, day, "test", content_level="snippet")
+    return Article(id_, title, summary, url, outlet, day, content_level="snippet")
 
 
 ARTICLES = [
@@ -22,26 +24,22 @@ ARTICLES = [
 ]
 
 
-class ListSource:
-    name = "list"
-
-    def __init__(self, articles=ARTICLES):
-        self.articles = articles
-
-    def search(self, query, since):
-        return [a for a in self.articles if date.fromisoformat(a.date) >= since]
-
-
-def run(query="HBM 시장", **kw):
-    kw.setdefault("sources", [ListSource()])
-    return run_news_briefing(query, today=TODAY, **kw)
+def run(query="HBM 시장", articles=ARTICLES, *, days=7, purpose="general", llm=None, log=None):
+    """What the pipeline hands brief(): articles in the window, duplicates out, events assigned."""
+    since = TODAY - timedelta(days=days)
+    found = [a for a in articles if date.fromisoformat(a.date) >= since]
+    kept, dropped = cluster.dedupe([a.item() for a in found])
+    keep = {i.id for i in kept}
+    out = brief([a for a in found if a.id in keep], cluster.assign(kept, query_terms(query)), query, purpose=purpose,
+                today=TODAY, since=since, limit=8, llm=llm, log=log or (lambda stage, detail: None))
+    return {**out, "duplicates_removed": len(dropped)}
 
 
-def test_one_request_runs_every_stage_in_order():
+def test_brief_filters_then_analyzes():
     stages = []
     out = run(log=lambda stage, detail: stages.append(stage))
-    assert stages == ["collect", "filter", "analyze", "respond"]
-    assert out["collected"] == 4 and out["duplicates_removed"] == 1
+    assert stages == ["filter", "analyze"]
+    assert out["collected"] == 3 and out["duplicates_removed"] == 1
 
 
 def test_any_query_works_not_only_registered_companies():
@@ -97,15 +95,14 @@ def test_llm_fills_summaries_trend_and_so_what():
 def test_outlets_reporting_one_event_differently_keep_their_own_stance():
     body = "가온반도체가 새 공장을 짓는다는 소식에 대해 평가가 엇갈린다. " * 12
     one_event = [
-        Article("p1", "가온반도체 신공장 착공, 성장 동력 확보", "", "https://p.example/1", "가상일보", "2026-11-09", "t",
+        Article("p1", "가온반도체 신공장 착공, 성장 동력 확보", "", "https://p.example/1", "가상일보", "2026-11-09",
                 content_level="full", body=body),
-        Article("p2", "가온반도체 신공장 착공, 과잉 투자 논란", "", "https://p.example/2", "모의경제", "2026-11-09", "t",
+        Article("p2", "가온반도체 신공장 착공, 과잉 투자 논란", "", "https://p.example/2", "모의경제", "2026-11-09",
                 content_level="full", body=body.replace("평가", "우려")),
-        Article("p3", "가온반도체 신공장 착공 소식", "착공 소식 요약", "https://p.example/3", "제목일보", "2026-11-09", "t",
+        Article("p3", "가온반도체 신공장 착공 소식", "착공 소식 요약", "https://p.example/3", "제목일보", "2026-11-09",
                 content_level="snippet"),
     ]
-    out = run("가온반도체", sources=[ListSource(one_event)],
-              llm=fake_llm({"p1": "favorable", "p2": "critical", "p3": "favorable"}))
+    out = run("가온반도체", one_event, llm=fake_llm({"p1": "favorable", "p2": "critical", "p3": "favorable"}))
     top = out["topics"][0]
     assert top["article_count"] == 3  # one event…
     stances = {r["outlet"]: r["stance"] for r in top["stance_by_outlet"]}
@@ -148,33 +145,21 @@ def test_unknown_purpose_is_general():
     assert run(purpose="m&a")["purpose"] == "general"
 
 
-def test_a_failing_source_does_not_stop_the_others():
-    class Down:
-        name = "down"
+def test_the_scenario_runs_through_the_same_pipeline(news_db, monkeypatch):
+    from app.library.tools import run_news_briefing as tool_module
+    from app.systems.k_electronics.tools.run_news_briefing import run_news_briefing as tool
 
-        def search(self, query, since):
-            raise OSError
-
-    out = run(sources=[Down(), ListSource()])
-    assert out["failed_sources"] == ["down"] and out["collected"] == 4
-
-
-def test_demo_scenario_runs_through_the_same_workflow():
-    out = run_news_briefing("뉴로엣지", purpose="risk", days=30, sources=[FixtureSource(DATA_DIR / "news.json")], today=date(2026, 10, 10))
+    monkeypatch.setattr(tool_module, "_llm", lambda: None)
+    out = tool.invoke({"query": "뉴로엣지", "purpose": "risk"})  # the registered articles, from the store
     labels = sorted((t["risk"]["label"], t["article_count"]) for t in out["topics"] if t.get("risk"))
-    assert ("특허 소송", 2) in labels  # the lawsuit and the injunction: one matter
+    assert ("법적 분쟁", 2) in labels  # the lawsuit and the injunction: one stored event
     assert any(t["sentiment"] == "positive" for t in out["topics"])  # the appliance-maker deal
+    assert out["article_analysis"] == ["imported"]  # the analyses registered with the articles, reused
+    assert all("url" not in a for t in out["topics"] for a in t["articles"])  # registered without a link
 
 
 def test_empty_query():
-    assert "error" in run_news_briefing(" ", sources=[])
-
-
-def test_the_fictional_scenario_is_scored_from_its_own_last_day():
-    fixture = FixtureSource(DATA_DIR / "news.json")
-    assert fixture.latest() == date(2026, 10, 8)
-    out = run_news_briefing("뉴로엣지", purpose="risk", days=30, sources=[fixture], today=fixture.latest())
-    assert out["topics"][0]["importance"] >= 50 and out["negative_alerts"]
+    assert "error" in run_news_briefing(" ", store=None, feeds=[], fetcher=None)
 
 
 def test_content_adjusts_the_filter_score():
@@ -186,32 +171,36 @@ def test_content_adjusts_the_filter_score():
     assert adjusted_importance({**base, "importance_llm": "low", "risk": {"level": "LOW"}}) == 30
 
 
-def test_the_agent_tool_runs_the_workflow_not_itself(monkeypatch):
+def test_the_agent_tool_runs_the_workflow_not_itself(news_db, monkeypatch):
     # The Tool and the workflow share the name run_news_briefing; the Tool once called itself.
     from app.library.tools import run_news_briefing as tool_module
     from app.systems.k_electronics.tools.run_news_briefing import run_news_briefing as tool
 
     monkeypatch.setattr(tool_module, "_llm", lambda: None)
     out = tool.invoke({"query": "뉴로엣지", "purpose": "risk", "days": 30})
-    assert out["topic_count"] >= 1 and out["purpose"] == "risk"
+    assert out["purpose"] == "risk" and "topics" in out
 
 
-def test_demo_mode_is_the_fixture_on_its_own_calendar(monkeypatch):
+def test_days_narrows_the_window_and_the_default_is_the_lookback(news_db, monkeypatch):
     from app.library.tools import run_news_briefing as tool_module
+    from app.library.workflows.news.pipeline import LOOKBACK_DAYS
     from app.systems.k_electronics.tools.run_news_briefing import run_news_briefing as tool
 
     monkeypatch.setattr(tool_module, "_llm", lambda: None)
-    out = tool.invoke({"query": "뉴로엣지", "days": 7})  # the scenario ends 2026-10-08
-    assert out["dataset"] == "demo" and out["period"] == {"from": "2026-10-01", "to": "2026-10-08"}
-    dates = [a["date"] for t in out["topics"] for a in t["articles"]]
-    assert dates and min(dates) >= "2026-10-01"  # the window applies to the fixture too
+    out = tool.invoke({"query": "뉴로엣지"})
+    span = date.fromisoformat(out["period"]["to"]) - date.fromisoformat(out["period"]["from"])
+    assert span.days == LOOKBACK_DAYS
+    recent = tool.invoke({"query": "뉴로엣지", "days": 1})
+    assert all(a["date"] >= recent["period"]["from"] for t in recent["topics"] for a in t["articles"])
+    monkeypatch.setenv("NEWS_LOOKBACK_DAYS", "10")
+    capped = tool.invoke({"query": "뉴로엣지", "days": 365})
+    assert (date.fromisoformat(capped["period"]["to"]) - date.fromisoformat(capped["period"]["from"])).days == 10
 
 
-def test_live_mode_never_serves_fictional_articles(monkeypatch):
+def test_without_a_news_database_the_tool_answers_with_an_error(monkeypatch):
     from app.library.tools import run_news_briefing as tool_module
     from app.systems.k_electronics.tools.run_news_briefing import run_news_briefing as tool
 
-    monkeypatch.setenv("NEWS_DATA_MODE", "live")
     monkeypatch.setattr(tool_module, "_llm", lambda: None)
     out = tool.invoke({"query": "뉴로엣지", "days": 30})  # no news database configured in this test
-    assert out["dataset"] == "live" and out["topics"] == [] and "저장소" in out["error"]
+    assert out["topics"] == [] and "설정되지 않았습니다" in out["error"]

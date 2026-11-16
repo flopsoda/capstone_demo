@@ -1,7 +1,13 @@
 {
+  "outlets": {
+    "테크데일리 (가상)": "techdaily.example",
+    "반도체경제 (가상)": "semieconomy.example",
+    "AI비즈 (가상)": "aibiz.example"
+  },
   "articles": [
     {
       "id": "NEWS-2026-10-02-01",
+      "event": "alphamobile-npu-supplier-review",
       "date": "2026-10-02",
       "source": "테크데일리 (가상)",
       "headline": "뉴로엣지 최대 고객사 알파모바일, 차세대 NPU 공급업체 다변화 검토",
@@ -16,6 +22,7 @@
     },
     {
       "id": "NEWS-2026-09-24-01",
+      "event": "corenpu-patent-suit",
       "date": "2026-09-24",
       "source": "반도체경제 (가상)",
       "headline": "코어NPU, 뉴로엣지를 상대로 NPU 메모리 구조 관련 특허침해 소송 제기",
@@ -30,6 +37,7 @@
     },
     {
       "id": "NEWS-2026-09-30-01",
+      "event": "neuroedge-key-engineers",
       "date": "2026-09-30",
       "source": "AI비즈 (가상)",
       "headline": "뉴로엣지 창업자 CTO, \"인수 이후에도 독립적인 연구환경이 중요\"",
@@ -44,6 +52,7 @@
     },
     {
       "id": "NEWS-2026-09-18-01",
+      "event": "omegafoundry-utilization",
       "date": "2026-09-18",
       "source": "반도체경제 (가상)",
       "headline": "오메가파운드리, 최대 고객사 물량 축소로 3분기 가동률 하락",
@@ -54,6 +63,7 @@
     },
     {
       "id": "NEWS-2026-09-10-01",
+      "event": "deltasensor-wage-talks",
       "date": "2026-09-10",
       "source": "테크데일리 (가상)",
       "headline": "델타센서, 유럽 법인 노조와 임금 협상 결렬",
@@ -64,6 +74,7 @@
     },
     {
       "id": "NEWS-2026-10-08-01",
+      "event": "corenpu-patent-suit",
       "date": "2026-10-08",
       "source": "반도체경제 (가상)",
       "headline": "코어NPU, 뉴로엣지 NPU 판매금지 가처분 추가 신청…심리 11월 예정",
@@ -77,6 +88,7 @@
     },
     {
       "id": "NEWS-2026-10-06-01",
+      "event": "neuroedge-smarthome-npu",
       "date": "2026-10-06",
       "source": "AI비즈 (가상)",
       "headline": "뉴로엣지 저전력 엣지 NPU, 국내 가전사 스마트홈 기기에 채택",
@@ -90,6 +102,7 @@
     },
     {
       "id": "NEWS-2026-09-27-01",
+      "event": "neuroedge-key-engineers",
       "date": "2026-09-27",
       "source": "AI비즈 (가상)",
       "headline": "뉴로엣지 핵심 설계인력 5명, 내년 상반기 스톡옵션 행사 가능…이탈 우려",

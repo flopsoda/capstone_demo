@@ -66,7 +66,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 ## 구현 후
 
 - 관련 테스트를 실행한다.
-  - backend: `cd backend && .venv/bin/python -m pytest` (회의 · 뉴스 저장소 테스트는 `MEETINGS_TEST_DATABASE_URL` — 이름에 test가 든 버릴 Postgres DB — 가 있어야 실행되고 없으면 skip. 테스트는 localhost 밖으로 나갈 수 없고(`tests/conftest.py`), 실제 모델 · 웹을 부르는 테스트는 `network` 마커를 단다. 테스트 실행이 system의 `data/` 폴더에 파일을 남기면 세션이 실패한다. `tests/test_agents.py`는 LLM key — `OLLAMA_API_KEY`, `LLM_PROVIDER=openai`면 `OPENAI_API_KEY` — 가 있어야 실행된다). import 경계는 `tests/test_boundaries.py`가 지킨다.
+  - backend: `cd backend && .venv/bin/python -m pytest` (회의 · 뉴스 저장소 테스트는 `MEETINGS_TEST_DATABASE_URL` — 이름에 test가 든 버릴 Postgres DB — 가 있어야 실행되고 없으면 skip. 테스트는 localhost 밖으로 나갈 수 없고 실제 언론사 피드도 읽지 않으며(`tests/conftest.py`; 뉴스 시나리오 테스트는 `news_db`가 지운 schema에 `data/news.json`이 다시 등록된 저장소를 쓴다), 실제 모델 · 웹을 부르는 테스트는 `network` 마커를 단다. 테스트 실행이 system의 `data/` 폴더에 파일을 남기면 세션이 실패한다. `tests/test_agents.py`는 LLM key — `OLLAMA_API_KEY`, `LLM_PROVIDER=openai`면 `OPENAI_API_KEY` — 가 있어야 실행된다). import 경계는 `tests/test_boundaries.py`가 지킨다.
   - frontend: `npm run build` (tsc 포함), `npm run lint`
 - 실제 실행 경로를 바꿨다면 backend 둘(`:8000`, `:8001`) + frontend를 띄워 `/group`에서 예시 요청을 한 번 돌리고 `/monitor`가 8/8까지 가는지 본다.
 - 문서는 **적힌 사실이 틀려졌을 때** 코드와 같은 커밋에서 갱신한다. "의미있는 변화"가 아니라 "문서가 거짓이 되었는가"가 기준이다.

@@ -255,7 +255,7 @@
      "level": "HIGH",
      "report_count": 2,
      "outlet_count": 2,
-     "trend": "완화",
+     "trend": "지속 (후속 보도 1건)",
      "escalated_by_coverage": false,
      "source_id": "NEWS-G-2026-10-05-01",
      "timeline": [
@@ -294,7 +294,7 @@
      "level": "HIGH",
      "report_count": 2,
      "outlet_count": 2,
-     "trend": "완화",
+     "trend": "지속 (후속 보도 1건)",
      "escalated_by_coverage": false,
      "source_id": "NEWS-G-2026-10-05-01",
      "timeline": [
@@ -396,7 +396,7 @@
      "level": "HIGH",
      "report_count": 2,
      "outlet_count": 2,
-     "trend": "완화",
+     "trend": "지속 (후속 보도 1건)",
      "escalated_by_coverage": false,
      "source_id": "NEWS-G-2026-10-05-01",
      "timeline": [
@@ -562,6 +562,9 @@
    ]
   ],
   "G-K그룹": [
+   [
+    "NEWS-G-2026-09-12-01"
+   ],
    [
     "NEWS-G-2026-09-26-01"
    ],

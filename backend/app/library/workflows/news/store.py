@@ -3,9 +3,10 @@
 
 The connection string is NEWS_DATABASE_URL, or MEETINGS_DATABASE_URL when that is not set (one
 Postgres, separate schemas). The schema is versioned: sql/NNN_*.sql run once each, in order,
-recorded in schema_version (store.migrate(), done on first use).
-
-Only live (real) news is stored here: demo mode never touches the database (mode.py).
+recorded in schema_version (store.migrate(), done on first use). A system may bind a data file
+of articles it already has (NewsStore(schema, seed=data/news.json), seed.py): it is applied after
+the migrations, once per process, and upserts the same rows every time. Those articles are then
+news like any other: every request searches, groups and analyzes everything stored the same way.
 
 Read interface for other components (e.g. the Enterprise KG) — stable ids, no LLM, no network:
     get_article(id) · get_articles(ids) · get_event(id) · events_for(surface | entity_ref) · provenance(id)
@@ -41,6 +42,17 @@ def article_id(url: str) -> str:
     return "art_" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:20]
 
 
+def refresh_events(conn: psycopg.Connection, event_ids: list[str]) -> None:
+    """Events' first and last publication from their articles."""
+    if event_ids:
+        conn.execute(
+            """UPDATE news_events e SET first_published = s.first, last_published = s.last, updated_at = now()
+               FROM (SELECT ea.event_id, min(a.published_at) AS first, max(a.published_at) AS last
+                     FROM news_event_articles ea JOIN news_articles a ON a.id = ea.article_id
+                     WHERE ea.event_id = ANY(%s::uuid[]) GROUP BY ea.event_id) s
+               WHERE e.id = s.event_id""", (event_ids,))
+
+
 def migrations() -> list[tuple[int, Path]]:
     out = []
     for p in sorted(SQL_DIR.glob("*.sql")):
@@ -51,9 +63,10 @@ def migrations() -> list[tuple[int, Path]]:
 
 
 class NewsStore:
-    def __init__(self, schema: str, *, dsn: str | None = None):
+    def __init__(self, schema: str, *, dsn: str | None = None, seed: Path | None = None):
         self.schema = schema
         self._dsn = dsn
+        self.seed = seed
         self._ready = False
         self._lock = threading.Lock()
 
@@ -109,6 +122,10 @@ class NewsStore:
                     conn.execute(path.read_text(encoding="utf-8"))
                     conn.execute("INSERT INTO schema_version (version, name) VALUES (%s, %s)", (version, path.name))
                     applied.append(version)
+                if self.seed is not None and self.seed.exists():
+                    from .seed import apply_seed  # seed.py imports this module
+
+                    apply_seed(conn, self.schema, json.loads(self.seed.read_text(encoding="utf-8")))
             self._ready = True
             return applied
 
@@ -193,8 +210,9 @@ class NewsStore:
     # ── search and reuse ─────────────────────────────────────────────────────
 
     def search(self, terms: list[str], *, since: datetime, until: datetime | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        """Stored articles that name every term (title, description or body; spacing and joining marks
-        ignored), published in the window, newest first."""
+        """Stored articles that name every term — in the title, description or body (spacing and joining
+        marks ignored), or as a name the article is linked to (news_mentions: a company it is about) —
+        published in the window, newest first."""
         if not terms:
             return []
         where = ["published_at >= %(since)s"]
@@ -203,8 +221,10 @@ class NewsStore:
             where.append("published_at <= %(until)s")
             params["until"] = until
         for i, t in enumerate(terms):
-            where.append(f"{_squeezed('a.title', 'a.summary', 'a.body')} LIKE %(t{i})s")
+            where.append(f"({_squeezed('a.title', 'a.summary', 'a.body')} LIKE %(t{i})s OR EXISTS (SELECT 1 FROM news_mentions m "
+                         f"WHERE m.article_id = a.id AND {_squeezed('m.surface')} = %(s{i})s))")
             params[f"t{i}"] = f"%{_like(squeeze(t))}%"
+            params[f"s{i}"] = squeeze(t)
         with self.connect() as conn:
             return list(conn.execute(
                 f"""SELECT a.*, o.name AS outlet, ea.event_id
@@ -256,7 +276,7 @@ class NewsStore:
                 if aid in existing:
                     out[aid] = existing[aid]
                     continue
-                if target is None or target.startswith("art_"):
+                if target is None or target in assignments:  # a new group, keyed by its first article
                     seed = target or aid
                     if seed in existing:
                         out[aid] = existing[seed]
@@ -269,14 +289,7 @@ class NewsStore:
                     out[aid] = target
                 conn.execute("INSERT INTO news_event_articles (article_id, event_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                              (aid, out[aid]))
-            touched = sorted(set(out.values()))
-            if touched:
-                conn.execute(
-                    """UPDATE news_events e SET first_published = s.first, last_published = s.last, updated_at = now()
-                       FROM (SELECT ea.event_id, min(a.published_at) AS first, max(a.published_at) AS last
-                             FROM news_event_articles ea JOIN news_articles a ON a.id = ea.article_id
-                             WHERE ea.event_id = ANY(%s::uuid[]) GROUP BY ea.event_id) s
-                       WHERE e.id = s.event_id""", (touched,))
+            refresh_events(conn, sorted(set(out.values())))
         return out
 
     # ── analysis ─────────────────────────────────────────────────────────────

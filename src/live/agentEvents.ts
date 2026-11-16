@@ -123,7 +123,6 @@ interface NewsTopic {
 
 interface NewsBriefingResult {
   query: string;
-  dataset?: "live" | "demo";
   collected: number;
   duplicates_removed?: number;
   content_levels?: Record<string, number>;
@@ -191,7 +190,7 @@ function newsBriefingBlocks(result: unknown): MessageBlock[] {
   const head: MessageBlock[] = [
     {
       kind: "label",
-      text: `기사 ${result.collected}건 (본문 확보 ${withBody}건) · 중복 ${result.duplicates_removed ?? 0}건 제거 · 주제 ${result.topics.length}개${result.dataset === "demo" ? " · 데모 데이터" : ""}`,
+      text: `기사 ${result.collected}건 (본문 확보 ${withBody}건) · 중복 ${result.duplicates_removed ?? 0}건 제거 · 주제 ${result.topics.length}개`,
     },
   ];
   if (result.freshness) {

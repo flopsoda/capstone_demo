@@ -10,17 +10,13 @@ and which report the same matter.
             (headline bigram similarity with the query words removed, or the same opening text,
             within EVENT_WINDOW_DAYS of it), else starts a new event. Articles that already have
             an event keep it, so an event id never changes once given out (store.assign_events).
-
-The demo fixture labels its articles (`hint`): the same labeled risk about the same companies is
-one matter even when the headlines differ (a lawsuit, then an injunction in it).
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 from .text import similarity
 
@@ -49,8 +45,7 @@ class Item:
     url: str = ""
     lead: str = ""  # opening text: the body's first ~200 characters, or the description
     body_hash: str | None = None
-    group: str | None = None  # event already given (live) or None
-    hint: dict[str, Any] | None = field(default=None, repr=False)
+    group: str | None = None  # event already given, or None
     has_body: bool = False
 
 
@@ -89,17 +84,7 @@ def independent_outlet(outlet: str, lead: str) -> str:
     return agency if agency and agency not in outlet else outlet
 
 
-def _same_labeled_matter(a: Item, b: Item) -> bool:
-    ha, hb = a.hint or {}, b.hint or {}
-    ra, rb = ha.get("risk"), hb.get("risk")
-    if ha.get("issue") and hb.get("issue"):
-        return ha["issue"] == hb["issue"]
-    return bool(ra and rb and ra["category"] == rb["category"] and set(ha.get("companies", [])) == set(hb.get("companies", [])))
-
-
 def same_matter(a: Item, b: Item, remove: list[str]) -> bool:
-    if a.hint is not None and b.hint is not None:  # labeled demo articles: the labels decide
-        return _same_labeled_matter(a, b) or similarity(a.title, b.title, remove) >= SAME_STORY
     if abs((a.published - b.published).days) > EVENT_WINDOW_DAYS:
         return False
     if a.body_hash and a.body_hash == b.body_hash:

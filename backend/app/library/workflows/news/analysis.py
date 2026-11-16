@@ -13,7 +13,7 @@
 
 An LLM answers when one is configured; every field has a rule value first, and a model answer
 that does not fit the schema is dropped field by field. Article analyses are versioned
-(ARTICLE_VERSION) so a live store can reuse them across requests.
+(ARTICLE_VERSION) so the store can reuse them across requests.
 """
 
 from __future__ import annotations
@@ -61,17 +61,6 @@ def rule_article(a: dict[str, Any], target: str) -> dict[str, Any]:
     return {"article_id": a["id"], "stance": "unknown", "article_type": kind,
             "risk": rule_risk(f"{a['title']} {a.get('text', '')}", a["title"]) if named else None,
             "key_facts": _facts(a.get("text", "")) or [a["title"]], "entities": [], "basis": a["basis"], "method": "rule"}
-
-
-def fixture_article(a: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any]:
-    """The demo fixture labels its articles: a risk article reports against the company, one without a
-    risk is good news (unless it says otherwise)."""
-    risk = hint.get("risk")
-    stance = "critical" if risk else {"positive": "favorable", "negative": "critical", "neutral": "neutral"}.get(
-        hint.get("sentiment", "positive"), "neutral")
-    return {"article_id": a["id"], "stance": stance, "article_type": article_type(a["title"]),
-            "risk": risk, "key_facts": hint.get("key_facts") or [a["title"]], "entities": hint.get("companies", []),
-            "basis": "fixture", "method": "fixture"}
 
 
 ARTICLE_SYSTEM = """너는 기사 한 건씩을 분석하는 뉴스 분석가다. 분석 대상(target)에 대해 기사들을 읽고 JSON 배열만 출력한다. 설명은 쓰지 않는다.

@@ -1,32 +1,29 @@
 """Company risk news analysis — implementation workflow behind the
 run_company_risk_news_analysis Tool (app/library/tools/).
 
-    articles about the company (demo: the fixture; live: the news pipeline's stored articles)
+    articles about the company (the news pipeline's stored articles, through risk_articles())
       → topics   : narrow to the risk categories the request asks about
       → issues   : follow-up reports of one matter become one risk (level = its highest)
       → order    : HIGH first; within a level, the newest report first
       → each risk: the lead report, every report's facts, a timeline, a trend, and the
                    points a decision maker should check for that kind of risk
 
-The News Agent never touches the fixture directly; the tool is the boundary. Articles
+The News Agent never touches the store directly; the tool is the boundary. Articles
 without a risk (`"risk": null`) are favourable or neutral news and come back separately
 as `positive_signals`, so the agent can weigh them against the risks.
 
 News is public: every caller sees the same articles (no clearance filter here).
-Live articles come from the news pipeline (news/pipeline.gather) and are turned into the same
-article shape by risk_articles(); each persisted event is one matter (`issue`).
+Articles come from the news pipeline (news/pipeline.gather) and are turned into this
+workflow's article shape by risk_articles(); each persisted event is one matter (`issue`).
 
 This module is not agent-visible and has no LangChain dependency.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Iterable
 from datetime import timedelta, timezone
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from .news.labels import CHECK_POINTS, rule_risk, rule_sentiment
@@ -45,21 +42,6 @@ _MAX_FACTS = 6
 _MAX_POSITIVES = 3
 
 
-def load_articles(path: Path) -> list[dict[str, Any]]:
-    """The fixture's articles; re-read when the file changes. A missing file is empty."""
-    try:
-        stat = path.stat()
-    except FileNotFoundError:
-        return []
-    return _load(path, stat.st_mtime_ns, stat.st_size)
-
-
-@lru_cache(maxsize=8)
-def _load(path: Path, mtime_ns: int, size: int) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as f:
-        return json.load(f)["articles"]
-
-
 def _about_company(article: dict[str, Any], company: str) -> bool:
     """True when any alias of the article's companies appears in `company` (or vice versa).
 
@@ -76,12 +58,11 @@ def _about_company(article: dict[str, Any], company: str) -> bool:
 
 
 def issue_key(article: dict[str, Any]) -> tuple[str, ...]:
-    """Articles with the same key report one matter: a live article's event id or a fixture's
-    explicit `"issue"`; otherwise (fixture) reports of the same risk category about exactly the
-    same set of companies (the subject and, e.g., the plaintiff or customer) are one matter."""
+    """Articles with the same key report one matter: the article's event (`issue`); an article
+    without one is a matter of its own."""
     if article.get("issue"):
         return ("issue", str(article["issue"]))
-    return ("auto", article["risk"]["category"], *sorted(a.lower() for a in article["companies"]))
+    return ("article", article["id"])
 
 
 COVERAGE_ESCALATION = 3  # outlets
@@ -93,7 +74,7 @@ def headline_similarity(a: dict[str, Any], b: dict[str, Any]) -> float:
 
 
 def group_issues(articles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Risk articles → one list per matter (oldest first inside). A live article's matter is its
+    """Risk articles → one list per matter (oldest first inside). An article's matter is its
     persistent event (news/cluster.py), so the pipeline's grouping is the risk view's grouping."""
     groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
     for a in sorted(articles, key=lambda a: a["date"]):
@@ -105,8 +86,8 @@ STANCE_SENTIMENT = {"favorable": "positive", "critical": "negative", "neutral": 
 
 
 def _sentiment(article: dict[str, Any]) -> str:
-    """How the article reports the company. Live articles carry their own stance (independent of any
-    risk they report); fixture articles: a risk is negative, no risk is good news."""
+    """How the article reports the company: its own stance when it has one (independent of any risk
+    it reports); otherwise a risk is negative and no risk is the article's sentiment."""
     if article.get("stance"):
         return STANCE_SENTIMENT.get(article["stance"], "neutral")
     if article.get("risk"):
@@ -150,7 +131,7 @@ def _trend(reports: list[dict[str, Any]]) -> str:
     last = _LEVEL_ORDER.get(reports[-1]["risk"]["level"], 9)
     if last < first:
         return "확대"
-    # Live news: a later outlet's milder wording is not an easing of the matter.
+    # Labeled news: a later outlet's milder wording is not an easing of the matter.
     if last > first and not any(r.get("labeled_by") for r in reports):
         return "완화"
     return f"지속 (후속 보도 {len(reports) - 1}건)"
@@ -158,7 +139,7 @@ def _trend(reports: list[dict[str, Any]]) -> str:
 
 def _source(article: dict[str, Any]) -> dict[str, str]:
     source = {"id": article["id"], "date": article["date"], "name": article["source"]}
-    if article.get("url"):  # live (real) articles link to the original
+    if article.get("url"):  # the original, when the article has a link
         source["url"] = article["url"]
     return source
 
@@ -174,7 +155,7 @@ def _risk_item(reports: list[dict[str, Any]]) -> dict[str, Any]:
     category = lead["risk"]["category"]
     outlets = len({a["source"] for a in reports})
     level = lead["risk"]["level"]
-    # Live news labeled by rules sees one article at a time; a story three or more outlets
+    # News labeled by rules sees one article at a time; a story three or more outlets
     # carry matters more than any one headline says, so it goes up one level (and says so).
     escalated = outlets >= COVERAGE_ESCALATION and level != "HIGH" and any(a.get("labeled_by") == "rule" for a in reports)
     if escalated:
@@ -204,11 +185,10 @@ def analyze_company_risk_news(
     topics: list[str] | None = None,
     *,
     limit: int = 5,
-    path: Path | None = None,
-    articles: list[dict[str, Any]] | None = None,
+    articles: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Pure function so the workflow can be unit-tested without an LLM.
-    Articles: `articles` (live, from risk_articles()) or the JSON store at `path` (the system's demo fixture).
+    Articles: from risk_articles() (or written by a test in the same shape).
 
     Returns:
         {
@@ -225,8 +205,6 @@ def analyze_company_risk_news(
     """
     topics = topics or []
     categories = requested_categories(query, topics)
-    if articles is None:  # a missing store is empty
-        articles = load_articles(path) if path else []
     about = [a for a in articles if _about_company(a, company)]
 
     risky = [a for a in about if a.get("risk") and (not categories or a["risk"]["category"] in categories)]
@@ -236,7 +214,7 @@ def analyze_company_risk_news(
     risks.sort(key=lambda r: _LEVEL_ORDER.get(r["level"], 9))
     risks = risks[:limit]
 
-    # No risk and not marked neutral: fixture articles with "risk": null are good news; live ones say so.
+    # No risk and reported favourably: good news.
     # Many outlets write the same good news (an earnings record): one entry per story, the most covered first.
     stories: list[list[dict[str, Any]]] = []
     for a in sorted((a for a in about if not a.get("risk") and a.get("sentiment", "positive") == "positive"),
@@ -263,7 +241,7 @@ def analyze_company_risk_news(
     }
 
 
-# ── Live articles → the risk view's article shape ───────────────────────────
+# ── Stored articles → the risk view's article shape ─────────────────────────
 
 _SENTENCE = re.compile(r"(?<=[.!?다])\s+")
 
@@ -298,7 +276,7 @@ def risk_articles(rows: list[dict[str, Any]], company: str,
         article = {
             "id": r["id"], "date": r["published_at"].astimezone(_KST).date().isoformat(), "source": r["outlet"],
             "headline": title, "summary": summary or body[:200], "companies": [company], "risk": risk,
-            "sentiment": sentiment, "key_facts": facts, "url": r["url"], "labeled_by": by,
+            "sentiment": sentiment, "key_facts": facts, "url": r.get("url"), "labeled_by": by,
             "issue": str(r["event_id"]) if r.get("event_id") else None, "content_level": r.get("content_level"),
         }
         if stance:

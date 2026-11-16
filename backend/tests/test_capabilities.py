@@ -54,7 +54,6 @@ def test_tool_definition_is_the_source_of_truth():
     assert isinstance(cap.impl, BaseTool)
     assert cap.description == cap.impl.description and "리스크" in cap.description
     assert set(cap.impl.args) == {"query", "company", "topics"}
-    assert cap.impl.invoke({"query": "외부 리스크", "company": "뉴로엣지"})["matched"] == 3
 
     cap = get_capability("run_mna_review")
     assert isinstance(cap.impl, BaseTool)
@@ -65,6 +64,10 @@ def test_tool_definition_is_the_source_of_truth():
     }
     out = cap.impl.invoke({"query": "인수 검토", "company": "뉴로엣지", "persona": "CFO"})
     assert out["recommendation"] == "CONDITIONAL_PROCEED" and out["persona"] == "CFO"
+
+
+def test_news_tool_reads_this_systems_news_store(news_db):
+    assert get_capability("run_company_risk_news_analysis").impl.invoke({"query": "외부 리스크", "company": "뉴로엣지"})["matched"] == 3
 
 
 def test_meeting_tool_reads_this_systems_store(meeting_db):

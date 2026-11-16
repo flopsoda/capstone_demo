@@ -1,8 +1,8 @@
-"""run_news_briefing — K Electronics' instance, bound to this system's demo fixture data/news.json and its news store."""
+"""run_news_briefing — K Electronics' instance, bound to this system's news store (seeded from data/news.json)."""
 
 from __future__ import annotations
 
 from ....library.tools.run_news_briefing import make_run_news_briefing
-from .. import DATA_DIR, NEWS_STORE
+from .. import NEWS_STORE
 
-run_news_briefing = make_run_news_briefing(DATA_DIR / "news.json", NEWS_STORE)
+run_news_briefing = make_run_news_briefing(NEWS_STORE)

@@ -18,6 +18,7 @@ A failing feed or page never stops the run: it is counted and recorded.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -34,6 +35,15 @@ from .text import core_terms
 from .text import terms as query_terms
 
 FEED_TTL_MINUTES = 15.0
+LOOKBACK_DAYS = 120  # how far back a request looks by default; NEWS_LOOKBACK_DAYS changes it
+
+
+def lookback_days() -> int:
+    """Default (and longest) window of a request, in days."""
+    try:
+        return max(1, int(os.environ.get("NEWS_LOOKBACK_DAYS", "") or LOOKBACK_DAYS))
+    except ValueError:
+        return LOOKBACK_DAYS
 
 Log = Callable[[str, dict], None]
 
@@ -152,6 +162,7 @@ def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *,
            budget: Budget = REQUEST_BUDGET, now: datetime | None = None, log: Log | None = None) -> dict[str, Any]:
     """One request's news: collect what is due, then reuse everything stored. Returns
     {"articles": rows (newest first, duplicates out, each with event_id), "duplicates", "freshness", "coverage"}."""
+    store.migrate()  # schema and seed ready before the request's clock starts: registered articles are not "new now"
     now = now or datetime.now(KST)
     terms = query_terms(query)
     core = core_terms(query)
@@ -176,7 +187,8 @@ def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *,
     mention_rows = []
     for r in rows:
         title, text = squeeze(r["title"]), squeeze(f"{r['title']} {r['summary']} {r['body']}")
-        mention_rows.extend((r["id"], t, text.count(squeeze(t)), squeeze(t) in title) for t in terms)
+        counts = ((t, text.count(squeeze(t))) for t in terms)
+        mention_rows.extend((r["id"], t, n, squeeze(t) in title) for t, n in counts if n)  # names the text really has
     store.save_mentions(mention_rows)
 
     assignment = cluster.assign(kept, terms)

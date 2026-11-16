@@ -1,4 +1,4 @@
-"""Live news end to end (test database + fake web): request → feeds → pages → store → search and
+"""News end to end (test database + fake web): request → feeds → pages → store → search and
 reuse → events → briefing / risk view. Pages are written for these tests (fictional company 가온반도체)."""
 
 import json
@@ -9,8 +9,7 @@ from app.library.tools.run_news_briefing import make_run_news_briefing
 from app.library.workflows.news.feeds import KST, Feed
 from app.library.workflows.news.fetch import Fetcher
 from app.library.workflows.news.pipeline import Budget, gather
-from app.library.workflows.news_briefing import run_live_briefing
-from app.systems.k_electronics import DATA_DIR
+from app.library.workflows.news_briefing import run_news_briefing
 from tests.test_news_pipeline import FakeWeb, article_html
 
 NOW = datetime(2026, 11, 15, 12, 0, tzinfo=KST)
@@ -81,8 +80,8 @@ def test_events_stay_put_and_new_reports_join_them(news_db):
     assert [e["id"] for e in news_db.events_for(surface="가온반도체")][:2] and news_db.provenance(joined["id"])["fetch_status"] == "blocked"
 
 
-def test_the_live_briefing_answers_from_events_with_sources_and_freshness(news_db):
-    out = run_live_briefing("가온반도체", store=news_db, feeds=FEEDS, fetcher=Fetcher(web(), host_gap=0), now=NOW, budget=BUDGET)
+def test_the_briefing_answers_from_events_with_sources_and_freshness(news_db):
+    out = run_news_briefing("가온반도체", store=news_db, feeds=FEEDS, fetcher=Fetcher(web(), host_gap=0), now=NOW, budget=BUDGET)
     top = out["topics"][0]
     assert top["outlet_count"] == 2 and top["event_id"] and "물량 축소" in top["articles"][0]["title"]
     assert all(a["url"].startswith("https://") and a["content_level"] for a in top["articles"])
@@ -91,20 +90,19 @@ def test_the_live_briefing_answers_from_events_with_sources_and_freshness(news_d
     assert out["analysis"] == "rule" and top["sentiment"] == "negative"
 
 
-def test_the_live_tools_keep_their_contracts(news_db, monkeypatch, tmp_path):
+def test_the_tools_keep_their_contracts(news_db, monkeypatch, tmp_path):
     from app.library.tools import run_news_briefing as briefing_module
 
-    monkeypatch.setenv("NEWS_DATA_MODE", "live")
     monkeypatch.setattr(briefing_module, "_llm", lambda: None)
     feeds = tmp_path / "feeds.json"
     feeds.write_text(json.dumps({"feeds": [{"outlet": f.outlet, "url": f.url} for f in FEEDS]}, ensure_ascii=False), encoding="utf-8")
-    briefing = make_run_news_briefing(DATA_DIR / "news.json", news_db, feeds=feeds, fetcher=Fetcher(web(), host_gap=0))
+    briefing = make_run_news_briefing(news_db, feeds=feeds, fetcher=Fetcher(web(), host_gap=0))
     out = briefing.invoke({"query": "가온반도체"})
-    assert out["dataset"] == "live" and out["topics"] and all(a["outlet"] in ("가상일보", "모의경제") for t in out["topics"] for a in t["articles"])
+    assert out["topics"] and all(a["outlet"] in ("가상일보", "모의경제") for t in out["topics"] for a in t["articles"])
 
-    risk = make_run_company_risk_news_analysis(DATA_DIR / "news.json", news_db, feeds=feeds, fetcher=Fetcher(web(), host_gap=0))
+    risk = make_run_company_risk_news_analysis(news_db, feeds=feeds, fetcher=Fetcher(web(), host_gap=0))
     r = risk.invoke({"query": "가온반도체 리스크", "company": "가온반도체", "topics": ["주요 고객"]})
-    assert r["dataset"] == "live" and r["matched"] == 1
+    assert r["matched"] == 1
     customer = r["risks"][0]
     assert customer["category"] == "customer_concentration" and customer["outlet_count"] == 2
     assert customer["source"]["id"].startswith("art_") and customer["source"]["url"].startswith("https://")  # risks[].source.id contract
@@ -117,11 +115,10 @@ def test_a_database_that_is_down_is_an_error_result_not_a_crash(monkeypatch):
     from app.library.tools import run_news_briefing as briefing_module
     from app.library.workflows.news.store import NewsStore
 
-    monkeypatch.setenv("NEWS_DATA_MODE", "live")
     monkeypatch.setattr(briefing_module, "_llm", lambda: None)
-    tool = make_run_news_briefing(DATA_DIR / "news.json", NewsStore("nowhere", dsn="postgresql://nobody@127.0.0.1:1/none"))
+    tool = make_run_news_briefing(NewsStore("nowhere", dsn="postgresql://nobody@127.0.0.1:1/none"))
     out = tool.invoke({"query": "가온반도체"})
-    assert out["dataset"] == "live" and "연결할 수 없습니다" in out["error"]
+    assert "연결할 수 없습니다" in out["error"]
 
 
 def test_a_wire_story_run_by_two_outlets_counts_once(news_db):
@@ -133,7 +130,7 @@ def test_a_wire_story_run_by_two_outlets_counts_once(news_db):
              "https://c.example/5": (200, article_html("가온반도체 물량 축소 통보", paragraph=wire)),
              "https://d.example/6": (200, article_html("가온반도체, 최대 고객사 물량 축소 통보받아", paragraph=wire + "추가 문단. "))}
     w = FakeWeb(pages, robots={"c.example": (200, "User-agent: *\nAllow: /"), "d.example": (200, "User-agent: *\nAllow: /")})
-    out = run_live_briefing("가온반도체", store=news_db, feeds=[c, d], fetcher=Fetcher(w, host_gap=0), now=NOW, budget=BUDGET)
+    out = run_news_briefing("가온반도체", store=news_db, feeds=[c, d], fetcher=Fetcher(w, host_gap=0), now=NOW, budget=BUDGET)
     top = out["topics"][0]
     assert top["article_count"] == 2 and top["outlet_count"] == 2 and top["independent_outlet_count"] == 1  # one wire story, credited to 연합뉴스
     assert top["evidence"] == {"body": 2, "snippet": 0, "title": 0}
@@ -143,11 +140,11 @@ def test_article_analyses_are_stored_and_reused(news_db):
     from tests.test_news_briefing import fake_llm
 
     calls: list[str] = []
-    first = run_live_briefing("가온반도체", store=news_db, feeds=FEEDS, fetcher=Fetcher(web(), host_gap=0), now=NOW,
+    first = run_news_briefing("가온반도체", store=news_db, feeds=FEEDS, fetcher=Fetcher(web(), host_gap=0), now=NOW,
                               budget=BUDGET, llm=fake_llm({}, calls=calls))
     assert calls.count("article") == 1 and first["article_analysis"] == ["llm"]
     calls.clear()
-    again = run_live_briefing("가온반도체", store=news_db, feeds=FEEDS, fetcher=Fetcher(web(), host_gap=0),
+    again = run_news_briefing("가온반도체", store=news_db, feeds=FEEDS, fetcher=Fetcher(web(), host_gap=0),
                               now=NOW + timedelta(minutes=5), budget=BUDGET, llm=fake_llm({}, calls=calls))
     assert calls == ["event"]  # articles already analyzed for this target and version
     with news_db.connect() as conn:
@@ -158,7 +155,7 @@ def test_article_analyses_are_stored_and_reused(news_db):
     assert {e["id"] for e in events} == {t["event_id"] for t in again["topics"]}
 
 
-def test_the_live_risk_view_reads_each_articles_own_risk_and_stance(news_db, monkeypatch, tmp_path):
+def test_the_risk_view_reads_each_articles_own_risk_and_stance(news_db, monkeypatch, tmp_path):
     from app.library.tools import run_news_briefing as briefing_module
 
     def llm(system, user):  # the customer cut is a risk to 가온반도체; the plant is good news, no risk
@@ -167,11 +164,10 @@ def test_the_live_risk_view_reads_each_articles_own_risk_and_stance(news_db, mon
                             "risk": {"category": "customer_concentration", "level": "HIGH"} if "물량" in a["title"] else None,
                             "key_facts": [a["title"]]} for a in arts], ensure_ascii=False)
 
-    monkeypatch.setenv("NEWS_DATA_MODE", "live")
     monkeypatch.setattr(briefing_module, "_llm", lambda: llm)
     feeds = tmp_path / "feeds.json"
     feeds.write_text(json.dumps({"feeds": [{"outlet": f.outlet, "url": f.url} for f in FEEDS]}, ensure_ascii=False), encoding="utf-8")
-    risk = make_run_company_risk_news_analysis(DATA_DIR / "news.json", news_db, feeds=feeds, fetcher=Fetcher(web(), host_gap=0))
+    risk = make_run_company_risk_news_analysis(news_db, feeds=feeds, fetcher=Fetcher(web(), host_gap=0))
     r = risk.invoke({"query": "가온반도체 리스크", "company": "가온반도체"})
     assert [(x["category"], x["level"]) for x in r["risks"]] == [("customer_concentration", "HIGH")]
     assert [p["headline"] for p in r["positive_signals"]] == ["가온반도체 신공장 착공"]
@@ -189,3 +185,58 @@ def test_search_ignores_spacing_marks_and_drops_generic_words_when_too_little(ne
     battery = gather(news_db, [feed], Fetcher(w, host_gap=0), "2차전지 업황", now=NOW, budget=BUDGET)
     assert [r["url"] for r in battery["articles"]] == ["https://e.example/2"]  # no article says "업황"
     assert battery["coverage"]["relaxed_terms"] == ["2차전지"] and battery["coverage"]["status"] == "low"
+
+
+# ── Articles a system registers from its data file (store seed) ─────────────
+
+def _counts(store):
+    with store.connect() as conn:
+        return {t: conn.execute(f"SELECT count(*) AS n FROM {t}").fetchone()["n"]
+                for t in ("news_outlets", "news_articles", "news_events", "news_event_articles", "news_article_analysis", "news_mentions")}
+
+
+def test_the_seed_registers_once_and_keeps_its_ids(news_db):
+    from app.library.workflows.news.seed import event_id
+    from app.systems.k_electronics import NEWS_STORE
+
+    first = _counts(NEWS_STORE)
+    assert first["news_articles"] == 8 and first["news_events"] == 6
+    NEWS_STORE.reset()  # a restart: the file is applied again
+    assert _counts(NEWS_STORE) == first
+    article = NEWS_STORE.get_article("NEWS-2026-10-08-01")
+    assert article["url"] is None and article["outlet"] == "반도체경제 (가상)"
+    assert article["published_at"].astimezone(KST).date().isoformat() == "2026-10-08"  # the article's own date
+    assert article["event_id"] == event_id("kelec_news", "corenpu-patent-suit")
+    assert NEWS_STORE.get_event(article["event_id"])["article_ids"] == ["NEWS-2026-09-24-01", "NEWS-2026-10-08-01"]
+    prov = NEWS_STORE.provenance("NEWS-2026-10-08-01")
+    assert prov["fetch_status"] == "imported" and prov["discovered_at"] and prov["fetched_at"] is None
+    assert {e["id"] for e in NEWS_STORE.events_for(surface="뉴로엣지")} >= {article["event_id"]}  # the KG's way in
+
+
+def test_registered_and_collected_articles_are_one_store(news_db, monkeypatch, tmp_path):
+    from app.library.tools import run_news_briefing as briefing_module
+    from app.systems.k_electronics import NEWS_STORE
+
+    asked: list[str] = []
+
+    def llm(system, user):  # only articles without a stored analysis reach the model
+        arts = json.loads(user.split("\n\n기사:\n", 1)[1])
+        asked.extend(a["id"] for a in arts)
+        return json.dumps([{"id": a["id"], "stance": "critical", "article_type": "report",
+                            "risk": {"category": "regulatory", "level": "MEDIUM"}, "key_facts": [a["title"]]} for a in arts],
+                          ensure_ascii=False)
+
+    feed = Feed("가상일보", "https://f.example/rss.xml")
+    now = datetime.now(KST)
+    pages = {feed.url: (200, rss([("뉴로엣지 NPU 수출, 전략물자 심사 대상 지정", "https://f.example/1",
+                                     "뉴로엣지의 NPU 수출이 전략물자 심사 대상이 됐다.", now.strftime("%a, %d %b %Y %H:%M:%S +0900"))]))}
+    w = FakeWeb(pages, robots={"f.example": (200, "User-agent: *\nDisallow: /1")})
+    feeds = tmp_path / "feeds.json"
+    feeds.write_text(json.dumps({"feeds": [{"outlet": feed.outlet, "url": feed.url}]}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(briefing_module, "_llm", lambda: llm)
+    tool = make_run_company_risk_news_analysis(NEWS_STORE, feeds=feeds, fetcher=Fetcher(w, host_gap=0))
+    r = tool.invoke({"query": "뉴로엣지 리스크", "company": "뉴로엣지"})
+    assert asked == ["art_" + __import__("hashlib").sha256(b"https://f.example/1").hexdigest()[:20]]  # the new one only
+    categories = {x["category"]: x["source"]["id"] for x in r["risks"]}
+    assert categories["customer_concentration"] == "NEWS-2026-10-02-01" and categories["regulatory"].startswith("art_")
+    assert r["coverage"]["stored_matches"] == 7 and r["freshness"]["discovered_now"] == 1
