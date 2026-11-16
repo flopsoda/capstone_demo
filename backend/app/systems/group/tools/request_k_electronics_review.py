@@ -33,13 +33,15 @@ def make_client() -> httpx.Client:
 
 @tool
 def request_k_electronics_review(request: str) -> str:
-    """K전자 슈퍼에이전트(K Electronics Super Agent)에게 A2A로 검토를 요청한다.
+    """K전자 슈퍼에이전트(K Electronics Super Agent)에게 A2A로 검토를 요청하거나 업무를 전달한다.
     담당: K전자 계열사 차원의 검토 — K전자의 과거 경영회의 결정사항, K전자가 검토 중인 인수안·투자안의
     재무·전략·기술 타당성, K전자와 관련된 외부 리스크, 본실사 진입 여부처럼 K전자 내부 자료와 K전자의 판단이 필요한 항목.
+    또한 그룹이 K전자에 배정한 업무의 전달(K전자 담당자가 확인해야 정식 업무가 된다)과, 전달한 업무의 진행 상황 조회.
     그룹 자체의 회의 기록이나 그룹 차원의 자문은 담당하지 않는다.
 
     Args:
-        request: K전자 슈퍼에이전트가 수행할 검토 요청을 자연어로 서술한 문장 (한국어). 대상 기업과 포함할 항목을 명시한다.
+        request: K전자 슈퍼에이전트가 수행할 요청을 자연어로 서술한 문장 (한국어). 검토면 대상 기업과 포함할 항목을,
+            업무 전달이면 "업무 요청:"으로 시작해 업무 내용 · 기한 · 담당 지정 · 그룹 쪽 기록 id(예: MTG-2026-10-20-01-A2)를 명시한다.
     """
     run = current_run()
     trace_id = (run.trace_id or run.run_id) if run is not None else None
@@ -53,6 +55,7 @@ def request_k_electronics_review(request: str) -> str:
                 caller=SYSTEM,
                 trace_id=trace_id,
                 principal=run.principal if run is not None else None,
+                principal_token=run.principal_token if run is not None else None,
                 observe=lambda event: emit({**event, "relayed": True}),
             )
     except A2AError as e:

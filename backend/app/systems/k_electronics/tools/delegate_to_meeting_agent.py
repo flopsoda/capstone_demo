@@ -10,7 +10,8 @@ FROM_AGENT = "k_super"
 TO_AGENT = "meeting"
 
 DESCRIPTION = """미팅 에이전트(Meeting Agent)에게 업무를 자연어로 위임한다.
-담당: 과거 사내 회의 기록 조회, 회의에서 정해진 기준·결정사항, 미완료 Action Item 확인."""
+담당: 과거 사내 회의 기록 조회, 회의에서 정해진 기준·결정사항, 미완료 Action Item 확인,
+다른 시스템(그룹 등)이 보낸 업무 요청의 접수와 그 진행 상황 회신."""
 
 
 def _runner():

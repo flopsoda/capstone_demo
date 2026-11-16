@@ -16,6 +16,7 @@ the Group system has its own.
 from __future__ import annotations
 
 from ...library.skills.external_risk_analysis import EXTERNAL_RISK_ANALYSIS
+from ...library.skills.inbound_task_requests import INBOUND_TASK_REQUESTS
 from ...library.skills.meeting_context_analysis import MEETING_CONTEXT_ANALYSIS
 from ...library.skills.meeting_follow_up import MEETING_FOLLOW_UP
 from ...library.skills.meeting_minutes_writing import MEETING_MINUTES_WRITING
@@ -25,11 +26,13 @@ from ...runtime.capabilities import Capability, Registry
 from .tools.delegate_to_advisory_agent import delegate_to_advisory_agent
 from .tools.delegate_to_meeting_agent import delegate_to_meeting_agent
 from .tools.delegate_to_news_agent import delegate_to_news_agent
+from .tools.manage_mail_outbox import manage_mail_outbox
 from .tools.run_company_risk_news_analysis import run_company_risk_news_analysis
 from .tools.run_action_item_tracking import run_action_item_tracking
 from .tools.run_meeting_context_retrieval import run_meeting_context_retrieval
 from .tools.run_meeting_schedule import run_meeting_schedule
 from .tools.run_mna_review import run_mna_review
+from .tools.run_task_requests import run_task_requests
 from .tools.save_meeting_minutes import save_meeting_minutes
 from .tools.update_action_item import update_action_item
 
@@ -49,11 +52,14 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(MEETING_CONTEXT_ANALYSIS, frozenset({MEETING})),
     Capability(MEETING_MINUTES_WRITING, frozenset({MEETING})),
     Capability(MEETING_FOLLOW_UP, frozenset({MEETING})),
+    Capability(INBOUND_TASK_REQUESTS, frozenset({MEETING})),
     Capability(run_meeting_context_retrieval, frozenset({MEETING})),
     Capability(save_meeting_minutes, frozenset({MEETING})),
     Capability(run_action_item_tracking, frozenset({MEETING})),
     Capability(update_action_item, frozenset({MEETING})),
     Capability(run_meeting_schedule, frozenset({MEETING})),
+    Capability(manage_mail_outbox, frozenset({MEETING})),
+    Capability(run_task_requests, frozenset({MEETING})),
     # News Agent
     Capability(EXTERNAL_RISK_ANALYSIS, frozenset({NEWS})),
     Capability(run_company_risk_news_analysis, frozenset({NEWS})),

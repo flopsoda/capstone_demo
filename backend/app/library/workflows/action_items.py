@@ -19,6 +19,8 @@ from .meeting_store import (
     VISIBLE,
     MeetingStore,
     Viewer,
+    can_confirm,
+    confirm_denied,
     day_label,
     kst_date,
     parse_date,
@@ -126,6 +128,7 @@ def update_action_item(
     note: str | None = None,
     due: str | None = None,
     owner: str | None = None,
+    remind: bool = False,
     today: date | None = None,
 ) -> dict[str, Any]:
     today = today or today_kst()
@@ -137,12 +140,12 @@ def update_action_item(
         new_due = parse_date(due)
     except ValueError:
         return {"updated": False, "error": "due는 YYYY-MM-DD 형식이어야 합니다."}
-    if status is None and not note and new_due is None and not owner:
-        return {"updated": False, "error": "바꿀 내용(status, note, due, owner)이 하나 이상 있어야 합니다."}
+    if status is None and not note and new_due is None and not owner and not remind:
+        return {"updated": False, "error": "바꿀 내용(status, note, due, owner) 또는 remind가 하나 이상 있어야 합니다."}
     code = (item_id or "").strip()
     with store.connect() as conn:
         row = conn.execute(
-            f"""SELECT a.id, a.status, a.due_date, {OWNER_LABEL} AS owner FROM action_items a JOIN meetings m ON m.id = a.meeting_id
+            f"""SELECT a.id, a.meeting_id, a.status, a.due_date, {OWNER_LABEL} AS owner FROM action_items a JOIN meetings m ON m.id = a.meeting_id
                 LEFT JOIN people p ON p.id = a.owner_person_id LEFT JOIN org_units u ON u.id = a.owner_unit_id
                 WHERE upper(a.code) = upper(%(code)s) AND {VISIBLE} FOR UPDATE OF a""",
             {"code": code, **viewer.scope()},
@@ -159,6 +162,8 @@ def update_action_item(
                 "error": f"Action Item '{code}'을 찾을 수 없거나 열람 권한이 없습니다.",
                 "candidates": [{"id": c["code"], "text": c["text"], "status": c["status"]} for c in candidates],
             }
+        if remind and not can_confirm(conn, viewer, row["meeting_id"]):
+            return {"updated": False, "error": confirm_denied()}
         changes = []
         created: list[str] = []
         sets, values = ["updated_at = now()"], []
@@ -172,11 +177,34 @@ def update_action_item(
             values.append(new_due)
             changes.append(f"기한 {row['due_date'] or '없음'} → {new_due}")
         if owner:
-            owner_person, owner_unit = resolve_owner(conn, owner, created)
+            owner_person, owner_unit = resolve_owner(conn, owner, created, row["meeting_id"])
             sets.append("owner_person_id = %s, owner_unit_id = %s")
             values += [owner_person, owner_unit]
             changes.append(f"담당 {row['owner'] or '없음'} → {owner.strip()}")
         conn.execute(f"UPDATE action_items SET {', '.join(sets)} WHERE id = %s", (*values, row["id"]))
+        # 확정된 회의록의 할 일을 다른 사람에게 맡기거나 기한을 바꾸면, 그 담당자에게 업무 배정 메일을 다시 보낸다
+        # (초안의 할 일은 회의록을 확정할 때 함께 보냄). 같은 내용이면 다시 보내지 않는다 (outbox의 dedupe).
+        mails: list[dict[str, Any]] = []
+        reassigned = owner or (new_due is not None and new_due != row["due_date"])
+        if reassigned and conn.execute(
+            "SELECT 1 FROM action_items a JOIN minutes mi ON mi.meeting_id = a.meeting_id WHERE a.id = %s AND mi.status = 'final'",
+            (row["id"],),
+        ).fetchone():
+            from .outbox import queue_assignment_mail, summarize  # outbox → meeting_minutes → … 순환을 피함
+
+            mail_id = queue_assignment_mail(conn, row["id"], viewer)
+            mails = summarize(conn, [mail_id]) if mail_id else []
+        # 독촉: 사용자가 요청하면 기한 알림(매일 아침)과 별도로 담당자에게 지금 확인 요청 메일을 보낸다 (확정 권한이 있는 사람만)
+        remind_note = None
+        if remind:
+            from .outbox import queue_nudge_mail, summarize
+
+            nudge_id, remind_note = queue_nudge_mail(conn, row["id"], viewer, today, note)
+            if nudge_id:
+                mails += summarize(conn, [nudge_id])
+                changes.append("독촉 메일")
+            elif status is None and not note and new_due is None and not owner:
+                return {"updated": False, "error": remind_note}
         text = "; ".join([*changes, note.strip()] if note else changes) or None
         conn.execute(
             "INSERT INTO action_item_updates (action_item_id, by_email, old_status, new_status, note) VALUES (%s, %s, %s, %s, %s)",
@@ -195,4 +223,6 @@ def update_action_item(
             for h in history
         ],
         "new_directory_entries": created,
+        "mail_queued": mails,
+        **({"remind_skipped": remind_note} if remind_note else {}),
     }

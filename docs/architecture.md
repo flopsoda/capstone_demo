@@ -156,6 +156,7 @@ Workflow Tool은 **Agent가 아니다**.
 
 ```text
 Meeting Agent   → run_meeting_context_retrieval · save_meeting_minutes · run_action_item_tracking · update_action_item · run_meeting_schedule
+                  · manage_mail_outbox · run_task_requests (K만) · correct_transcript · run_decision_review (Group만)
 News Agent      → run_company_risk_news_analysis
 Advisory Agent  → run_mna_review
 ```
@@ -168,7 +169,7 @@ Advisory Agent  → run_mna_review
 **Current implementation** — Agent-visible Tool과 내부 workflow를 분리한다.
 - **회의 저장소 (2026-10-27).** 미팅 Tool 다섯 개는 Postgres 회의 저장소를 쓴다. `library/workflows/meeting_store.MeetingStore(schema, seed)`가 system마다 하나 있고
   (`systems/<system>/__init__.py`의 `MEETING_STORE`: K는 schema `kelec`, Group은 `grp`), 연결은 `MEETINGS_DATABASE_URL`이다. 처음 쓸 때 schema(`meeting_schema.sql`, 테이블 15개)가 없으면 만들고,
-  회의가 하나도 없으면 그 system의 `data/meetings.json`으로 채운다. 배포에서는 system마다 DB role이 따로라 Group은 K의 schema를 읽을 수 없다.
+  회의가 하나도 없으면 그 system의 `data/meetings.json`으로 채운다 (`MEETINGS_SEED_MEETINGS=0`이면 예시 회의 없이 빈 채로 시작하고 임직원 연락처만 넣는다 — 2026-11-04). 배포에서는 system마다 DB role이 따로라 Group은 K의 schema를 읽을 수 없다.
   Tool factory는 `path` 대신 store를 받는다: `make_<tool>(store)`. workflow 함수는 `store`와 `viewer`를 인자로 받는 함수이고 LLM 없이 테스트한다 (`tests/test_meeting_records.py`, 테스트 DB 필요).
 - **요청자(viewer).** 모든 미팅 workflow는 `Viewer(email, name, groups, clearance, can_write)`로 거른다. Tool은 이를 모델 인자가 아니라 run에서 읽는다
   (`library/tools/meeting_access.current_viewer()` ← `RunContext.principal` · `origin`, [6장](#6-backend와-frontend의-책임)). 등급 규칙은 gateway `shared/access.py`와 같다:
@@ -184,10 +185,66 @@ Advisory Agent  → run_mna_review
   이전 결정을 바꾸면 `supersedes`, 쟁점을 해결하면 `resolves`(ref). 사람 · 조직 이름은 디렉터리(`people` · `org_units`)에서 찾고 없으면 등록해 `new_directory_entries`로 알린다.
 - `run_action_item_tracking(query?, owner?, status?, due_before?, due_within_days?, overdue_only, meeting_id?, mine)` → `action_items.track_action_items`: 회의를 가로질러
   지연 일수 큰 순 → 기한 순, 같은 범위의 상태별 건수(`summary`)와 기준일(`as_of`, 요일 포함 — 모델은 오늘 날짜를 모른다)을 준다. 조회만 한다.
-- `update_action_item(item_id, status?, note?, due?, owner?)` → `action_items.update_action_item`: 변경마다 `action_item_updates`에 누가 · 언제 · 이전/새 상태 · 메모를 남긴다. 모르는 id면 `candidates`.
-- `run_meeting_schedule(action = list | create | update | cancel, ...)` → `meeting_schedule.meeting_schedule`: 외부 캘린더 동기화 없는 사내 일정.
+- `update_action_item(item_id, status?, note?, due?, owner?, remind?)` → `action_items.update_action_item`: 변경마다 `action_item_updates`에 누가 · 언제 · 이전/새 상태 · 메모를 남긴다. 모르는 id면 `candidates`. `remind=true`는 사용자가 독촉을 요청할 때 담당자에게 지금 확인 요청 메일을 보낸다 (`outbox.queue_nudge_mail`: 확정된 회의록의 열린 할 일 · 사람 담당 · 확정 권한, 할 일마다 하루 한 번, 매일 아침 기한 알림과 별개).
+- `run_meeting_schedule(action = list | draft | create | update | cancel, ...)` → `meeting_schedule.meeting_schedule`: 외부 캘린더 동기화 없는 사내 일정.
+  `draft`(2026-11-04)는 저장 · 메일 없이 예약 요청을 점검한다: 같은 주제의 지난 회의에서 참석자 · 장소 · 이어지는 안건을 채우고(assumed), 빠진 것(missing: title · date · start · attendees), 여러 사람에 맞거나 기록에 없는 이름(unclear, 후보), 겹치는 회의(conflicts)를 돌려준다. 끝 시각이 없으면 1시간. Skill은 complete면 바로 create, 아니면 빠진 것만 묻고 화면이 예약 양식을 띄운다 (gateway `schedule_form` 카드, 관제의 '+ 회의 예약'과 같은 양식 → desk `schedule` create).
   `create`의 `carry_over_from`은 이전 회의의 보류 안건과 미결 쟁점(`issue`)을 새 회의 안건으로 이월한다. 시각은 한국 시간이며 `list`는 `today`(요일 포함)를 준다.
   예약된 회의의 회의록은 같은 id로 `save_meeting_minutes`에 쓴다.
+- **회의 후속 기능 (2026-10-28, 11장 결정 14~19).**
+  - **schema migration.** `meeting_schema.sql`이 version 1이고, `library/workflows/meeting_migrations/NNN_name.sql`을 `MeetingStore`가 처음 연결할 때 순서대로 적용해
+    schema마다 `schema_migrations`에 남긴다 (`002_delivery_and_review.sql`: `transcripts.source_ref`, `compliance_flags`, `outbox`, `task_requests`; `003_outbox_reject_without_address.sql`: 주소 없는 메일도 반려 가능; `004_autonomous_mail.sql`: `staff_directory`, 승인 대기 메일을 발송 대기로; `005_attendance.sql`: 회의별 목소리 라벨 `people.speaker_meeting_id`, 출석 확인 `checkin_sessions` · `checkin_attendees`, `meeting_participants.checked_in_at`; `006_decision_watch.sql`: 결정의 전제 · 조건 `decision_premises`, 그 전제를 흔든 기사 · 보고 `premise_signals`, 메일 종류 `alert`; `007_subjects.sql`: 회의 주제 `meetings.subject`). 적용된 파일은 고치지 않고 다음 번호를 추가한다.
+  - **확정 권한.** 회의록 확정 · 정정, Compliance 검토, 메일 재발송 · 취소 · 주소 정정, 업무 요청 접수는 `meeting_store.can_confirm`: 그 회의의 의장 · 간사(참석자 role, `people.email` = 요청자 email)
+    또는 `MEETINGS_CONFIRM_GROUPS`(기본 `secretary,executive`, 로컬 데모는 `*`) 그룹. 참석자 판단은 그 호출의 참석자 변경 **전** 상태로 한다. 권한이 없으면 초안으로 저장하고 `warnings`로 알린다 (정정은 거부).
+  - **Compliance.** `compliance.py`의 결정적 규칙(미공개 중요정보 · 담합 · 부정청탁 · 회계 부정 · 기록 은폐 · 부당노동행위 · 개인정보)이 회의록 요약 · 본문 · 결정과 연결된 transcript 발언을 검사해
+    `compliance_flags`(open)를 만든다. open이 있으면 확정하지 않는다. `save_meeting_minutes(flag_reviews=[{id: "CF-n", status: cleared | acknowledged, note}])`로 확정 권한자가 검토한다
+    (acknowledged는 조치 내용 note 필수). 문장을 고쳐 다시 저장하면 그 open 항목은 다시 검사되어 사라진다. 판정이 아니라 검토 요청이다.
+  - **transcript.** speech-service가 회의 녹음(화자 라벨 transcript)을 30일 보관하며 id를 텍스트 첫 줄(`[transcript_id: TR-…]`)에 붙인다. 모델은 `save_meeting_minutes(transcript_id=)`로 id만 넘기고
+    `transcripts.py`가 내부망(`SPEECH_SERVICE_URL`, Bearer `SPEECH_API_KEY`)으로 가져와 `transcripts` · `transcript_segments`에 복사한다(만료 `MEETINGS_TRANSCRIPT_RETENTION_DAYS`, 기본 365일).
+    결정 · Action Item의 `source_time`("03:15")이 그 발언에 연결된다. 가져오지 못하면 경고만 하고 저장은 한다.
+  - **메일 발송함.** `outbox.py`: 확정 · 정정 → 참석자 회의록 메일 + 사람 담당자 업무 배정 메일, `run_meeting_schedule` create · update · cancel → 참석자 안내 메일, 매일 아침 → 기한 알림
+    (D-3 · D-1 · 당일 · 경과 다음 날부터 매주, 아직 안 보낸 이전 알림은 대체). **Agent가 주소를 스스로 찾아 승인 없이 바로 보낸다** (2026-10-30, 11장 17번):
+    `approved`(`approved_by = 'agent'`)로 쌓이고 배경 작업이 발송한다. 받는 주소는 `people.email` → gateway 디렉터리(`DIRECTORY_URL`, Bearer `INTERNAL_API_KEY`)에서 이름이 정확히 한 명인
+    로그인 등록 이메일 → 임직원 · 외부 연락처 `staff_directory`(system fixture `data/meetings.json`의 `directory`로 seed; 이름이 같고 직함이 맞는 한 명, 이름 없이 역할로만 기록된 사람은
+    "외부 자문위원 (OO회계법인)"처럼 그 기관에서 그 역할을 가진 한 명) 순으로 찾고, 찾은 주소는 `people.email`에 남긴다. 주소를 추측하지 않는다: 아무 데서도 못 찾으면 `needs_address`로 두고
+    매일 아침 다시 찾는다. 목소리가 등록되지 않은 발언자("화자 A" · "화자 B" …, 예전 변환본은 "미확인 화자 N")에게는 메일을 만들지 않고, 그런 라벨이 담당인 할 일은 실제 담당자를 정해야 확정된다. 사람은 실패한 메일 다시 보내기(`resend`) · 안 보낸 메일 취소(`reject`) · 주소 정정(`set_address`, 바로 다시 보냄)만 한다.
+    부서 담당 Action Item은 주소가 없어 배정 메일을 만들지 않고 그렇게 알린다.
+  - **메일로 진행 보고 (2026-11-04, `mail_actions.py`).** 업무 배정 · 기한 알림 · 독촉 메일은 HTML로도 보내고 **완료 · 진행 중 · 막힘** 버튼을 붙인다 (텍스트 본문에는 같은 링크).
+    버튼은 gateway의 로그인 없는 화면 `MEETINGS_ACTION_URL/<token>?s=<상태>`를 연다 (Group만 이 값을 가짐; 없거나 `PRINCIPAL_SIGNING_KEY`가 없으면 버튼 없이 보냄).
+    token = 할 일 id · 받는 사람(person id) · 만료(30일) + `PRINCIPAL_SIGNING_KEY`에서 파생한 키의 HMAC — 회사 계정이 없는 외부 담당자도 쓸 수 있게 하려는 것이다.
+    링크를 여는 것(GET)은 할 일을 보여 주기만 하고(회사 메일의 보안 검사가 링크를 미리 열기 때문, RFC 8058의 원클릭 구독 취소와 같은 이유), 화면에서 '보내기'(POST)를 눌러야
+    gateway → `POST /api/mail-action {token, status, note}` → `mail_actions.act`가 상태를 바꾸고 `action_item_updates`에 그 담당자의 이메일로 "메일로 보고: 메모"를 남긴다.
+    막힘은 메모(이유)가 있어야 하고, 할 일의 담당이 바뀌면 이전 담당자의 링크는 쓸 수 없다. 관제의 활동에는 상태 변경과 메일 보고가 "진행 보고 — 누가: 상태 · 할 일 (메일) — 메모"로 보인다.
+    회신 메일을 읽어 반영하는 것(메일 수신)은 아직 없다.
+  - **출석 확인 · 참석자 확인 (2026-11-03, `attendance.py`).** 녹음만으로는 말하지 않은 참석자를 알 수 없다. 회의지원 채팅에 녹음을 올리면 화면이 출석 확인(`CHK-…`)을 열고
+    30초마다 바뀌는 코드(HMAC)를 담은 QR을 띄운다. 참석자가 휴대폰으로 찍으면 gateway가 로그인 계정(이메일 · 이름 · Keycloak id)으로 출석시킨다 (지금 코드와 직전 3개까지 유효, 3시간 뒤 마감).
+    회의록 요청 문장에 그 코드가 들어가고 `save_meeting_minutes(checkin_code=)`가 받는다 (없으면 같은 사람이 12시간 안에 연 출석 확인). 출석한 계정은 말하지 않았어도 참석자(`attended`, `checked_in_at`)가 되고,
+    모델이 이름으로만 적은 같은 이름의 사람은 그 계정으로 합친다. 저장 결과의 `attendance`(출석 · 발언 여부, 이름 모를 목소리, 말하지 않은 참석자, 목소리 하나 · 조용한 출석자 하나일 때의 추정)를 보고 모델이 사용자에게 묻는다.
+    목소리 라벨("화자 A")은 그 회의 안에서만 한 사람이다 (`people.speaker_meeting_id`; 005가 기존에 공유되던 라벨을 회의마다 나눴다). 회의 카드에서 라벨의 이름을 정하면(`assign`) 그 회의의 발언 · 발언자 · 담당 · 참석자와
+    회의록 글의 라벨이 그 사람으로 바뀌고, 그 사람이 출석할 때 목소리 학습에 동의했으면 speech-service가 그 목소리를 voiceprint로 익힌다(`transcripts.learn_voice`). 확정된 회의록은 정정으로만 바꾼다.
+    담당이 없는 '각자' 할 일은 참석자마다 한 건으로 나눈다(`split`). `recall`은 이번 참석자들이 이전 회의에서 맡아 아직 열린 일과 같은 사람들이 있던 회의의 미결 쟁점이다 (저장 결과와 회의 카드). 이 회의의 주제(`meetings.subject`)로 열린 이전 회의가 있으면 그 주제 안에서만 찾는다.
+  - **녹음 변환본 교정 (2026-11-03, `transcript_correction.py`, `library/tools/correct_transcript.py`).** 음성 인식은 용어 · 이름을 잘못 듣고("에젠드")
+    한국어 띄어쓰기를 깨뜨린다. Group의 `/api/agents/meeting/run`은 Meeting Agent가 요청을 읽기 전에 `TRANSCRIPT_CORRECTION.prepare`를 돌린다:
+    요청의 `[현재 요청]` 부분에 있는 변환본 줄(`[mm:ss] 화자: …`)만 ① 고정 치환(`data/transcript_glossary.json`의 replacements) ② 모델 교정
+    (30줄씩 · 앞뒤 3줄 맥락 · 용어와 이름 목록 = 이 녹음의 출석자 + 임직원 디렉터리, 고친 줄만 JSON으로)으로 고치고, 변환본 뒤에 "[자동 교정] …"을 붙인다.
+    문장을 다시 쓴 교정(원문 글자의 60% 미만이 남거나 길이가 30% 넘게 바뀜)은 버린다. 모델 호출이 실패하거나 답을 읽을 수 없는 구간은 치환만 남기고
+    "[자동 교정 실패] …"로 알리며, Skill은 그때 `correct_transcript(transcript_id)`를 한 번 불러(speech-service에 보관된 원문을 다시 교정) 그 결과로 쓰게 한다.
+    교정 단계는 `correct_transcript`의 tool_start / tool_end(`args.auto = true`)로 보고된다 (새 이벤트 타입 없음; gateway는 고친 줄 수 · 예 · 실패 구간을 단계에 표시).
+    원래 변환본은 speech-service와 `transcript_segments`에 그대로 남는다. `TRANSCRIPT_CORRECTION=0`이면 자동 단계를 끈다 (Tool은 남음).
+    Super Agent 위임 경로(`run_meeting_agent`의 delegation)에는 변환본이 오지 않으므로 이 단계가 없다.
+  - **배경 작업.** `jobs.start_meeting_jobs`(app lifespan, `MEETINGS_BACKGROUND_JOBS=1`일 때만): 매분 발송 대기 메일을 SMTP(`SMTP_*`, 미설정이면 대기)로 발송(5회 실패하면 failed,
+    발송 대기가 된 지 3일이 지난 메일은 늦게 보내지 않고 failed — 메일 서버를 나중에 설정했을 때 지난 안내가 한꺼번에 나가지 않도록),
+    매일 `MEETINGS_DAILY_HOUR`(9시 KST)부터 기한 알림 · 주소 재조회 · 만료 transcript 삭제, system이 결정 감시를 주면 `MEETINGS_WATCH_INTERVAL`(600초)마다 새 기사 대조 (시작할 때 한 번 먼저). schema별 advisory lock.
+  - **결정 감시 (2026-11-03, `decision_watch.py`, Tool `run_decision_review` · Skill `decision_review`, Group).** 회의록의 결정(결정 · 의결 · 기준)에 회의에서 밝힌 전제 · 조건을
+    `save_meeting_minutes`의 `decisions[].premises`(kind premise | condition, `review_when`, `watch` 단어)로 남긴다. 배경 작업이 기사 store(`data/news.json`, 시작할 때 읽어 둠)의 새 기사를
+    `watch` 단어로 거른 뒤 system의 chat model에게 전제마다 broken · at_risk · none을 묻고(전제 × 기사 한 번씩, 모델 오류면 at_risk · 단어 일치), 흔들린 전제는 상태를 바꾸고
+    그 회의 참석자에게 `alert` 메일을 (결정 · 기사마다 한 번) 보낸다. `run_decision_review(query, topics, decision_ref)`는 질문 · 새 계획과 관련된 결정을 하나씩 점수 매겨
+    근거 발언 · 전제 상태 · 들어온 신호를 주고, 계획의 금액(조 · 억)을 결정 금액과 코드로 비교해 넘으면 `conflicts`, 전제가 흔들렸으면 재검토 회의안을 붙인다. 이후 결정이 이전 결정을 대신하면(`supersedes`) 이전 결정의 신호는 더 세지 않는다.
+  - **주제와 관제 (2026-11-03, `subjects.py`, `meeting_control.py`).** 회의마다 주제(`meetings.subject`, 예: 천안 신공장 · 뉴로엣지 인수)가 있다: 저장할 때 Agent가 준 이름, 이어지는 회의(carry over)의 주제,
+    쓰고 있는 주제와 회의명 단어 일치, 아니면 회의명에서 '회의 · 검토 · 준비' 같은 말을 뺀 것 순서. 007 전에 저장된 회의는 관제를 처음 열 때 같은 규칙으로 정한다 (`fill_missing`, 오래된 회의부터).
+    `meeting_control.control()`은 회사의 모든 회의를 한 화면으로: 주제마다 상태(alarm 이상 · warn 주의 · ok, 이유 · 지금 유효한 결정 · 다음 회의), 회의 목록(진행 중 · 기록 대기(지난 날짜에 예약된 채 회의록이 없음) · 예정 · 완료, 녹음 · 회의록 · 결정 · 분공 진행 · 메일),
+    담당자별 할 일(같은 email · 이름은 한 사람, 소속은 `staff_directory`, 할 일마다 마지막 기록 — 메일 보고 · 독촉 등), 날짜별 활동(녹음 → 초안 → 확정 · 결정 변경 · 신호 · 메일 · 진행 보고)을 준다.
+  - **업무 요청 (A2A).** `run_task_requests`(K): 다른 system의 A2A run은 `submit`만 할 수 있고(`task_requests` pending, 요청한 system = run의 `caller`),
+    K의 확정 권한자가 `accept`(담당 · 기한 필수, 지정 회의 또는 따로 만든 접수 기록에 Action Item 생성 + 배정 메일) · `reject`한다. A2A `list`는 그 system이 보낸 요청과 연결된 Action Item 진행만 보여 준다.
 - `backend/app/library/tools/run_company_risk_news_analysis.py`: `make_run_company_risk_news_analysis(path)` → `@tool("run_company_risk_news_analysis")`, 인자 `query: str, company: str, topics: list[str] | None`.
 - `backend/app/library/workflows/company_risk_news_analysis.py`: 순수 함수 `analyze_company_risk_news(..., path=...)`가 주어진 기사 store(K: `data/news.json`, 가상 기사 5건)를 조회한다.
   `company`를 기사 `companies` alias와 대조해 대상 기업 기사만 남기고, `query`/`topics`에서 리스크 category 키워드(`customer_concentration`, `legal_dispute`, `key_personnel`, `labor_dispute`)를 찾아 좁힌 뒤 HIGH → MEDIUM → LOW, 최신순으로 정렬한다. 키워드가 없으면 그 기업의 모든 리스크를 돌려준다.
@@ -220,6 +277,7 @@ Advisory Agent  → run_mna_review
   `a2a_start(group_super → k_super, request)` emit → K의 NDJSON 스트림을 읽으며 K의 lifecycle 이벤트를 `relayed: true`로 자기 run에 다시 emit(관찰용) → 마지막 `agent_end`의 `response`를 꺼내 `a2a_end` emit 후 반환.
   Group Super의 `ToolMessage`에는 그 최종 텍스트만 들어간다. K의 `error`는 `AgentError("k_super", ...)`로 전파되어 Group run이 중단된다. 연결 실패도 같다.
   K의 주소는 `K_ELECTRONICS_A2A_URL`(기본 `http://localhost:8000/api/a2a/run`). 테스트는 `make_client`를 K app의 TestClient로 바꿔 프로세스 안에서 같은 경로를 돈다.
+  요청자의 `principal`과 gateway 서명 `principal_token`을 그대로 넘긴다. 같은 Tool로 업무 전달("업무 요청: …")과 전달한 업무의 진행 조회도 한다 (K 미팅 에이전트의 `run_task_requests`).
   Group UI(`/group`)는 이 경로를 그대로 쓴다: `a2a_start` / relayed K 이벤트 / `a2a_end`가 채팅 옆 A2A 세션창이 된다 (Phase 7).
 
 ---
@@ -277,6 +335,9 @@ systems/k_electronics/
 | `run_action_item_tracking` | tool | `meeting` | `make_run_action_item_tracking(MEETING_STORE)` → `library/workflows/action_items.track_action_items` |
 | `update_action_item` | tool | `meeting` | `make_update_action_item(MEETING_STORE)` → `library/workflows/action_items.update_action_item` |
 | `run_meeting_schedule` | tool | `meeting` | `make_run_meeting_schedule(MEETING_STORE)` → `library/workflows/meeting_schedule.meeting_schedule` |
+| `correct_transcript` | tool | `meeting` (Group) | `make_transcript_correction(MEETING_STORE, data/transcript_glossary.json, agent="meeting").tool` → `library/workflows/transcript_correction.correct_lines` |
+| `decision_review` | skill | `meeting` (Group) | `library/skills/decision_review.py` |
+| `run_decision_review` | tool | `meeting` (Group) | `make_decision_watch(MEETING_STORE, data/news.json).tool` → `library/workflows/decision_watch.review_decisions` (같은 객체의 `scan()`이 배경 작업의 기사 대조) |
 | `external_risk_analysis` | skill | `news` | `library/skills/external_risk_analysis.py` |
 | `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(data/news.json)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
@@ -380,6 +441,7 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 | `a2a_start` | `from, to, request` | Group의 A2A client Tool 진입 (Phase 5a) |
 | `a2a_end` | `from, to, response` | 위 Tool 반환 직전. 그 사이의 K 이벤트는 `relayed: true`로 relay된다 |
 | `delegation_start` | `from, to, task` | `delegate_to_*` 진입 |
+| `delegation_skipped` | `from, to, reason` | `delegate_to_*` 진입 시 `principal.agents`에 `to`가 없으면 (`reason: permission`). 전문 Agent는 실행되지 않고 Super Agent는 나머지로 답한다 |
 | `tool_start` | `agent, tool, args` | `agent_core.execute_tool_calls` (Specialist의 Workflow Tool) |
 | `tool_end` | `agent, tool, result` | 위 Tool 실행 직후 |
 | `agent_end` | `agent, response` | 각 Agent 정상 종료 |
@@ -422,10 +484,22 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 
 K system에도 같은 모양의 `POST /api/agents/{meeting,news,advisory}/run`이 있다 (K 데이터).
 
-모든 run 요청 body는 선택 필드 `principal {email, name, groups, clearance}`를 받는다 (`runtime/schemas.Principal`). gateway가 Keycloak 로그인 사용자로 채워 보내고,
-`new_run(..., principal=)`이 `RunContext.principal`에 담는다. 이벤트에는 찍히지 않으며 Agent(LLM)에게도 보이지 않는다. Tool이 `current_run()`으로 읽는다.
-Group의 A2A Tool은 자기 run의 principal을 K의 `/api/a2a/run`에 그대로 넘긴다 (`runtime/a2a.request_review(..., principal=)`).
-backend는 이 값을 검증 없이 믿는다: backend 포트는 배포 내부망에만 열려 있다는 전제다 (12장 13번).
+Group system에는 Agent를 거치지 않는 **회의 업무 화면용** `POST /api/desk/{overview,mail,flags,items,meeting,schedule,report,minutes,checkin,attendance,watch,control,finalize}`도 있다 (2026-10-30, `library/workflows/meeting_desk`;
+`watch`는 전제가 흔들린 결정, `control`은 관제(`meeting_control`), `finalize`는 저장된 초안을 Agent 없이 확정(메일 발송)한다 — 2026-11-03;
+`checkin` open · status · close · join과 `attendance` assign · add · remove, `items`의 `action: split`은 2026-11-03, `library/workflows/attendance`). `meeting`은 `attendance` · `recall`도 준다.
+요청자(principal) 대신 메일 버튼의 서명된 token으로 담당자를 정하는 `POST /api/mail-action {token, status?, note?}`도 있다 (2026-11-04, `library/workflows/mail_actions`, gateway `/meetings/act/<token>`).
+`report` `{meeting_id, kind: minutes|report}`는 저장된 회의록으로 만든 **회의록(양식) · 회의 결과 보고서(개조식) PDF**를 돌려준다 (`library/workflows/meeting_report`, fpdf2 + 나눔 글꼴;
+양식은 data.go.kr에 공개된 공공데이터전략위원회 회의록 · 회의 결과를 따름). 같은 PDF가 회의록 메일에 첨부되고, 의장 · 간사 메일에는 결과 보고서도 붙는다.
+배포에서는 이 desk API를 Open WebUI 채팅 안의 회의 카드가 부른다 (gateway가 회의 Tool 결과로 답변 끝에 카드 블록을 붙이고 Open WebUI 스크립트가 그림). 회의록 저장 Tool은 회의 시각(start_time · end_time)도 받는다.
+사람이 회의 기록과 Agent가 보낸 메일을 목록으로 보고 Compliance 검토 · Action Item 완료 · 실패한 메일 다시 보내기를 직접 누르는 경로다. body는 run과 같은 `principal` / `principal_token`(+ action · mail_ids · reviews · item_id …)이고,
+미팅 Tool과 같은 workflow 함수 · 권한 규칙(VISIBLE · can_confirm · can_write)을 쓴다. 배포에서는 gateway의 `/meetings/` 화면이 Open WebUI 로그인 사용자로 이것을 부른다.
+
+모든 run 요청 body는 선택 필드 `principal {email, name, groups, clearance, agents}`와 `principal_token`을 받는다 (`runtime/schemas`). gateway가 Keycloak 로그인 사용자로 채우고,
+`agents`는 그 사용자가 쓸 수 있는 전문 Agent id(gateway 권한표; 없으면 제한 없음)로, 위임 Tool이 그 밖의 Agent에는 위임하지 않는다 (11장 20번).
+`PRINCIPAL_SIGNING_KEY`(gateway와 backend가 공유)로 HS256 서명한 `principal_token`을 함께 보낸다. `runtime/api.run_identity`가 `runtime/principal.trusted_principal`로 확인한다:
+키가 있으면 서명이 맞는 토큰의 사용자만 쓰고, 토큰 없이 사용자를 보내거나 서명 · 만료가 틀리면 **401**, 둘 다 없으면 익명(`MEETINGS_ANONYMOUS_CLEARANCE`). 키가 없으면(로컬 UI · 테스트) `principal`을 그대로 쓴다.
+`new_run(..., principal=, principal_token=)`이 `RunContext`에 담는다. 이벤트에는 찍히지 않으며 Agent(LLM)에게도 보이지 않는다. Tool이 `current_run()`으로 읽는다.
+Group의 A2A Tool은 자기 run의 principal과 토큰을 K의 `/api/a2a/run`에 그대로 넘긴다 (`runtime/a2a.request_review(..., principal=, principal_token=)`) — K도 같은 키로 검증한다.
 
 ### Current implementation — frontend 반영
 
@@ -612,8 +686,8 @@ LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`http
 | K Super 그래프 | `tools → model` 루프. 모델이 Tool 없이 응답하면 `END`, 그 응답이 종합 결과 | 같음 |
 | Group Super | REAL (Group system + Group UI) | 같음 |
 | A2A | REAL: Group Tool → K `/api/a2a/run` HTTP, 최종 응답만 Agent에 전달, lifecycle은 관찰용 relay. Group UI가 Group backend를 쓴다 | 같음 |
-| Meeting 데이터 | Postgres 회의 저장소(system별 schema, fixture로 seed). 회의록 · 결정 · Action Item · 진행 이력 · 일정. 키워드 점수 조회 | + 녹음 transcript 저장과 보존 기간 삭제, 의미 검색(임베딩) |
-| 사용자 맥락 | 요청 body의 `principal`(gateway가 보냄)을 run이 들고 Tool이 읽음. 미팅 Tool만 사용 | 다른 Tool(뉴스 · 자문 자료 등급)도 같은 규칙 |
+| Meeting 데이터 | Postgres 회의 저장소(system별 schema, fixture로 seed, 번호 migration). 회의록 · 결정 · Action Item · 진행 이력 · 일정 · 녹음 transcript(id로 가져와 1년 보관) · Compliance 검토 · 메일 발송함 · 다른 system의 업무 요청. 키워드 점수 조회 | + 의미 검색(임베딩), 메일 회신으로 진행 갱신 |
+| 사용자 맥락 | gateway가 서명한 `principal_token`의 사용자를 run이 들고 Tool이 읽음 (A2A로 그대로 전달). 미팅 Tool만 사용 | 다른 Tool(뉴스 · 자문 자료 등급)도 같은 규칙 |
 | News 데이터 | `data/news.json` 고정 fixture를 키워드로 조회 | 실제 뉴스 API / 검색 / RAG (`analyze_company_risk_news` 본문만 교체) |
 | Advisory 데이터 | `data/companies.json` 고정 fixture + 결정적 규칙 evaluator | 실제 재무 모델 / 밸류에이션 / 실사 데이터 (evaluator만 교체) |
 | Workflow 결과 렌더링 | `toolResultBlocks`가 Tool 이름별 `switch` (meeting, news, advisory 전용 렌더) | Tool이 늘어나도 frontend가 Tool별 지식을 과도하게 갖지 않는 방식 (미결정) |
@@ -667,7 +741,25 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 12. **회의 저장소 (2026-10-27 결정 · 구현됨).** 미팅 에이전트의 회의 기록은 JSON fixture가 아니라 Postgres다: DB 하나에 system마다 schema와 DB role을 따로 둔다 (K `kelec`, Group `grp`).
     fixture는 seed로만 쓴다. backend 의존성에 `psycopg[binary]` 추가. Tool은 회의록 작성(초안 → 확정 → 정정), Action Item 진행 조회 · 갱신, 사내 일정(외부 캘린더 동기화 없음)까지 다섯 개.
     회의록 항목은 공공기록물법 시행령 제18조②(참석자 · 배석자, 안건, 발언 요지, 결정 사항과 표결 내용)와 상법 제391조의3(반대자와 반대 이유, 출석자 서명)을 기준으로 잡았다.
-13. **요청자 전달 (2026-10-27 결정 · 구현됨).** gateway가 run 요청에 `principal`을 담고, runtime은 그것을 `RunContext`에 두며, Tool이 읽는다 (모델 인자로 받지 않음). A2A는 principal을 넘기되 수신 측은 읽기만 한다.
+13. **요청자 전달 (2026-10-27 결정 · 구현됨, 2026-10-28 수정).** gateway가 run 요청에 `principal`을 담고, runtime은 그것을 `RunContext`에 두며, Tool이 읽는다 (모델 인자로 받지 않음).
+    A2A는 principal을 넘기되 수신 측은 읽기만 한다 — 예외는 18번의 업무 요청 접수(`submit`)뿐이다.
+14. **서명된 요청자 (2026-10-28 결정 · 구현됨, 12장 옛 13번).** gateway가 principal을 `PRINCIPAL_SIGNING_KEY`로 HS256 서명해 보내고 backend는 키가 있으면 서명된 값만 믿는다. A2A는 토큰을 그대로 전달한다.
+    표준 라이브러리로 검증한다 (의존성 추가 없음). mTLS는 하지 않는다.
+15. **확정 권한 (2026-10-28 결정 · 구현됨, 12장 옛 14번).** 회의록 확정 · 정정 · Compliance 검토 · 메일 재발송 · 취소 · 업무 요청 접수 = 그 회의의 의장 · 간사 + secretary · executive 그룹 (`MEETINGS_CONFIRM_GROUPS`).
+    초안 저장은 지금처럼 미팅 에이전트를 쓸 수 있는 사용자 누구나. 의결기구(`formal`)의 표결 · 서명 강제는 아직 없다.
+16. **녹음 transcript와 보존 기간 (2026-10-28 결정 · 구현됨, 12장 옛 15번).** speech-service가 transcript를 id로 30일 보관하고 그 id를 텍스트 첫 줄에 붙인다. 미팅 Tool은 id만 받아 내부망으로 가져와 복사한다.
+    보존: transcript 1년(이후 결정 · Action Item의 근거 링크만 비워짐), Open WebUI의 원본 녹음 파일 30일(배포의 retention 작업). 회의록 · 결정 · Action Item은 계속 보관.
+17. **사람에게 가는 채널 = 메일, Agent가 주소를 찾아 바로 발송 (2026-10-28 결정, 2026-10-30 변경 · 구현됨).** 처음에는 Agent가 만든 메일을 간사가 승인해야 나갔으나,
+    2026-10-30 사용자 결정으로 승인 단계를 없앴다: Agent가 받는 사람의 주소를 스스로 찾고(로그인 등록 이메일 → 임직원 · 외부 연락처), 메일을 작성해 바로 보낸다 (기한 알림 포함).
+    주소를 못 찾으면 추측하지 않고 매일 다시 찾는다. 사람은 실패 · 오류가 있을 때만 다시 보내기 · 취소 · 주소 정정을 한다. 메일 회신을 읽어 진행을 갱신하는 것은 아직 없다.
+18. **A2A 업무 요청 (2026-10-28 결정 · 구현됨).** 다른 system의 A2A run은 업무 요청을 `pending`으로 접수만 할 수 있고, 수신 system의 확정 권한자가 확인해야 정식 Action Item이 된다.
+    배포(Open WebUI)에는 K 쪽 확인 창구가 없다: 2026-10-28에 둔 "K전자 회의지원 Agent"는 2026-10-30에 메뉴를 회의지원 하나로 합치면서 뺐다 (사용자 결정).
+    따라서 배포에서 보낸 업무 요청은 K 저장소에 `pending`으로 남는다. 확인은 K system의 미팅 에이전트를 직접 쓰는 화면(Vite K UI, 결과는 JSON — 12장 17번)에서만 된다.
+19. **회의 저장소 migration (2026-10-28 결정 · 구현됨, 12장 옛 16번).** 번호 붙은 SQL 파일 + schema별 `schema_migrations` (새 도구 없음). `meeting_schema.sql`은 version 1로 고정한다.
+20. **Super Agent의 권한 · 기록 작업 (2026-10-30 결정 · 구현됨).** gateway가 principal(서명 토큰 포함)에 사용자가 쓸 수 있는 전문 Agent(`agents`)를 담는다.
+    위임 Tool(`library/tools/delegation`)은 그 밖의 Agent에는 위임하지 않고 `delegation_skipped`를 보낸 뒤 Super Agent에게 "권한이 없어 빠졌다고 밝히라"는 결과를 돌려준다 —
+    전에는 gateway가 권한 없는 `delegation_start`에서 응답을 끊었다 (그 검사는 안전장치로 남김). A2A로 받은 K Super의 위임도 같은 토큰으로 거른다.
+    Skill `specialist_delegation`: 조회 · 분석만 위임하고, 기록 · 발송(회의록 확정, 일정, 메일, 업무 전달)은 요청이 시켰을 때만 — 아니면 "다음에 할 수 있는 일"로 제안한다.
 
 ### 전환 단계와 상태
 
@@ -684,6 +776,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | 7 | 제품 UI(Group · K) | 완료 |
 | 8 | 정리 · 문서 (옛 단일 앱 · scenario mock · `/api/k-super/run` 제거, reducer를 `state/runState.ts`로) | 완료 |
 | 8+ | K UI의 외부 A2A 실행 표시 (11번 결정, 12장 11번) | 완료 |
+| 9 | 회의 후속 기능: 서명된 요청자 · 확정 권한 · Compliance 검토 · transcript 연결과 보존 · 메일 발송함과 기한 알림 · A2A 업무 요청 · migration (14~19번 결정) | 완료 (2026-10-28) |
 
 각 Phase가 끝날 때 현재 데모가 그대로 동작해야 한다는 규칙으로 진행했다 (Phase 7 전까지는 옛 단일 frontend의 mock Step 1·2·7·8을 유지).
 
@@ -706,7 +799,8 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
    `tests/test_agents.py`의 `_NoToolGraph`처럼 `build_*_agent`를 monkeypatch하는 테스트가 있으므로 `run_*_agent`는 그래프를 모듈 전역 이름으로 조회한다.
 4. **Workflow 결과의 frontend 렌더링.** Tool별 `switch`를 계속 늘릴지, backend가 표시 힌트를 함께 보낼지, 범용 렌더로 갈지.
 5. **상위 Agent로 전달할 구조화 결과 (Step 5에서 내린 결정과 남은 부분).** Step 5에서는 공유 구조를 만들지 않았다. Advisory가 필요로 하는 Meeting / News 결과는 K Super가 자기 history를 보고 **자연어 위임 문장에 직접 담는다** (Skill `specialist_delegation`의 지침, 코드 template 없음).
-   Advisory Agent는 그 문장을 `run_mna_review`의 `context`(자유 텍스트)로 넘기고 workflow가 신호를 추출한다. 따라서 K Super가 무엇을 옮겨 적는지, Advisory가 무엇을 `context`에 넣는지는 모델 판단이며 실행마다 다를 수 있다 (`tests/test_agents.py`가 가격 기준 · 리스크 주제가 전달됐는지만 검증).
+   Advisory Agent는 그 문장을 `run_mna_review`의 `context`(자유 텍스트)로 넘기고 workflow가 신호를 추출한다
+   (가격 상한은 금액 뒤의 "초과 · 이하 · 상한 …"으로 찾되, "2조 원 초과 건은 본회의 상정"처럼 심의 경로를 정하는 문장은 가격 단어가 없으면 상한으로 보지 않는다 — 2026-10-30 수정). 따라서 K Super가 무엇을 옮겨 적는지, Advisory가 무엇을 `context`에 넣는지는 모델 판단이며 실행마다 다를 수 있다 (`tests/test_agents.py`가 가격 기준 · 리스크 주제가 전달됐는지만 검증).
    Step 6 종합은 **텍스트만으로 구현했다**: K Super는 history의 `ToolMessage` 텍스트를 보고 최종 응답을 쓰고, frontend는 그 문자열을 그대로 표시한다.
    A2A도 텍스트만이다: Group Super는 K의 최종 응답 문자열을 `ToolMessage`로 받아 그룹 판단을 쓴다. 구조화된 결과(권고 코드, 조건 목록 등)가 필요해지면 `artifacts` / `context` 같은 공유 구조와 A2A payload 확장을 함께 본다.
 6. **Group Super와 A2A (결정 · 구현됨).** 별도 프로세스(Group backend)의 Group Super가 Capability Tool로 K backend의 A2A 수신 표면을 HTTP 호출한다 ([3.4](#34-agent-delegation과-a2a의-차이), [11장](#11-목표-구조와-전환-계획-2026-10-12-결정)).
@@ -723,14 +817,19 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 
 ---
 
-13. **principal의 신뢰 경계.** backend는 요청 body의 `principal`을 검증 없이 믿는다. 배포에서 backend 포트는 내부망에만 열려 있고(gateway만 Group을, Group만 K를 호출) 이것이 유일한 방어다.
-    내부망의 다른 컨테이너도 principal을 꾸며 보낼 수 있으므로, 경계를 넓히면 서명된 토큰(예: gateway가 서명한 JWT)이나 mTLS가 필요하다.
-14. **회의 기록 쓰기 권한의 세분화.** 지금은 미팅 에이전트를 쓸 수 있는 사용자라면 자기 등급 이하의 회의를 저장 · 확정 · 정정할 수 있다. "확정은 간사만", "의결기구(`meeting_series.formal`)는 표결 · 서명 필수" 같은 규칙은 schema에만 있고 Tool이 강제하지 않는다.
-    delegation 경로(Super Agent → 미팅 에이전트)에서도 같은 system이면 쓸 수 있다.
-15. **녹음 transcript와 보존 기간.** `transcripts` · `transcript_segments` 테이블과 `expires_at`은 있지만 채우는 경로가 없다. transcript 원문은 채팅 메시지로만 오고, 모델이 Tool 인자로 수만 자를 옮겨 적게 하는 것은 맞지 않다.
-    STT 서비스나 gateway가 transcript id를 넘기는 경로, 만료 transcript와 원본 녹음 파일의 삭제 작업이 함께 정해져야 한다. 그 전까지 결정 · Action Item의 "근거 발언" 링크는 비어 있다.
-16. **회의 저장소 schema 변경.** schema는 없을 때만 만든다 (`meeting_schema.sql`). 테이블을 바꾸려면 migration 방식을 정해야 한다 (현재 도구 없음).
-17. **새 미팅 Tool 결과의 frontend 렌더.** Vite 제품 UI의 `toolResultBlocks`는 `run_meeting_context_retrieval`만 전용 렌더가 있고 나머지 네 Tool 결과는 JSON으로 보인다 (4번과 같은 문제).
+13. ~~principal의 신뢰 경계~~ → 11장 14번으로 결정 · 구현 (서명된 `principal_token`). 남은 것: 키 회전 절차, 내부망 전송 자체의 암호화(mTLS)는 없다.
+14. ~~회의 기록 쓰기 권한의 세분화~~ → 11장 15번. 남은 것: 의결기구(`meeting_series.formal`)의 표결 · 출석자 서명 강제는 schema에만 있다.
+    참석자 role(의장 · 간사)은 초안을 쓰는 사람이 적을 수 있으므로, 한 호출 안에서 자기를 간사로 적고 확정하는 것만 막는다 (다음 호출에서는 인정된다). role 지정 자체를 확정 권한자로 제한할지는 미결정.
+15. ~~녹음 transcript와 보존 기간~~ → 11장 16번.
+16. ~~회의 저장소 schema 변경~~ → 11장 19번.
+17. **새 미팅 Tool 결과의 frontend 렌더.** Vite 제품 UI의 `toolResultBlocks`는 `run_meeting_context_retrieval`만 전용 렌더가 있고 나머지 여섯 Tool(`manage_mail_outbox` · `run_task_requests` 포함) 결과는 JSON으로 보인다 (4번과 같은 문제).
+    배포의 사용자 화면은 Open WebUI라 Agent의 텍스트 응답으로 보인다.
+18. **메일 회신과 진행 갱신.** 슬라이드의 "이메일 회신 → 진행 상황 갱신"은 없다 (IMAP 수신 · 회신과 Action Item 매칭 · 회신자 확인이 필요). 지금은 담당자가 Agent에게 직접 알린다.
+19. **Compliance 규칙의 한계.** 키워드 · 정규식 규칙이라 돌려 말한 발언은 놓치고 일상 표현에도 걸릴 수 있다 (검토자가 cleared로 닫는다). LLM 판정을 더할지, 규칙을 법무팀이 관리하게 할지는 미결정.
+20. **조직 이름 담당.** `resolve_owner`는 "팀 · 본부 · 실 …"로 끝나는 이름만 조직으로 보므로 "K전자" 같은 회사명 담당은 사람으로 등록되어 배정 메일이 주소 필요 상태가 된다.
+    계열사에 배정된 업무는 A2A 업무 요청으로 전달하는 것이 맞는 경로다 (11장 18번).
+21. **주제 추론의 한계.** 주제는 회의명 단어로 정하므로 회의명이 매번 다른 정기 회의("10/13 회의")는 회의마다 다른 주제가 되고, 회의명이 겹치면 다른 사업이 한 주제로 묶일 수 있다.
+    Agent가 `save_meeting_minutes(subject=)`로 이름을 주면 그것을 쓴다. 주제를 사람이 고치는 화면은 아직 없다.
 
 ---
 
