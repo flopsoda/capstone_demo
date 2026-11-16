@@ -10,8 +10,10 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 _KEY = "OPENAI_API_KEY" if os.environ.get("LLM_PROVIDER", "").strip().lower() == "openai" else "OLLAMA_API_KEY"
-# The meeting tools read the test meeting database (tests/conftest.py); the other agents' data is fixture files.
-pytestmark = [pytest.mark.skipif(not os.environ.get(_KEY), reason=f"{_KEY} not set"), pytest.mark.usefixtures("meeting_db")]
+# The meeting and news tools read the test database (tests/conftest.py: meeting and news schemas seeded
+# from each system's data/; no publisher feeds); the advisory data is fixture files.
+pytestmark = [pytest.mark.skipif(not os.environ.get(_KEY), reason=f"{_KEY} not set"), pytest.mark.usefixtures("meeting_db", "news_db"),
+              pytest.mark.network]
 
 A2A_REQUEST = (
     "뉴로엣지 인수안에 대해 계열사 차원의 예비 검토를 수행해주세요.\n"

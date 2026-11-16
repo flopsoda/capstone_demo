@@ -1,0 +1,149 @@
+{
+ "feeds": [
+  {
+   "outlet": "연합뉴스",
+   "url": "https://www.yna.co.kr/rss/news.xml"
+  },
+  {
+   "outlet": "연합뉴스",
+   "url": "https://www.yna.co.kr/rss/economy.xml"
+  },
+  {
+   "outlet": "연합뉴스",
+   "url": "https://www.yna.co.kr/rss/industry.xml"
+  },
+  {
+   "outlet": "연합뉴스",
+   "url": "https://www.yna.co.kr/rss/market.xml"
+  },
+  {
+   "outlet": "한국경제",
+   "url": "https://www.hankyung.com/feed/all-news"
+  },
+  {
+   "outlet": "한국경제",
+   "url": "https://www.hankyung.com/feed/it"
+  },
+  {
+   "outlet": "한국경제",
+   "url": "https://www.hankyung.com/feed/finance"
+  },
+  {
+   "outlet": "매일경제",
+   "url": "https://www.mk.co.kr/rss/30000001/"
+  },
+  {
+   "outlet": "매일경제",
+   "url": "https://www.mk.co.kr/rss/50100032/"
+  },
+  {
+   "outlet": "전자신문",
+   "url": "https://rss.etnews.com/Section901.xml"
+  },
+  {
+   "outlet": "조선일보",
+   "url": "https://www.chosun.com/arc/outboundfeeds/rss/?outputType=xml"
+  },
+  {
+   "outlet": "조선비즈",
+   "url": "https://biz.chosun.com/arc/outboundfeeds/rss/?outputType=xml"
+  },
+  {
+   "outlet": "동아일보",
+   "url": "https://rss.donga.com/total.xml"
+  },
+  {
+   "outlet": "경향신문",
+   "url": "https://www.khan.co.kr/rss/rssdata/total_news.xml"
+  },
+  {
+   "outlet": "한겨레",
+   "url": "https://www.hani.co.kr/rss/"
+  },
+  {
+   "outlet": "머니투데이",
+   "url": "https://rss.mt.co.kr/mt_news.xml"
+  },
+  {
+   "outlet": "이데일리",
+   "url": "http://rss.edaily.co.kr/edaily_news.xml"
+  },
+  {
+   "outlet": "파이낸셜뉴스",
+   "url": "https://www.fnnews.com/rss/r20/fn_realnews_all.xml"
+  },
+  {
+   "outlet": "아시아경제",
+   "url": "https://www.asiae.co.kr/rss/all.htm"
+  },
+  {
+   "outlet": "뉴시스",
+   "url": "https://www.newsis.com/RSS/sokbo.xml"
+  },
+  {
+   "outlet": "ZDNet Korea",
+   "url": "https://feeds.feedburner.com/zdkorea"
+  },
+  {
+   "outlet": "AI타임스",
+   "url": "https://www.aitimes.com/rss/allArticle.xml"
+  },
+  {
+   "outlet": "디지털투데이",
+   "url": "https://www.digitaltoday.co.kr/rss/allArticle.xml"
+  },
+  {
+   "outlet": "스트레이트뉴스",
+   "url": "https://www.straightnews.co.kr/rss/allArticle.xml"
+  },
+  {
+   "outlet": "연합인포맥스",
+   "url": "https://news.einfomax.co.kr/rss/allArticle.xml"
+  },
+  {
+   "outlet": "더일렉",
+   "url": "https://www.thelec.kr/rss/allArticle.xml"
+  },
+  {
+   "outlet": "블로터",
+   "url": "https://www.bloter.net/rss/allArticle.xml"
+  },
+  {
+   "outlet": "서울파이낸스",
+   "url": "https://www.seoulfn.com/rss/allArticle.xml"
+  },
+  {
+   "outlet": "이투데이",
+   "url": "https://rss.etoday.co.kr/eto/etoday_news_all.xml"
+  },
+  {
+   "outlet": "SBS",
+   "url": "https://news.sbs.co.kr/news/SectionRssFeed.do?sectionId=02&plink=RSSREADER"
+  },
+  {
+   "outlet": "서울경제",
+   "url": "https://www.sedaily.com/rss/newsall"
+  },
+  {
+   "outlet": "세계일보",
+   "url": "https://www.segye.com/Articles/RSSList/segye_recent.xml"
+  },
+  {
+   "outlet": "핀포인트뉴스",
+   "url": "https://www.pinpointnews.co.kr/rss/allArticle.xml"
+  },
+  {
+   "outlet": "아이뉴스24",
+   "url": "https://www.inews24.com/rss/news_it.xml"
+  },
+  {
+   "outlet": "테크M",
+   "url": "https://www.techm.kr/rss/allArticle.xml"
+  },
+  {
+   "outlet": "파이낸셜뉴스",
+   "url": "https://www.fnnews.com/sitemap/news/latest.xml",
+   "kind": "sitemap"
+  }
+ ]
+}

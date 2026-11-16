@@ -26,6 +26,8 @@ def test_registry_lists_capabilities_with_permissions():
         "manage_mail_outbox": ("tool", {"meeting"}),
         "run_task_requests": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
+        "news_briefing": ("skill", {"news"}),
+        "run_news_briefing": ("tool", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
         "run_mna_review": ("tool", {"advisory"}),
@@ -62,14 +64,20 @@ def test_tool_definition_is_the_source_of_truth():
     assert isinstance(cap.impl, BaseTool)
     assert cap.description == cap.impl.description and "리스크" in cap.description
     assert set(cap.impl.args) == {"query", "company", "topics"}
-    assert cap.impl.invoke({"query": "외부 리스크", "company": "뉴로엣지"})["matched"] == 3
 
     cap = get_capability("run_mna_review")
     assert isinstance(cap.impl, BaseTool)
     assert cap.description == cap.impl.description and "persona" in cap.description
-    assert set(cap.impl.args) == {"query", "company", "persona", "context"}
+    assert set(cap.impl.args) == {
+    "query", "company", "persona", "context",
+    "asking_trillion_krw", "operating_margin", "revenue_share"
+    }
     out = cap.impl.invoke({"query": "인수 검토", "company": "뉴로엣지", "persona": "CFO"})
     assert out["recommendation"] == "CONDITIONAL_PROCEED" and out["persona"] == "CFO"
+
+
+def test_news_tool_reads_this_systems_news_store(news_db):
+    assert get_capability("run_company_risk_news_analysis").impl.invoke({"query": "외부 리스크", "company": "뉴로엣지"})["matched"] == 3
 
 
 def test_meeting_tool_reads_this_systems_store(meeting_db):
@@ -89,7 +97,9 @@ def test_each_agent_gets_only_its_subset():
         "run_meeting_context_retrieval", "save_meeting_minutes", "run_action_item_tracking", "update_action_item", "run_meeting_schedule",
         "manage_mail_outbox", "run_task_requests",
     ]
-    assert [c.name for c in capabilities_for("news")] == ["external_risk_analysis", "run_company_risk_news_analysis"]
+    assert [c.name for c in capabilities_for("news")] == [
+        "external_risk_analysis", "news_briefing", "run_news_briefing", "run_company_risk_news_analysis",
+    ]
     assert [c.name for c in capabilities_for("advisory")] == ["mna_feasibility_review", "run_mna_review"]
     assert capabilities_for("group_super") == []
     for agent in ("meeting", "news", "advisory"):

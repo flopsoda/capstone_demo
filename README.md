@@ -22,14 +22,29 @@ Step 7  REAL   A2A 응답                                                  K의 
 Step 8  REAL   그룹 최종 판단                                            Group Super의 마지막 model 턴
 ```
 
+### 경영자문 Agent 주요 기능
+
+경영자문 Agent(K전자 · 그룹 모두 같은 Skill · Tool · Workflow, 각자의 기업 데이터)는 M&A 인수 타당성 평가를 중심으로 경영진의 의사결정을 지원합니다.
+
+- **기업별 M&A 평가:** 재무·전략·기술·위험 요인을 분석하고 인수 권고 및 선행 조건 도출
+- **What-if 시나리오 분석:** 인수가격, 영업이익률, 주요 고객 매출 비중 변경에 따른 평가 결과 비교
+- **경영진 Persona 분석:** CEO·CFO·CTO 관점별 평가 및 세 관점 종합 평가(`persona="ALL"`)
+- **회의 맥락 반영:** 회의에서 확인된 가격 상한과 위험 요소를 M&A 평가에 활용
+
+현재 M&A Workflow는 저장된 가상 기업 데이터를 기반으로 동작하며, 실제 기업정보 자동 수집이나 RAG 기능은 포함하지 않습니다.
+
 두 플랫폼 UI(`/group`, `/k`) 모두 **슈퍼에이전트 · 경영자문 · 뉴스 · 미팅** 탭의 직접 채팅을 제공하며, 협업형 요청에서는 A2A / 위임 세션이 채팅 옆 창으로 펼쳐집니다.
 직접 채팅에서는 Tool 사용이 강제되지 않아, 일반 개념 질문에는 Tool 없이 답하고 실제 검토 요청에는 Workflow Tool · 위임 · A2A를 사용합니다.
 
 ## 실행
 
 요구 버전: **Node `^20.19 || >=22.12`** (Vite 8 · oxlint), **Python `>=3.12`** (3.13으로 검증). 외부 의존은 LLM API key(기본 Ollama Cloud, `LLM_PROVIDER=openai`면 OpenAI 호환 API)와
-미팅 에이전트의 회의 저장소 **Postgres 15+**(`MEETINGS_DATABASE_URL`, `pg_trgm` 사용)입니다 — `backend/.env.example`.
+회의 · 뉴스 저장소 **Postgres 15+ + pgvector**(`MEETINGS_DATABASE_URL`, `pg_trgm` · `vector` 확장 사용), 뉴스 의미 검색용 **로컬 Ollama의 `embeddinggemma`**입니다 — `backend/.env.example`.
+(임베딩 모델이 없거나 꺼져 있으면 뉴스 검색은 키워드만으로 동작합니다. pgvector는 필수입니다.)
 각 system은 처음 쓸 때 자기 schema(K `kelec`, Group `grp`)를 만들고(이후 `meeting_migrations/`의 번호 migration 적용) `data/meetings.json`으로 채웁니다. 저장소가 없으면 미팅 Tool은 오류 결과를 돌려줍니다.
+뉴스도 같은 Postgres에 system별 schema(K `kelec_news`, Group `grp_news`)로 저장합니다. 각 system은 처음 쓸 때 `data/news.json`의 기사 · 사건 · 분석을 초기 데이터로 등록하고
+(다시 시작해도 같은 행을 갱신할 뿐 중복 없음), 이후 언론사 RSS로 모은 기사와 **같은 저장소 · 같은 파이프라인**으로 검색 · 분석합니다. 별도 데모 모드는 없습니다.
+기본 조회 기간은 120일입니다(`NEWS_LOOKBACK_DAYS`로 변경). 검색은 키워드(본문 · 연결된 기업명)와 의미(임베딩 유사도)를 합쳐 순위를 매깁니다(하이브리드, RRF).
 선택: 녹음 transcript 연결(`SPEECH_SERVICE_URL`), 메일 받는 사람 조회(`DIRECTORY_URL`), 메일 발송(`SMTP_*`, `MEETINGS_BACKGROUND_JOBS=1`), 서명된 요청자(`PRINCIPAL_SIGNING_KEY`) — 배포(gateway 레포)가 채웁니다.
 로컬 데모에서 회의록을 확정하려면 `MEETINGS_CONFIRM_GROUPS=*` (principal 없는 요청은 그룹이 없으므로).
 
@@ -38,6 +53,7 @@ Step 8  REAL   그룹 최종 판단                                            G
 cd backend
 python3.13 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env            # OLLAMA_API_KEY 입력 (https://ollama.com/settings/keys), MEETINGS_DATABASE_URL 입력
+ollama pull embeddinggemma      # 뉴스 의미 검색 (로컬 Ollama; Ollama Cloud는 임베딩을 제공하지 않음)
 .venv/bin/uvicorn app.main:app --port 8000 --reload
 
 # 1b) Python backend — Group system (별도 터미널, 같은 venv/.env). Group Super가 K에 A2A로 요청한다
@@ -54,6 +70,20 @@ npm run build    # tsc + vite build
 #    http://localhost:5173/monitor  Demo Monitor (테스트 · 발표용 관찰 창, 제품 UI 아님):
 #                                   Group backend의 /api/events(SSE)를 구독해 전체 Agent Graph · Step 1~8 · 협업 세션을 실제 이벤트로만 보여준다
 ```
+
+뉴스 파이프라인: 뉴스 탭에 `HBM 시장 최근 동향 알려줘.`처럼 어떤 주제든 요청하면, 저장된 뉴스를 찾고 필요하면 언론사 RSS(29곳, `news/feeds.json`)에서
+새 기사를 모아 본문을 추출 · 정제(trafilatura) → 임베딩(embeddinggemma, 제목 + 본문 앞 500자) → 키워드 + 의미 검색 → 중복 제거 → 사건 묶기 → 분석(LLM, 키 없으면 규칙) → system별 Postgres 뉴스 저장소(`NEWS_DATABASE_URL`, 없으면
+`MEETINGS_DATABASE_URL`; K `kelec_news`, Group `grp_news`)에 저장 · 재사용 → 사건별 브리핑으로 답합니다. 검색 API는 쓰지 않으므로 RSS에 실린 기사(와 저장소에 쌓인 기사)만 찾습니다.
+robots.txt를 지키고 차단 · 로그인 · 봇 확인 페이지는 우회하지 않으며, 본문을 못 얻은 기사는 요약 · 제목 수준(`content_level`)으로 표시합니다.
+
+주기 수집 (선택, backend/에서; 요청 시 수집과 같은 파이프라인). cron · 작업 스케줄러로 돌리거나 `--watch`로 반복합니다:
+
+```bash
+.venv/bin/python -m app.library.workflows.news.collect --schema kelec_news               # K전자 저장소에 한 번
+.venv/bin/python -m app.library.workflows.news.collect --schema grp_news --watch 30      # 그룹 저장소에 30분마다
+.venv/bin/python -m app.library.workflows.news.collect --schema kelec_news --embed-only   # 수집 없이 임베딩이 없는 기사만 (처음 한 번 권장)
+```
+요청 한 번은 새 기사를 최대 64건(3초)까지만 임베딩하므로, 저장소를 처음 만들었거나 기사가 많이 쌓였을 때는 `--embed-only`(약 25건/초, M2 Pro 기준)로 한 번 채워 둡니다.
 
 backend 테스트:
 
@@ -90,7 +120,18 @@ backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Wo
    회의록 · 업무 배정 · 회의 안내 · 기한 알림 메일은 Agent가 받는 사람의 주소를 찾아 바로 보내고, 보낸 메일을 조회합니다(`manage_mail_outbox`). 요청하면 밀린 일의 담당자에게 독촉 메일도 보냅니다(`update_action_item(remind=true)`).
    회의에서 정한 결정의 전제 · 조건을 남기고, 새 기사가 그 전제를 흔들면 참석자에게 알리며 재검토를 제안합니다(`run_decision_review`, 배경 작업의 결정 감시).
    회의록 메일에는 회의록 PDF가, 의장 · 간사에게는 회의 결과 보고서 PDF도 첨부됩니다(`meeting_report`, 글꼴: `fonts-nanum` 또는 `REPORT_FONT_DIR`). K 미팅 탭은 그룹이 A2A로 보낸 업무 요청을 접수 · 등록합니다(`run_task_requests`).
+
+   **경영자문 Agent 시연 예시**
+
+   - **개별 평가:** `뉴로엣지 인수를 CFO 관점에서 검토해줘.`
+   - **종합 평가:** `뉴로엣지 인수 타당성을 CEO, CFO, CTO 관점에서 종합적으로 평가해줘.`
+   - **What-if 분석:** `뉴로엣지 인수가격을 2.8조 원에서 2.1조 원으로 낮추면 인수 위험과 권고가 어떻게 달라지는지 CFO 관점에서 분석해줘.`
+   - **회의 맥락 반영:** `회의에서 정한 인수가격 상한이 2.5조 원일 때, 인수가격을 2.7조 원으로 변경하면 어떻게 평가되는지 검토해줘.`
+
+   What-if 분석은 CEO·CFO·CTO 중 개별 평가 관점을 선택해 수행하며, 세 관점을 동시에 적용하는 종합 What-if는 현재 지원하지 않습니다.
+
 5. Monitor의 **초기화**로 관찰 화면을 비우고 다시 시연할 수 있습니다. 채팅 전사는 탭마다 유지됩니다.
+
 
 ## 아키텍처 개념 (UI 표현)
 
@@ -176,8 +217,19 @@ backend/
         task_requests.py             다른 system의 A2A 업무 요청: submit(A2A) → accept | reject(확정 권한자) → Action Item
         action_items.py              Action Item 진행 조회(지연 순, 상태별 건수) · 갱신(이력 기록)
         meeting_schedule.py          회의 일정 조회 · 예약 전 점검(draft: 빠진 것 · 애매한 이름 · 겹침, 지난 회의로 채우기) · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소 (참석자 안내 메일 생성)
-        company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(path) 조회
+        company_risk_news_analysis.py 리스크 view: 저장소에서 찾은 기업 기사의 리스크(category 필터)를 영속 사건 단위 사안으로 묶음
+        news_briefing.py             브리핑 view: gather → 사건별 중요도 · 기사별/사건별 분석 → 결과
+        news/                        뉴스 파이프라인(Tool · 주기 수집 공용): feeds.py(언론사 RSS/Atom/뉴스 sitemap, feeds.json)
+                                     · fetch.py(robots.txt · 시간 제한 · 차단 감지) · extract.py(trafilatura 본문 + 정제 + content_level)
+                                     · store.py(NewsStore: system별 schema, sql/NNN_*.sql 버전 관리, KG용 조회) · pipeline.py(ingest · gather)
+                                     · cluster.py(중복 · 전재 · 영속 사건 배정) · analysis.py(기사별 보도 관점 · 리스크, 사건 영향 · 근거 · 시사점, 매체별 논조)
+                                     · labels.py(리스크 분류 · 확인 사항 · 규칙) · text.py · collect.py(주기 수집 CLI)
+                                     · seed.py(system의 data/news.json → 기사 · 사건 · 분석 · 언급 초기 등록, 고정 키 upsert)
+                                     · embed.py(로컬 Ollama 임베딩, 실패 시 키워드 검색으로 fallback) · sql/003(pgvector 임베딩 테이블)
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
+        mna_scenario.py              What-if: review_what_if(path) — 인수가격·영업이익률·고객 비중 변경 전후 평가 · 권고 · 조건 비교 (context 신호 반영)
+        mna_executive_summary.py     persona "ALL": review_executive_summary(path) — CEO·CFO·CTO 평가 통합, 핵심 위험·기회·인수 조건 · 권고
+
     systems/
       group/                         Group agent system (SYSTEM = "group") — `uvicorn app.systems.group.app:app --port 8001`
         app.py                       FastAPI: /api/health, /api/agents/{group-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE)
@@ -187,10 +239,10 @@ backend/
         agents/{meeting,news,advisory}.py  그룹 전문 Agent: 같은 Specialist core · 같은 Skill, Group 데이터
         skills/subsidiary_review.py  계열사 검토 요청(A2A)과 그룹 판단 지침
         tools/delegate_to_*.py       Group Super → 그룹 전문 Agent 위임 Tool (라이브러리 factory + Group 전용 설명)
-        tools/run_*.py 등            라이브러리 Tool factory를 Group data/ · MEETING_STORE에 바인딩한 instance
+        tools/run_*.py 등            라이브러리 Tool factory를 Group data/ · MEETING_STORE · NEWS_STORE에 바인딩한 instance
         tools/request_k_electronics_review.py  A2A client Tool: a2a_start → K /api/a2a/run (HTTP) → K lifecycle relay(관찰용) → 최종 응답만 반환 → a2a_end
                                      (검토 요청 · 업무 전달 · 전달한 업무의 진행 조회)
-        data/                        그룹 fixture: 그룹 투자심의·경영전략 회의(회의 저장소 seed), 계열사·그룹 투자 대상 뉴스, 그룹 차원 인수 후보(브라이트셀)
+        data/                        그룹 fixture: 그룹 투자심의·경영전략 회의(회의 저장소 seed), 계열사·그룹 투자 대상 뉴스(뉴스 저장소 seed), 그룹 차원 인수 후보(브라이트셀)
       k_electronics/                 K Electronics agent system (SYSTEM = "k_electronics", DATA_DIR)
         app.py                       FastAPI: /api/health, /api/a2a/run (A2A 수신), /api/agents/{k-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE 관찰 채널)
         registry.py                  이 system의 CAPABILITIES와 allowed_agents (권한의 source of truth), skills_for / tools_for
@@ -201,13 +253,18 @@ backend/
           advisory.py                경영자문 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_mna_review)
         tools/
           delegate_to_*.py           K Super → 미팅 / 뉴스 / 경영자문 위임 Tool (라이브러리 factory + K 설명; delegation_start/end 발행, 최종 응답만 반환, 사용자가 쓸 수 없는 Agent면 delegation_skipped)
-          run_*.py 등                라이브러리 Tool factory를 이 system의 data/ · MEETING_STORE(schema kelec)에 바인딩한 instance
+          run_*.py 등                라이브러리 Tool factory를 이 system의 data/ · MEETING_STORE(schema kelec) · NEWS_STORE(schema kelec_news)에 바인딩한 instance
         data/meetings.json           회의 저장소 seed (NeuroEdge 전략회의(대외비) + 무관한 회의 2건, Action Item 기한 포함)
-        data/news.json               뉴스 fixture (NeuroEdge 리스크 기사 3건 + 무관한 기업 기사 2건)
+        data/news.json               뉴스 저장소 초기 데이터 (가상 기사 8건: 매체 도메인, 기사별 사건 키, 리스크 · 핵심 사실 분석 포함)
         data/companies.json          인수 대상 기업 fixture (NeuroEdge 재무 · 가치 · 고객 · 기술 · 전략)
   tests/                             test_workflow.py · test_meeting_records.py · test_meeting_delivery.py (회의 저장소 필요: conftest.py의 meeting_db) · test_news_workflow.py · test_mna_review_workflow.py
+                                     · test_news_briefing.py · test_news_pipeline.py · test_news_live.py (뉴스 저장소: conftest.py의 news_db, 가짜 웹)
                                      · test_capabilities.py · test_k_super.py · test_k_app.py · test_events.py · test_group.py · test_group_workflows.py
-                                     · test_boundaries.py(runtime/library/system import 경계) (LLM 불필요), test_agents.py (Ollama Cloud 필요)
+                                     · test_boundaries.py(runtime/library/system import 경계)
+                                     · test_mna_scenario.py (What-if) · test_mna_executive_summary.py (CEO·CFO·CTO 종합 평가)
+                                     · test_advisory.py (K · Group 경영자문 Agent: 실시간 lifecycle, 실패 시 이벤트 보존, Tool 오류 자체 정정, ALL · What-if, A2A 위임)
+                                     (LLM 불필요), test_agents.py (Ollama Cloud 필요)
+
 ```
 
 ### Agent 구조 (backend)
@@ -236,8 +293,9 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
                               │ invoke
                               ▼
                        경영자문 에이전트 (LangGraph, MessagesState)
-                         model ──tool call──▶ run_mna_review(query, company, persona, context)
-                               ◀── tool result ──┘        (companies.json + persona별 평가 기준 + context 신호)
+                         model ──tool call──▶ run_mna_review(query, company, persona, context,
+                                                             asking_trillion_krw?, operating_margin?, revenue_share?)
+                               ◀── tool result ──┘        (companies.json + persona 평가 기준 + context 신호; ALL이면 종합, 변경 조건이 있으면 What-if)
                          model ──▶ 최종 응답 (한국어)
                               │
                        ToolMessage(최종 응답만) ──▶ K전자 슈퍼에이전트
@@ -268,8 +326,12 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 - K Super 위임 경로에서 전문 Agent가 Workflow Tool을 호출하지 않고 답하면 backend가 `error`(agent=meeting | news | advisory)로 처리하므로,
   UI에 Workflow 이름이 표시되는 것은 실제 `tool_start`가 발생한 경우뿐입니다.
   Sidebar 직접 대화(`/api/agents/*/run`)는 호출 맥락이 `direct`라 이 검사를 하지 않고, Tool 사용 여부는 Agent가 Skill 지침에 따라 정합니다.
-- `run_mna_review`의 persona(CEO / CFO / CTO)는 별도 Agent가 아니라 평가 관점 인자입니다. 같은 데이터면 권고와 조건 집합은 같고,
-  어떤 항목을 먼저 보고 어떤 우려와 조건을 앞세우는지가 달라집니다.
+- `run_mna_review`의 `persona`는 별도 Agent가 아니라 평가 관점을 나타내는 인자입니다. `CEO`, `CFO`, `CTO`를 지원하며, `ALL`을 지정하면 세 관점의 평가 결과를 통합합니다.
+- CEO는 전략적 적합성과 사업 가치, CFO는 인수가격·수익성·재무 위험, CTO는 기술 적합성·특허·핵심인력 위험을 중점적으로 검토합니다.
+- 동일한 기업 데이터와 조건에서는 기본적으로 동일한 최종 인수 권고를 사용하며, Persona에 따라 평가 항목의 우선순위와 설명이 달라집니다.
+- 종합 평가(`ALL`)에서는 세 관점의 결과를 통합하여 핵심 위험, 기회 요인, 인수 조건 및 최종 권고를 제공합니다.
+- 인수가격·영업이익률·고객 매출 비중을 변경하는 What-if 분석은 개별 Persona 기준으로 수행합니다. `ALL`과 What-if 변경 조건의 동시 적용은 지원하지 않습니다.
+
 - 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 자기 system의 `registry.py`에서
   `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
 - Group Super(:8001)는 요청을 보고 자기 전문 Agent 위임과 K전자 A2A 요청(`request_k_electronics_review` → K `/api/a2a/run`) 중에서 스스로 고릅니다. K의 lifecycle은 관찰용으로 Group 스트림에 relay되고, Group Super Agent 자체는 K의 최종 응답 텍스트만 받습니다.
@@ -299,6 +361,102 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 | `session_open`      | A2A / Delegation 세션 시작. 이후 message는 이 세션으로 라우팅 |
 | `session_close`     | 가장 안쪽 세션 종료, 결과(result)를 요청 카드에 부착        |
 | `scenario_complete` | 사용된 노드 전체 completed, 완료 배지 표시 (Demo Monitor)  |
+
+
+## 경영자문 Agent — M&A Workflow 확장
+
+### 개요
+
+경영자문 Agent는 공통 Specialist core(`run_specialist`)와 `run_mna_review` Tool을 그대로 쓰며, M&A 인수 타당성 평가 Workflow를 확장했습니다.
+K전자와 그룹의 경영자문 Agent는 같은 Skill(`mna_feasibility_review`) · Tool factory · Workflow를 각자의 기업 데이터에 바인딩해 씁니다.
+
+기업별 재무·전략·기술 정보를 기반으로 평가 항목별 판단을 생성하고, What-if 시나리오 분석과 경영진 관점의 종합 평가를 지원합니다.
+
+평가 · 권고 · 조건은 Workflow의 결정적 규칙이 정하고, Agent(LLM)는 Skill 지침에 따라 그 결과를 근거로 자연어 응답을 씁니다.
+Tool이 `error`를 돌려주면(예: `ALL`과 변경 조건을 함께 지정) 모델이 그 내용을 보고 인자를 고쳐 다시 호출합니다.
+
+### 주요 기능
+
+| 기능 | 설명 |
+|---|---|
+| M&A 평가 로직 개선 | 기업별 영업이익률, 특허 분쟁 여부, 재무 위험 및 핵심인력 조건을 반영하도록 평가 기준 개선 |
+| What-if 시나리오 | 인수가격, 영업이익률, 최대 고객 매출 비중 변경에 따른 평가 및 인수 권고 비교 |
+| Persona별 평가 | CEO(전략), CFO(재무), CTO(기술) 관점별 주요 평가 항목 제공 |
+| 경영진 종합 평가 | 세 Persona의 평가 결과를 통합하여 핵심 위험·기회·인수 조건 및 최종 권고 도출 |
+| 회의 맥락 반영 | 자연어 요청이나 Agent 위임 과정에서 전달받은 회의 기준 및 확인된 위험 요소를 M&A 평가와 What-if 분석에 반영 |
+
+### Workflow 구조
+
+```text
+사용자 자연어 요청
+        ↓
+경영자문 Agent
+        ↓
+run_mna_review Tool (인자로 Workflow 선택)
+        ├─ 일반 M&A 평가 (CEO / CFO / CTO)
+        │    └─ mna_review.review_acquisition
+        │
+        ├─ What-if 분석 (변경 조건 지정)
+        │    └─ mna_scenario.review_what_if
+        │
+        └─ CEO·CFO·CTO 종합 평가 (persona="ALL")
+             └─ mna_executive_summary.review_executive_summary
+        ↓
+구조화된 평가 결과 반환 (tool_end 이벤트로 UI에도 전달)
+        ↓
+경영자문 Agent가 결과를 근거로 최종 응답 작성 (agent_token으로 실시간 스트리밍 → agent_end)
+```
+
+### M&A 분석 Tool
+
+`run_mna_review`는 다음 입력값을 지원합니다.
+
+| 인자 | 설명 |
+|---|---|
+| `query` | 자연어 검토 요청 |
+| `company` | 인수 대상 기업명 |
+| `persona` | CEO, CFO, CTO 또는 ALL |
+| `context` | 회의에서 확정된 판단 기준과 확인된 위험 등 추가 맥락 |
+| `asking_trillion_krw` | 변경 인수가격(조 원 단위) |
+| `operating_margin` | 변경 영업이익률(비율) |
+| `revenue_share` | 변경 최대 고객 매출 비중(비율) |
+
+`asking_trillion_krw`, `operating_margin`, `revenue_share`는 선택적 입력값이며, 하나 이상 지정하면 What-if 분석을 수행합니다.
+
+`persona="ALL"`은 종합 평가에 사용하며, What-if 변경 조건과 동시에 사용할 수 없습니다.
+
+### 테스트
+
+경영자문 관련 테스트는 다음 명령어로 실행합니다.
+
+```bash
+cd backend
+python -m pytest tests -q -k "mna or advisory"
+```
+
+최근 로컬 검증 결과:
+
+- 74 passed
+- 3 skipped
+- 93 deselected
+
+주요 검증 항목:
+- 기존 M&A 평가 로직 및 기업별 조건 처리
+- What-if 입력값과 변경 전후 평가 비교
+- CEO·CFO·CTO 종합 평가
+- 회의 맥락을 반영한 평가
+- K · 그룹 경영자문 Agent의 실행 (`test_advisory.py`, scripted model): lifecycle 이벤트의 실시간 전달, Tool 실행 후 실패 시 이벤트 보존,
+  Tool `error` → 모델의 자체 정정, ALL · What-if 결과 전달, K Super 위임(A2A 수신 경로)
+
+위 결과는 경영자문 관련 테스트를 선택하여 실행한 결과이며 (skip 3건은 LLM key가 필요한 `test_agents.py`), 전체 백엔드 테스트 또는 실제 웹 UI 통합 검증 결과와는 구분합니다.
+
+### 구현 범위와 제한사항
+
+- M&A Workflow는 저장된 가상 기업 데이터를 기반으로 분석합니다.
+- 인수 권고는 규칙 기반 평가 결과에 근거하며, LLM은 이를 자연어로 설명합니다.
+- CEO·CFO·CTO는 별도의 독립 Agent가 아닌 평가 관점입니다.
+- 실제 DART 자동 수집, 외부 기업정보 RAG, 전문 가치평가 모델은 이번 M&A Workflow 확장 범위에 포함되지 않습니다.
+- 그룹 시스템 간 A2A 및 전체 UI 통합 동작은 별도 검증이 필요합니다.
 
 ## 범위 밖
 

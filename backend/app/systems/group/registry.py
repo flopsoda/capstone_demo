@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from ...library.skills.decision_review import DECISION_REVIEW
 from ...library.skills.external_risk_analysis import EXTERNAL_RISK_ANALYSIS
+from ...library.skills.news_briefing import NEWS_BRIEFING
 from ...library.skills.meeting_context_analysis import MEETING_CONTEXT_ANALYSIS
 from ...library.skills.meeting_follow_up import MEETING_FOLLOW_UP
 from ...library.skills.meeting_minutes_writing import MEETING_MINUTES_WRITING
@@ -25,6 +26,7 @@ from .tools.manage_mail_outbox import manage_mail_outbox
 from .tools.run_company_risk_news_analysis import run_company_risk_news_analysis
 from .tools.correct_transcript import correct_transcript
 from .tools.run_decision_review import run_decision_review
+from .tools.run_news_briefing import run_news_briefing
 from .tools.run_action_item_tracking import run_action_item_tracking
 from .tools.run_meeting_context_retrieval import run_meeting_context_retrieval
 from .tools.run_meeting_schedule import run_meeting_schedule
@@ -61,6 +63,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(manage_mail_outbox, frozenset({MEETING})),
     # News Agent (Group's article store)
     Capability(EXTERNAL_RISK_ANALYSIS, frozenset({NEWS})),
+    Capability(NEWS_BRIEFING, frozenset({NEWS})),
+    Capability(run_news_briefing, frozenset({NEWS})),
     Capability(run_company_risk_news_analysis, frozenset({NEWS})),
     # Management Advisory Agent (Group's company store)
     Capability(MNA_FEASIBILITY_REVIEW, frozenset({ADVISORY})),

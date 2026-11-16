@@ -9,6 +9,7 @@ make_decision_watch(store, articles_path). The result has
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,13 +17,24 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 
-from ..workflows.company_risk_news_analysis import load_articles
 from ..workflows.decision_watch import review_decisions, watch_news
 from ..workflows.meeting_store import MeetingStore
 from .correct_transcript import ask_model
 from .meeting_access import current_viewer, store_call
 
 log = logging.getLogger(__name__)
+
+
+def load_articles(path: Path) -> list[dict[str, Any]]:
+    """The system fixture's articles, as the watch job reads them.
+
+    The news pipeline moved the Tools onto NewsStore, so this no longer comes from
+    company_risk_news_analysis. The watch job still scans the fixture: wiring it to the
+    live store needs a scan window and a row adapter (headline/source/key_facts), which is
+    an open item in docs/architecture.md.
+    """
+    with path.open(encoding='utf-8') as f:
+        return json.load(f)['articles']
 
 TOOL_NAME = "run_decision_review"
 

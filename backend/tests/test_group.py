@@ -79,6 +79,8 @@ def test_group_registry_content():
         "run_meeting_schedule": ("tool", {"meeting"}),
         "manage_mail_outbox": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
+        "news_briefing": ("skill", {"news"}),
+        "run_news_briefing": ("tool", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
         "run_mna_review": ("tool", {"advisory"}),
@@ -113,7 +115,7 @@ def test_group_delegation_tools_point_at_group_agents():
     assert "계열사" in dm.DESCRIPTION and "A2A" in dm.DESCRIPTION  # the Group Super's view of who does what
 
 
-def test_group_tools_read_group_data_not_k_data(meeting_db):
+def test_group_tools_read_group_data_not_k_data(meeting_db, news_db):
     from app.systems.k_electronics import registry as k_registry
 
     g_meet = group_registry.get_capability("run_meeting_context_retrieval").impl
@@ -162,6 +164,23 @@ def test_a2a_tool_reports_an_unreachable_peer(monkeypatch):
     with pytest.raises(AgentError) as info:
         collect_events(lambda: a2a_tool.request_k_electronics_review.invoke({"request": "뉴로엣지 검토"}))
     assert info.value.agent == "k_super" and "연결할 수 없습니다" in str(info.value)
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, "http://localhost:8000/api/a2a/run"),  # unset
+        ("", "http://localhost:8000/api/a2a/run"),  # empty, as .env.example ships it
+        ("  ", "http://localhost:8000/api/a2a/run"),
+        (" http://k-electronics:8000/api/a2a/run ", "http://k-electronics:8000/api/a2a/run"),
+    ],
+)
+def test_k_electronics_a2a_url_falls_back_to_the_default_when_unset_or_empty(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("K_ELECTRONICS_A2A_URL", raising=False)
+    else:
+        monkeypatch.setenv("K_ELECTRONICS_A2A_URL", value)
+    assert a2a_tool.k_electronics_a2a_url() == expected
 
 
 def _stream(client, path, request):
@@ -230,7 +249,7 @@ def test_group_super_skips_a_specialist_the_user_may_not_use(scripted):
     assert "권한이 없어 빠졌습니다" in events[2]["response"]
 
 
-def test_group_specialist_direct_chat_endpoints(scripted):
+def test_group_specialist_direct_chat_endpoints(scripted, news_db):
     scripted([
         _call("run_company_risk_news_analysis", 1, query="K바이오 리스크", company="K바이오"),
         AIMessage("K바이오: 핵심 연구인력 이탈 리스크 HIGH"),
