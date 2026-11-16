@@ -43,7 +43,7 @@ export const CHAT_HEADERS: Record<ChatTabId, ChatHeaderInfo> = {
   },
   news: {
     title: "뉴스 에이전트",
-    subtitle: "뉴스 브리핑 · 개인화 · run_news_briefing",
+    subtitle: "뉴스 브리핑 · 기업 리스크 · run_news_briefing",
     placeholder: "기업 또는 이슈를 입력하세요.",
   },
   meeting: {
