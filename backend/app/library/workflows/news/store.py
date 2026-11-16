@@ -8,6 +8,10 @@ of articles it already has (NewsStore(schema, seed=data/news.json), seed.py): it
 the migrations, once per process, and upserts the same rows every time. Those articles are then
 news like any other: every request searches, groups and analyzes everything stored the same way.
 
+Search: search(terms) — keywords (text or linked names); semantic_search(vector, model) — meaning
+(pgvector cosine over news_article_embeddings, needs the `vector` extension on the server);
+pipeline.gather() fuses the two.
+
 Read interface for other components (e.g. the Enterprise KG) — stable ids, no LLM, no network:
     get_article(id) · get_articles(ids) · get_event(id) · events_for(surface | entity_ref) · provenance(id)
 """
@@ -111,6 +115,13 @@ class NewsStore:
                 conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (self.schema,))
                 if not conn.execute("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'").fetchone():
                     conn.execute("CREATE EXTENSION pg_trgm WITH SCHEMA public")
+                if not conn.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'").fetchone():
+                    try:
+                        with conn.transaction():
+                            conn.execute("CREATE EXTENSION vector WITH SCHEMA public")
+                    except psycopg.Error as e:
+                        raise StoreUnavailable("뉴스 저장소에 pgvector 확장이 없습니다 (Postgres 서버에 pgvector 설치 필요, "
+                                               f"README 참고): {e}") from e
                 if not conn.execute("SELECT 1 FROM pg_namespace WHERE nspname = %s", (self.schema,)).fetchone():
                     conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
                 conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version integer PRIMARY KEY, "
@@ -231,6 +242,57 @@ class NewsStore:
                     FROM news_articles a JOIN news_outlets o ON o.domain = a.outlet_domain
                     LEFT JOIN news_event_articles ea ON ea.article_id = a.id
                     WHERE {' AND '.join(where)} ORDER BY a.published_at DESC LIMIT %(limit)s""", params))
+
+    def semantic_search(self, vector: list[float], model: str, *, since: datetime, until: datetime | None = None,
+                        limit: int = 30, floor: float = 0.0) -> list[dict[str, Any]]:
+        """Stored articles closest in meaning to `vector` (cosine similarity ≥ floor, `similarity` on each row),
+        published in the window, most similar first. Only articles embedded with `model` take part."""
+        with self.connect() as conn:
+            return list(conn.execute(
+                """SELECT a.*, o.name AS outlet, ea.event_id, 1 - (e.embedding <=> %(v)s::vector) AS similarity
+                   FROM news_article_embeddings e JOIN news_articles a ON a.id = e.article_id
+                   JOIN news_outlets o ON o.domain = a.outlet_domain
+                   LEFT JOIN news_event_articles ea ON ea.article_id = a.id
+                   WHERE e.model = %(model)s AND a.published_at >= %(since)s
+                     AND (%(until)s::timestamptz IS NULL OR a.published_at <= %(until)s)
+                     AND 1 - (e.embedding <=> %(v)s::vector) >= %(floor)s
+                   ORDER BY e.embedding <=> %(v)s::vector LIMIT %(limit)s""",
+                {"v": _vector(vector), "model": model, "since": since, "until": until, "floor": floor, "limit": limit}))
+
+    def pending_similar(self, vector: list[float], model: str, *, since: datetime, limit: int, floor: float) -> list[dict[str, Any]]:
+        """Articles whose page was not fetched yet, closest in meaning to `vector` (their feed text was embedded)."""
+        with self.connect() as conn:
+            return list(conn.execute(
+                """SELECT a.id, a.url, a.title, a.summary FROM news_article_embeddings e JOIN news_articles a ON a.id = e.article_id
+                   WHERE e.model = %(model)s AND a.fetch_status = 'pending' AND a.url IS NOT NULL
+                     AND (a.published_at IS NULL OR a.published_at >= %(since)s)
+                     AND 1 - (e.embedding <=> %(v)s::vector) >= %(floor)s
+                   ORDER BY e.embedding <=> %(v)s::vector LIMIT %(limit)s""",
+                {"v": _vector(vector), "model": model, "since": since, "floor": floor, "limit": limit}))
+
+    def unembedded(self, model: str, *, since: datetime | None, limit: int) -> list[dict[str, Any]]:
+        """Articles without a vector from `model`, or whose text got better since (content level), newest first."""
+        with self.connect() as conn:
+            return list(conn.execute(
+                """SELECT a.id, a.title, a.summary, a.body, a.usage_notice, a.content_level
+                   FROM news_articles a LEFT JOIN news_article_embeddings e ON e.article_id = a.id AND e.model = %(model)s
+                   WHERE (e.article_id IS NULL OR e.content_level <> a.content_level)
+                     AND (%(since)s::timestamptz IS NULL OR a.published_at >= %(since)s)
+                   ORDER BY a.published_at DESC NULLS LAST LIMIT %(limit)s""",
+                {"model": model, "since": since, "limit": limit}))
+
+    def save_embeddings(self, model: str, rows: Iterable[tuple[str, str, list[float]]]) -> int:
+        """(article_id, content_level of the embedded text, vector) — replaces the article's vector from this model."""
+        n = 0
+        with self.connect() as conn:
+            for aid, level, vector in rows:
+                conn.execute(
+                    """INSERT INTO news_article_embeddings (article_id, model, content_level, embedding)
+                       VALUES (%s, %s, %s, %s::vector)
+                       ON CONFLICT (article_id, model) DO UPDATE SET content_level = EXCLUDED.content_level,
+                           embedding = EXCLUDED.embedding, embedded_at = now()""", (aid, model, level, _vector(vector)))
+                n += 1
+        return n
 
     def save_mentions(self, rows: Iterable[tuple[str, str, int, bool]]) -> None:
         """(article_id, surface, mentions, in_title) — refreshed, entity_ref kept."""
@@ -397,6 +459,10 @@ def _squeezed(*columns: str) -> str:
 
 def _like(term: str) -> str:
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _vector(values: list[float]) -> str:
+    return "[" + ",".join(f"{float(x):.7g}" for x in values) + "]"
 
 
 def dumps(value: Any) -> str:

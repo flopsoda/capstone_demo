@@ -4,7 +4,9 @@ over the company_risk_news_analysis workflow (app/library/workflows/).
 Shared library: the system that owns the data binds it with
 make_run_company_risk_news_analysis(store) and registers the Tool in its own Registry.
 News is public, so the call does not depend on who asks. Every call runs the news pipeline for the
-company and reads the system's news store (articles registered from its data file included); each
+company and reads the system's news store (articles registered from its data file included): the
+articles that name the company (in their text or as a linked name), ordered by closeness in meaning
+to `query` and recency — semantic hits about other companies never enter the company's risks. Each
 article's risk and stance toward the company come from its stored analysis of the same version, else
 the model (news/analysis.py), else the rules. The result keeps the `risks[]` contract.
 """
@@ -20,6 +22,7 @@ from ..workflows.company_risk_news_analysis import analyze_company_risk_news, ri
 from ..workflows.meeting_store import StoreUnavailable
 from ..workflows.news.analysis import analyze_with_store
 from ..workflows.news.feeds import DEFAULT_FEEDS, load_feeds
+from ..workflows.news.embed import default_embedder
 from ..workflows.news.fetch import Fetcher
 from ..workflows.news.pipeline import gather, lookback_days
 from ..workflows.news.store import NewsStore
@@ -63,10 +66,12 @@ def make_run_company_risk_news_analysis(store: NewsStore | None, *, feeds: Path 
             return {"query": query, "company": company, "matched": 0, "risks": [],
                     "error": "이 system에는 뉴스 저장소가 연결되어 있지 않습니다."}
         try:
-            found = gather(store, load_feeds(feeds), fetcher, company, days=lookback_days())
+            found = gather(store, load_feeds(feeds), fetcher, company, meaning=query or company, widen=False,
+                           embedder=default_embedder(), days=lookback_days())
             rows = found["articles"]
-            # The model reads the articles that name the company in the headline first, newest first.
-            ranked = sorted(rows, key=lambda r: (company.lower() not in r["title"].lower(), -r["published_at"].timestamp()))
+            # The model reads the articles that name the company in the headline first, then the search's order
+            # (closest to the request's purpose and newest).
+            ranked = sorted(rows, key=lambda r: company.lower() not in r["title"].lower())
             analyses = analyze_with_store([_analysis_input(r) for r in ranked[:ANALYZED]], target_of(company), briefing_tool._llm(), store)
         except StoreUnavailable as e:
             return {"query": query, "company": company, "matched": 0, "risks": [], "error": str(e)}

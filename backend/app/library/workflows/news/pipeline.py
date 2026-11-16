@@ -8,10 +8,14 @@ collection (collect.py), and gather() for a request on top of it:
                    inside a time / count budget — what does not fit stays pending for later
       → extract  : article text (trafilatura + clean-up), content level, page metadata
       → store    : the better content replaces the feed data; a failure records why
+      → embed    : vectors for articles that have none yet, or whose text got better (embed.py),
+                   newest first, inside the budget — the rest wait for the next run
 
     gather   ingest for the query, then search everything stored (earlier requests and scheduled
-             runs included) → duplicates out → mentions of the query terms → events (persisted,
-             an article keeps its event) → the articles and their events for a view to analyze
+             runs included) by keywords and by meaning, fused (reciprocal rank fusion) →
+             duplicates out → mentions of the query terms → events (persisted, an article keeps
+             its event) → the articles and their events for a view to analyze. Without the
+             embedding model the search is keywords only, and says so.
 
 A failing feed or page never stops the run: it is counted and recorded.
 """
@@ -28,10 +32,10 @@ from typing import Any
 
 from . import cluster
 from .extract import SNIPPET_CHARS, extract
+from .embed import Embedder, EmbedUnavailable, article_text
 from .feeds import KST, Feed, parse_feed
 from .fetch import Fetcher, FetchError
 from .store import NewsStore, article_id, squeeze
-from .text import core_terms
 from .text import terms as query_terms
 
 FEED_TTL_MINUTES = 15.0
@@ -53,10 +57,12 @@ class Budget:
     seconds: float = 12.0  # wall clock for polling + page fetches
     bodies: int = 15  # article pages fetched at most
     workers: int = 8  # concurrent connections (one per host at a time: fetch.py)
+    embeds: int = 64  # articles embedded at most
+    embed_seconds: float = 3.0  # wall clock for embedding, after the fetches
 
 
 REQUEST_BUDGET = Budget()
-SCHEDULED_BUDGET = Budget(seconds=600.0, bodies=400, workers=8)
+SCHEDULED_BUDGET = Budget(seconds=600.0, bodies=400, workers=8, embeds=20000, embed_seconds=600.0)
 
 
 def _run_until(tasks: list[Callable[[], Any]], workers: int, deadline: float) -> tuple[list[Any], int]:
@@ -131,10 +137,34 @@ def fetch_bodies(store: NewsStore, fetcher: Fetcher, candidates: list[dict[str, 
     return {"pages_tried": len(results), "pages_unfinished": unfinished, "page_results": counts}
 
 
+def embed_new(store: NewsStore, embedder: Embedder, *, since: datetime | None, budget: Budget) -> dict[str, Any]:
+    """Embeds articles that have no vector from this model yet (or a vector of poorer text), newest first."""
+    deadline = time.monotonic() + budget.embed_seconds
+    rows = store.unembedded(embedder.model, since=since, limit=budget.embeds)
+    done, error = 0, None
+    for i in range(0, len(rows), BATCH_EMBED):
+        if time.monotonic() >= deadline:
+            break
+        batch = rows[i : i + BATCH_EMBED]
+        try:
+            vectors = embedder.embed_documents([article_text(r) for r in batch])
+        except EmbedUnavailable as e:
+            error = str(e)
+            break
+        done += store.save_embeddings(embedder.model, ((r["id"], r["content_level"], v) for r, v in zip(batch, vectors)))
+    return {"embedded": done, "embed_waiting": len(rows) - done, **({"embed_error": error} if error else {})}
+
+
+BATCH_EMBED = 32
+
+
 def ingest(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, *, terms: list[str] | None = None, days: int = 7,
            budget: Budget = REQUEST_BUDGET, trigger: str = "request", query: str | None = None,
-           now: datetime | None = None, log: Log | None = None) -> dict[str, Any]:
-    """Polls due feeds and fetches the pages that matter (see the module docstring). Returns run stats."""
+           now: datetime | None = None, log: Log | None = None, embedder: Embedder | None = None,
+           query_vector: list[float] | None = None) -> dict[str, Any]:
+    """Polls due feeds, fetches the pages that matter and embeds what is new (see the module docstring).
+    A request's pages: those whose feed text names every term, then (with `query_vector`) the closest in
+    meaning among the ones embedded from their feed text. Returns run stats."""
     log = log or (lambda stage, detail: None)
     now = now or datetime.now(KST)
     started = time.monotonic()
@@ -142,10 +172,18 @@ def ingest(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, *, terms: list
     # Feeds get most of the budget only when they are due; pages get whatever is left.
     stats = poll_feeds(store, feeds, fetcher, now=now, deadline=started + budget.seconds * 0.6, workers=budget.workers)
     log("collect", {k: stats[k] for k in ("feeds_polled", "feeds_fresh", "discovered")})
-    candidates = store.pending(terms=terms, since=now - timedelta(days=days), limit=budget.bodies)
+    since = now - timedelta(days=days)
+    candidates = store.pending(terms=terms, since=since, limit=budget.bodies)
+    if query_vector is not None and embedder is not None and len(candidates) < budget.bodies:
+        seen = {c["id"] for c in candidates}
+        similar = store.pending_similar(query_vector, embedder.model, since=since, limit=budget.bodies, floor=embedder.cutoff[0])
+        candidates += [c for c in similar if c["id"] not in seen][: budget.bodies - len(candidates)]
     stats.update(fetch_bodies(store, fetcher, candidates, now=now, deadline=deadline, workers=budget.workers))
-    stats["seconds"] = round(time.monotonic() - started, 2)
     log("fetch", {k: stats[k] for k in ("pages_tried", "pages_unfinished", "page_results")})
+    if embedder is not None:
+        stats.update(embed_new(store, embedder, since=None if trigger == "scheduled" else since, budget=budget))
+        log("embed", {k: stats[k] for k in ("embedded", "embed_waiting")})
+    stats["seconds"] = round(time.monotonic() - started, 2)
     store.record_run(trigger=trigger, query=query, started=now, finished=datetime.now(KST), stats=stats)
     return stats
 
@@ -158,23 +196,58 @@ def lead_of(row: dict[str, Any]) -> str:
     return (row.get("body") or row.get("summary") or "")[:LEAD_CHARS]
 
 
-def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *, days: int = 7,
-           budget: Budget = REQUEST_BUDGET, now: datetime | None = None, log: Log | None = None) -> dict[str, Any]:
-    """One request's news: collect what is due, then reuse everything stored. Returns
-    {"articles": rows (newest first, duplicates out, each with event_id), "duplicates", "freshness", "coverage"}."""
+RRF_K = 60  # reciprocal rank fusion: score = sum of 1 / (RRF_K + rank) over the lists an article is in
+SEMANTIC_HITS = 30  # closest articles in meaning taken from the store per request
+
+
+def fuse(keyword: list[dict[str, Any]], semantic: list[dict[str, Any]], *, widen: bool) -> list[dict[str, Any]]:
+    """One ranking from the keyword hits (newest first) and the semantic hits (closest first). With
+    `widen`, semantic hits the keywords missed join the result; without, they only reorder it."""
+    score: dict[str, float] = {}
+    rows: dict[str, dict[str, Any]] = {}
+    for rank, r in enumerate(keyword, 1):
+        score[r["id"]] = 1 / (RRF_K + rank)
+        rows[r["id"]] = r
+    for rank, r in enumerate(semantic, 1):
+        if r["id"] not in rows:
+            if not widen:
+                continue
+            rows[r["id"]], score[r["id"]] = r, 0.0
+        rows[r["id"]]["similarity"] = r["similarity"]
+        score[r["id"]] += 1 / (RRF_K + rank)
+    return sorted(rows.values(), key=lambda r: -score[r["id"]])
+
+
+def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *, meaning: str | None = None,
+           widen: bool = True, embedder: Embedder | None = None, days: int = 7, budget: Budget = REQUEST_BUDGET,
+           now: datetime | None = None, log: Log | None = None) -> dict[str, Any]:
+    """One request's news: collect what is due, then search everything stored by `query`'s words and by
+    the meaning of `meaning` (default: the query). `widen=False` keeps only articles that name the
+    query (a company's risks): meaning then only orders them. Returns {"articles": rows (best first,
+    duplicates out, each with event_id), "duplicates", "freshness", "coverage"}."""
     store.migrate()  # schema and seed ready before the request's clock starts: registered articles are not "new now"
     now = now or datetime.now(KST)
     terms = query_terms(query)
-    core = core_terms(query)
-    # Pages to fetch: those naming the query's subject (generic words like "동향" rarely appear in a headline).
-    stats = ingest(store, feeds, fetcher, terms=core or terms, days=days, budget=budget, query=query, now=now, log=log)
+    vector, search_error = None, None
+    if embedder is not None:
+        try:
+            vector = embedder.embed_query(meaning or query)
+        except EmbedUnavailable as e:
+            search_error = str(e)
+    stats = ingest(store, feeds, fetcher, terms=terms, days=days, budget=budget, query=query, now=now, log=log,
+                   embedder=embedder if vector is not None else None, query_vector=vector if widen else None)
     window = {"since": now - timedelta(days=days), "until": now + timedelta(hours=1)}
-    rows = store.search(terms, **window)
-    relaxed = None
-    if len(rows) < LOW_COVERAGE and core and core != terms:  # too little with every word: drop the generic ones
-        rows, relaxed = store.search(core, **window), core
-        terms = core
-    items = [cluster.Item(r["id"], r["title"], r["outlet"], r["published_at"], r["url"], lead_of(r), r["body_hash"],
+    keyword = store.search(terms, **window)
+    semantic: list[dict[str, Any]] = []
+    if vector is not None:
+        floor, margin = embedder.cutoff
+        semantic = store.semantic_search(vector, embedder.model, limit=SEMANTIC_HITS, floor=floor, **window)
+        if semantic:
+            best = semantic[0]["similarity"]
+            semantic = [r for r in semantic if r["similarity"] >= best - margin]
+    rows = fuse(keyword, semantic, widen=widen)
+    keyword_ids = {r["id"] for r in keyword}
+    items = [cluster.Item(r["id"], r["title"], r["outlet"], r["published_at"], r["url"] or "", lead_of(r), r["body_hash"],
                           str(r["event_id"]) if r["event_id"] else None, has_body=bool(r["body"])) for r in rows]
     kept, dropped = cluster.dedupe(items)
     keep = {i.id for i in kept}
@@ -200,7 +273,14 @@ def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *,
     discovered_now = sum(1 for r in rows if r["discovered_at"] >= now)
     unfinished = stats["feeds_unfinished"] + stats["pages_unfinished"]
     status = "low" if len(rows) < LOW_COVERAGE else "partial" if unfinished else "ok"
-    log and log("search", {"stored_matches": len(rows), "events": len(set(event_of.values()))})
+    search = {"mode": "hybrid" if vector is not None else "keyword", "keyword_matches": len(keyword),
+              "semantic_matches": len(semantic), "semantic_only": sum(1 for r in rows if r["id"] not in keyword_ids)}
+    if embedder is not None:
+        search["model"] = embedder.model
+        search["embedded_now"] = stats.get("embedded", 0)
+    if search_error:
+        search["error"] = search_error
+    log and log("search", {"stored_matches": len(rows), "events": len(set(event_of.values())), **search})
     return {
         "articles": rows,
         "duplicates": len(dropped),
@@ -213,7 +293,7 @@ def gather(store: NewsStore, feeds: list[Feed], fetcher: Fetcher, query: str, *,
             "fetched_now": fetched_now,
             "reused_from_store": len(rows) - discovered_now,
         },
-        "coverage": {"status": status, "stored_matches": len(rows), "unfinished": unfinished,
-                     **({"relaxed_terms": relaxed} if relaxed else {}),
-                     "note": "언론사 RSS로 수집된 기사만 검색됩니다 (검색 API 미사용)."},
+        "coverage": {"status": status, "stored_matches": len(rows), "unfinished": unfinished, "search": search,
+                     "note": "언론사 RSS로 수집된 기사와 저장소에 등록된 기사만 검색됩니다 (검색 API 미사용)."
+                             + ("" if vector is not None else " 임베딩 모델을 쓸 수 없어 키워드로만 찾았습니다." if search_error else "")},
     }

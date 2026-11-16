@@ -39,17 +39,19 @@ Step 8  REAL   그룹 최종 판단                                            G
 ## 실행
 
 요구 버전: **Node `^20.19 || >=22.12`** (Vite 8 · oxlint), **Python `>=3.12`** (3.13으로 검증). 외부 의존은 LLM API key(기본 Ollama Cloud, `LLM_PROVIDER=openai`면 OpenAI 호환 API)와
-미팅 에이전트의 회의 저장소 **Postgres 15+**(`MEETINGS_DATABASE_URL`, `pg_trgm` 사용)입니다 — `backend/.env.example`.
+회의 · 뉴스 저장소 **Postgres 15+ + pgvector**(`MEETINGS_DATABASE_URL`, `pg_trgm` · `vector` 확장 사용), 뉴스 의미 검색용 **로컬 Ollama의 `embeddinggemma`**입니다 — `backend/.env.example`.
+(임베딩 모델이 없거나 꺼져 있으면 뉴스 검색은 키워드만으로 동작합니다. pgvector는 필수입니다.)
 각 system은 처음 쓸 때 자기 schema(K `kelec`, Group `grp`)를 만들고 `data/meetings.json`으로 채웁니다. 저장소가 없으면 미팅 Tool은 오류 결과를 돌려줍니다.
 뉴스도 같은 Postgres에 system별 schema(K `kelec_news`, Group `grp_news`)로 저장합니다. 각 system은 처음 쓸 때 `data/news.json`의 기사 · 사건 · 분석을 초기 데이터로 등록하고
 (다시 시작해도 같은 행을 갱신할 뿐 중복 없음), 이후 언론사 RSS로 모은 기사와 **같은 저장소 · 같은 파이프라인**으로 검색 · 분석합니다. 별도 데모 모드는 없습니다.
-기본 조회 기간은 120일입니다(`NEWS_LOOKBACK_DAYS`로 변경).
+기본 조회 기간은 120일입니다(`NEWS_LOOKBACK_DAYS`로 변경). 검색은 키워드(본문 · 연결된 기업명)와 의미(임베딩 유사도)를 합쳐 순위를 매깁니다(하이브리드, RRF).
 
 ```bash
 # 1) Python backend — K Electronics system (별도 터미널)
 cd backend
 python3.13 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env            # OLLAMA_API_KEY 입력 (https://ollama.com/settings/keys), MEETINGS_DATABASE_URL 입력
+ollama pull embeddinggemma      # 뉴스 의미 검색 (로컬 Ollama; Ollama Cloud는 임베딩을 제공하지 않음)
 .venv/bin/uvicorn app.main:app --port 8000 --reload
 
 # 1b) Python backend — Group system (별도 터미널, 같은 venv/.env). Group Super가 K에 A2A로 요청한다
@@ -68,7 +70,7 @@ npm run build    # tsc + vite build
 ```
 
 뉴스 파이프라인: 뉴스 탭에 `HBM 시장 최근 동향 알려줘.`처럼 어떤 주제든 요청하면, 저장된 뉴스를 찾고 필요하면 언론사 RSS(29곳, `news/feeds.json`)에서
-새 기사를 모아 본문을 추출 · 정제(trafilatura) → 중복 제거 → 사건 묶기 → 분석(LLM, 키 없으면 규칙) → system별 Postgres 뉴스 저장소(`NEWS_DATABASE_URL`, 없으면
+새 기사를 모아 본문을 추출 · 정제(trafilatura) → 임베딩(embeddinggemma, 제목 + 본문 앞 500자) → 키워드 + 의미 검색 → 중복 제거 → 사건 묶기 → 분석(LLM, 키 없으면 규칙) → system별 Postgres 뉴스 저장소(`NEWS_DATABASE_URL`, 없으면
 `MEETINGS_DATABASE_URL`; K `kelec_news`, Group `grp_news`)에 저장 · 재사용 → 사건별 브리핑으로 답합니다. 검색 API는 쓰지 않으므로 RSS에 실린 기사(와 저장소에 쌓인 기사)만 찾습니다.
 robots.txt를 지키고 차단 · 로그인 · 봇 확인 페이지는 우회하지 않으며, 본문을 못 얻은 기사는 요약 · 제목 수준(`content_level`)으로 표시합니다.
 
@@ -77,7 +79,9 @@ robots.txt를 지키고 차단 · 로그인 · 봇 확인 페이지는 우회하
 ```bash
 .venv/bin/python -m app.library.workflows.news.collect --schema kelec_news               # K전자 저장소에 한 번
 .venv/bin/python -m app.library.workflows.news.collect --schema grp_news --watch 30      # 그룹 저장소에 30분마다
+.venv/bin/python -m app.library.workflows.news.collect --schema kelec_news --embed-only   # 수집 없이 임베딩이 없는 기사만 (처음 한 번 권장)
 ```
+요청 한 번은 새 기사를 최대 64건(3초)까지만 임베딩하므로, 저장소를 처음 만들었거나 기사가 많이 쌓였을 때는 `--embed-only`(약 25건/초, M2 Pro 기준)로 한 번 채워 둡니다.
 
 backend 테스트:
 
@@ -199,6 +203,7 @@ backend/
                                      · cluster.py(중복 · 전재 · 영속 사건 배정) · analysis.py(기사별 보도 관점 · 리스크, 사건 영향 · 근거 · 시사점, 매체별 논조)
                                      · labels.py(리스크 분류 · 확인 사항 · 규칙) · text.py · collect.py(주기 수집 CLI)
                                      · seed.py(system의 data/news.json → 기사 · 사건 · 분석 · 언급 초기 등록, 고정 키 upsert)
+                                     · embed.py(로컬 Ollama 임베딩, 실패 시 키워드 검색으로 fallback) · sql/003(pgvector 임베딩 테이블)
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
         mna_scenario.py              What-if: review_what_if(path) — 인수가격·영업이익률·고객 비중 변경 전후 평가 · 권고 · 조건 비교 (context 신호 반영)
         mna_executive_summary.py     persona "ALL": review_executive_summary(path) — CEO·CFO·CTO 평가 통합, 핵심 위험·기회·인수 조건 · 권고

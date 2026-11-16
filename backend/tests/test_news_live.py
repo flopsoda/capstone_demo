@@ -4,6 +4,8 @@ reuse → events → briefing / risk view. Pages are written for these tests (fi
 import json
 from datetime import datetime, timedelta
 
+import pytest
+
 from app.library.tools.run_company_risk_news_analysis import make_run_company_risk_news_analysis
 from app.library.tools.run_news_briefing import make_run_news_briefing
 from app.library.workflows.news.feeds import KST, Feed
@@ -175,7 +177,7 @@ def test_the_risk_view_reads_each_articles_own_risk_and_stance(news_db, monkeypa
     assert tone["가상일보"] == (1, 1)  # one critical, one favorable article: the outlet's own articles, one by one
 
 
-def test_search_ignores_spacing_marks_and_drops_generic_words_when_too_little(news_db):
+def test_search_ignores_spacing_marks(news_db):
     feed = Feed("가상일보", "https://e.example/rss.xml")
     items = [("원·달러 환율 1,400원 돌파", "https://e.example/1", "원·달러 환율이 올랐다.", "Sat, 14 Nov 2026 01:00:00 GMT"),
              ("2차 전지 소재 수출 증가", "https://e.example/2", "2차전지 소재 수출이 늘었다.", "Sat, 14 Nov 2026 02:00:00 GMT")]
@@ -183,8 +185,119 @@ def test_search_ignores_spacing_marks_and_drops_generic_words_when_too_little(ne
     fx = gather(news_db, [feed], Fetcher(w, host_gap=0), "원달러 환율", now=NOW, budget=BUDGET)
     assert [r["url"] for r in fx["articles"]] == ["https://e.example/1"]  # "원·달러" is "원달러"
     battery = gather(news_db, [feed], Fetcher(w, host_gap=0), "2차전지 업황", now=NOW, budget=BUDGET)
-    assert [r["url"] for r in battery["articles"]] == ["https://e.example/2"]  # no article says "업황"
-    assert battery["coverage"]["relaxed_terms"] == ["2차전지"] and battery["coverage"]["status"] == "low"
+    assert battery["articles"] == [] and battery["coverage"]["search"]["mode"] == "keyword"  # no article says "업황"; no words dropped
+
+
+# ── Semantic search (a fake embedder: character-bigram vectors, deterministic) ──
+
+class BigramEmbedder:
+    model = "test-bigram"
+    cutoff = (0.05, 1.0)
+
+    def __init__(self):
+        self.documents = 0
+
+    @staticmethod
+    def _vector(text):
+        from app.library.workflows.news.text import bigrams
+
+        v = [0.0] * 128
+        for b in bigrams(text):
+            v[int(__import__("hashlib").md5(b.encode()).hexdigest(), 16) % 128] += 1.0
+        n = sum(x * x for x in v) ** 0.5 or 1.0
+        return [x / n for x in v]
+
+    def embed_query(self, text):
+        return self._vector(text)
+
+    def embed_documents(self, texts):
+        self.documents += len(texts)
+        return [self._vector(t) for t in texts]
+
+
+class DownEmbedder(BigramEmbedder):
+    def embed_query(self, text):
+        from app.library.workflows.news.embed import EmbedUnavailable
+
+        raise EmbedUnavailable("test-bigram: ConnectError")
+
+
+def battery_web():
+    feed = Feed("가상일보", "https://e.example/rss.xml")
+    items = [("2차 전지 소재 수출 증가", "https://e.example/2", "2차전지 소재 수출이 늘었다.", "Sat, 14 Nov 2026 02:00:00 GMT"),
+             ("프로야구 개막전 매진", "https://e.example/3", "개막전 표가 모두 팔렸다.", "Sat, 14 Nov 2026 03:00:00 GMT")]
+    return [feed], FakeWeb({feed.url: (200, rss(items))}, robots={"e.example": (200, "User-agent: *\nDisallow: /2\nDisallow: /3")})
+
+
+def test_semantic_search_finds_what_the_keywords_miss_and_reuses_the_vectors(news_db):
+    feeds, w = battery_web()
+    emb = BigramEmbedder()
+    out = gather(news_db, feeds, Fetcher(w, host_gap=0), "2차전지 업황", embedder=emb, now=NOW, budget=BUDGET)
+    search = out["coverage"]["search"]
+    assert [r["url"] for r in out["articles"]][:1] == ["https://e.example/2"]  # no article says "업황"; the meaning finds it
+    assert search["mode"] == "hybrid" and search["keyword_matches"] == 0 and search["semantic_only"] >= 1
+    assert search["embedded_now"] == 2 and out["articles"][0]["similarity"] > 0.3
+    with news_db.connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM news_article_embeddings WHERE model = 'test-bigram'").fetchone()["n"] == 2
+    emb.documents = 0
+    again = gather(news_db, feeds, Fetcher(w, host_gap=0), "2차전지 업황", embedder=emb, now=NOW + timedelta(minutes=5), budget=BUDGET)
+    assert emb.documents == 0 and again["coverage"]["search"]["embedded_now"] == 0  # stored vectors reused
+    assert [r["id"] for r in again["articles"]] == [r["id"] for r in out["articles"]]
+
+
+def test_keywords_and_meaning_together_rank_an_article_found_both_ways_first(news_db):
+    feeds, w = battery_web()
+    out = gather(news_db, feeds, Fetcher(w, host_gap=0), "2차전지", embedder=BigramEmbedder(), now=NOW, budget=BUDGET)
+    assert out["articles"][0]["url"] == "https://e.example/2" and out["coverage"]["search"]["keyword_matches"] == 1
+
+
+def test_without_the_embedding_model_the_search_falls_back_to_keywords(news_db):
+    feeds, w = battery_web()
+    out = gather(news_db, feeds, Fetcher(w, host_gap=0), "2차전지", embedder=DownEmbedder(), now=NOW, budget=BUDGET)
+    search = out["coverage"]["search"]
+    assert [r["url"] for r in out["articles"]] == ["https://e.example/2"]
+    assert search["mode"] == "keyword" and "ConnectError" in search["error"] and "키워드로만" in out["coverage"]["note"]
+
+
+def test_semantic_hits_never_become_another_companys_risk(news_db, monkeypatch):
+    from app.library.tools import run_company_risk_news_analysis as risk_module
+    from app.library.tools import run_news_briefing as briefing_module
+    from app.systems.k_electronics.tools.run_company_risk_news_analysis import run_company_risk_news_analysis as tool
+
+    emb = BigramEmbedder()
+    monkeypatch.setattr(briefing_module, "_llm", lambda: None)
+    monkeypatch.setattr(risk_module, "default_embedder", lambda: emb)
+    r = tool.invoke({"query": "뉴로엣지 인수 판단에 영향을 줄 외부 요인", "company": "뉴로엣지"})
+    assert r["coverage"]["search"]["mode"] == "hybrid" and r["coverage"]["search"]["semantic_only"] == 0
+    reports = {t["id"] for x in r["risks"] for t in x["timeline"]}
+    assert "NEWS-2026-09-18-01" not in reports  # 오메가파운드리's customer cut is close in meaning, not 뉴로엣지's risk
+    assert r["matched"] == 3 and emb.documents == 8  # the registered articles were embedded on this first request
+
+
+def _local_embedding_model():
+    from app.library.workflows.news.embed import Embedder, EmbedUnavailable
+
+    emb = Embedder()
+    try:
+        emb.embed_query("확인")
+    except EmbedUnavailable:
+        return None
+    return emb
+
+
+@pytest.mark.network
+def test_the_real_embedding_model_finds_a_conceptual_request(news_db):
+    """Local Ollama with embeddinggemma (skipped when it is not running)."""
+    emb = _local_embedding_model()
+    if emb is None:
+        pytest.skip("local Ollama with embeddinggemma is not available")
+    from app.systems.k_electronics import NEWS_STORE
+
+    out = gather(NEWS_STORE, [], Fetcher(FakeWeb({}), host_gap=0), "뉴로엣지 기술 경쟁력과 관련된 위험 요소", embedder=emb, days=120)
+    search = out["coverage"]["search"]
+    assert search["keyword_matches"] == 0 and search["mode"] == "hybrid"  # no article has every word
+    found = [r["id"] for r in out["articles"]]
+    assert sum(i in found for i in ("NEWS-2026-09-24-01", "NEWS-2026-09-27-01", "NEWS-2026-09-30-01", "NEWS-2026-10-08-01")) >= 3
 
 
 # ── Articles a system registers from its data file (store seed) ─────────────

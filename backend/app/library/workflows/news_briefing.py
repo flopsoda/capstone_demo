@@ -2,8 +2,9 @@
 
     query (any: a company, an industry, a market, a regulation, a person)
       gather : news.pipeline.gather — collect what is due from the publisher feeds, fetch the pages that
-               matter, then reuse everything the system's news store holds (articles it registered from
-               its data file included); duplicates out, events (persisted: an article keeps its event id)
+               matter, then search everything the system's news store holds (articles it registered from
+               its data file included) by keywords and by meaning; duplicates out, events (persisted:
+               an article keeps its event id)
       brief  : every event (topic) scored for importance (independent coverage, recency, how squarely it is
                about the query) → news.analysis: each kept article's stance toward the target, type, risk and
                facts (stored per version and reused), then each event's summary, evidence-backed facts,
@@ -26,6 +27,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from .news import analysis, cluster
+from .news.embed import Embedder
 from .news.feeds import KST, Feed
 from .news.fetch import Fetcher
 from .news.pipeline import REQUEST_BUDGET, Budget, gather, lead_of
@@ -231,14 +233,14 @@ def _no_log(stage: str, detail: dict) -> None:
 
 def run_news_briefing(query: str, *, store: NewsStore, feeds: list[Feed], fetcher: Fetcher, purpose: str = "general",
                       days: int = 7, limit: int = 8, llm: LLM | None = None, now: datetime | None = None,
-                      budget: Budget = REQUEST_BUDGET, log: Log | None = None) -> dict[str, Any]:
+                      budget: Budget = REQUEST_BUDGET, log: Log | None = None, embedder: Embedder | None = None) -> dict[str, Any]:
     """One briefing: gather (collect what is due, reuse the store, persisted events) → analyze → respond."""
     log = log or _no_log
     query = (query or "").strip()
     now = now or datetime.now(KST)
     if not query:
         return {"query": "", "error": "검색할 주제가 없습니다.", "topics": []}
-    found = gather(store, feeds, fetcher, query, days=days, budget=budget, now=now, log=log)
+    found = gather(store, feeds, fetcher, query, embedder=embedder, days=days, budget=budget, now=now, log=log)
     articles = [article_from_row(r) for r in found["articles"]]
     assignment = {a.id: a.event_id for a in articles}
     result = brief(articles, assignment, query, purpose=purpose, today=now.date(), since=(now - timedelta(days=days)).date(),

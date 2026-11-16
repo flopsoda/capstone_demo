@@ -11,7 +11,9 @@ server). Tests that really call a model or a website are marked `network` (tests
 
 News: the systems' news stores need a database (`news_db`: the test database, both systems' news
 schemas dropped, so each is seeded again from its data/news.json on first use). Tests never poll the
-real publisher feeds (news/feeds.json reads as empty); a test that wants feeds passes its own.
+real publisher feeds (news/feeds.json reads as empty); a test that wants feeds passes its own. The
+embedding model is off (NEWS_EMBED_MODEL=none: keyword search); a test that wants semantic search
+gives the pipeline its own embedder.
 The session fails if a test run left anything new in a system's data/ folder.
 """
 
@@ -48,6 +50,11 @@ def data_folders_unchanged():
 
 def _host(address) -> str:
     return address[0] if isinstance(address, tuple) else str(address)
+
+
+@pytest.fixture(autouse=True)
+def no_embedding_model(monkeypatch):
+    monkeypatch.setenv("NEWS_EMBED_MODEL", "none")
 
 
 @pytest.fixture(autouse=True)
