@@ -376,8 +376,8 @@ systems/k_electronics/
 | `run_decision_review` | tool | `meeting` (Group) | `make_decision_watch(MEETING_STORE, data/news.json).tool` → `library/workflows/decision_watch.review_decisions` (같은 객체의 `scan()`이 배경 작업의 기사 대조) |
 | `external_risk_analysis` | skill | `news` | `library/skills/external_risk_analysis.py` |
 | `news_briefing` | skill | `news` | `library/skills/news_briefing.py` |
-| `run_news_briefing` | tool | `news` | `systems/k_electronics/tools/run_news_briefing.py` = `make_run_news_briefing(data/news.json)` → `library/workflows/news_briefing.run_news_briefing` |
-| `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(data/news.json)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
+| `run_news_briefing` | tool | `news` | `systems/k_electronics/tools/run_news_briefing.py` = `make_run_news_briefing(NEWS_STORE)` → `library/workflows/news_briefing.run_news_briefing` |
+| `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(NEWS_STORE)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
 | `run_mna_review` | tool | `advisory` | `systems/k_electronics/tools/run_mna_review.py` = `make_run_mna_review(data/companies.json)` → `library/workflows/mna_review.review_acquisition` · `mna_executive_summary.review_executive_summary` · `mna_scenario.review_what_if` |
 
