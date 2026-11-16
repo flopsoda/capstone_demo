@@ -1,13 +1,12 @@
 """The shared workflows over the Group system's own stores (same code as the K tests, different data)."""
 
-from app.library.workflows.company_risk_news_analysis import analyze_company_risk_news
 from app.library.workflows.meeting_context_retrieval import retrieve_meeting_context
 from app.library.workflows.meeting_store import Viewer
 from app.library.workflows.mna_review import review_acquisition
 from app.systems.group import DATA_DIR, MEETING_STORE
+from app.systems.group.tools.run_company_risk_news_analysis import run_company_risk_news_analysis as group_risk_news
 
 EXECUTIVE = Viewer("ceo@example.com", "", frozenset({"executive"}), 4, True)
-NEWS = DATA_DIR / "news.json"
 COMPANIES = DATA_DIR / "companies.json"
 
 
@@ -20,12 +19,19 @@ def test_group_meeting_store_has_the_investment_committee_premeeting(meeting_db)
     assert [a["text"] for a in m["open_action_items"]] == ["K전자 뉴로엣지 인수안의 계열사 검토 결과 수령"]
 
 
-def test_group_news_store_covers_subsidiaries_and_group_targets():
-    out = analyze_company_risk_news("핵심인력 이탈", "K바이오", path=NEWS)
+def news(query, company):
+    return group_risk_news.invoke({"query": query, "company": company})
+
+
+def test_group_news_store_covers_subsidiaries_and_group_targets(news_db, monkeypatch):
+    from app.library.tools import run_news_briefing as briefing_tool
+
+    monkeypatch.setattr(briefing_tool, "_llm", lambda: None)  # the store's analyses, no model
+    out = news("핵심인력 이탈", "K바이오")
     assert out["matched"] == 1 and out["risks"][0]["category"] == "key_personnel" and out["risks"][0]["level"] == "HIGH"
-    out = analyze_company_risk_news("리스크", "K그룹", path=NEWS)
+    out = news("리스크", "K그룹")
     assert [r["level"] for r in out["risks"]] == ["HIGH", "MEDIUM", "MEDIUM", "LOW"]  # HIGH first, then newest
-    assert analyze_company_risk_news("최대 고객", "브라이트셀", path=NEWS)["risks"][0]["category"] == "customer_concentration"
+    assert news("최대 고객", "브라이트셀")["risks"][0]["category"] == "customer_concentration"
 
 
 def test_group_company_store_reviews_the_group_level_target():

@@ -1,7 +1,15 @@
 {
+  "outlets": {
+    "경제투데이 (가상)": "econtoday.example",
+    "산업신문 (가상)": "industrynews.example",
+    "테크데일리 (가상)": "techdaily.example",
+    "배터리저널 (가상)": "batteryjournal.example",
+    "바이오포커스 (가상)": "biofocus.example"
+  },
   "articles": [
     {
       "id": "NEWS-G-2026-10-05-01",
+      "event": "kbio-researchers-leave",
       "date": "2026-10-05",
       "source": "경제투데이 (가상)",
       "headline": "K바이오 핵심 연구인력 잇단 이탈…임상 3상 일정 차질 우려",
@@ -25,6 +33,7 @@
     },
     {
       "id": "NEWS-G-2026-10-01-01",
+      "event": "ktrading-strike-notice",
       "date": "2026-10-01",
       "source": "산업신문 (가상)",
       "headline": "K물산 노조, 임금협상 결렬 시 10월 중순 파업 예고",
@@ -47,6 +56,7 @@
     },
     {
       "id": "NEWS-G-2026-09-26-01",
+      "event": "kdisplay-alphamobile-dispute",
       "date": "2026-09-26",
       "source": "테크데일리 (가상)",
       "headline": "K디스플레이, 최대 고객 알파모바일과 패널 공급계약 조건 두고 분쟁",
@@ -71,6 +81,7 @@
     },
     {
       "id": "NEWS-G-2026-09-18-01",
+      "event": "brightcell-customer-concentration",
       "date": "2026-09-18",
       "source": "배터리저널 (가상)",
       "headline": "브라이트셀, 매출 절반이 단일 완성차 고객…공급 다변화 과제",
@@ -91,6 +102,7 @@
     },
     {
       "id": "NEWS-G-2026-09-12-01",
+      "event": "kgroup-credit-outlook",
       "date": "2026-09-12",
       "source": "경제투데이 (가상)",
       "headline": "K그룹 지주사 신용등급 전망 '안정적' 유지…대형 인수 시 재무 부담은 변수",
@@ -109,6 +121,67 @@
       "key_facts": [
         "신용등급 전망 안정적 유지",
         "대형 인수 시 차입 부담 지적"
+      ]
+    },
+    {
+      "id": "NEWS-G-2026-10-14-01",
+      "event": "kbio-researchers-leave",
+      "date": "2026-10-14",
+      "source": "바이오포커스 (가상)",
+      "headline": "K바이오, 이탈 연구진 후임으로 외부 임상 책임자 영입 추진",
+      "summary": "핵심 연구인력 이탈을 겪은 K바이오가 외부 임상 책임자 영입을 추진하고 있다. 회사는 임상 3상 일정 영향을 최소화하겠다고 밝혔다.",
+      "companies": [
+        "K바이오",
+        "KBio",
+        "K그룹",
+        "K Group"
+      ],
+      "risk": {
+        "category": "key_personnel",
+        "label": "핵심인력",
+        "level": "MEDIUM"
+      },
+      "key_facts": [
+        "외부 임상 책임자 영입 추진",
+        "회사: 임상 3상 일정 영향 최소화 목표"
+      ]
+    },
+    {
+      "id": "NEWS-G-2026-10-09-01",
+      "event": "kgroup-ai-fund",
+      "date": "2026-10-09",
+      "source": "경제투데이 (가상)",
+      "headline": "K그룹, 계열사 공동 AI 반도체 투자 펀드 조성",
+      "summary": "K그룹이 계열사 공동으로 AI 반도체 스타트업 투자 펀드를 조성했다. 그룹 차원의 반도체 포트폴리오 확대 전략의 일환이다.",
+      "companies": [
+        "K그룹",
+        "K Group"
+      ],
+      "risk": null,
+      "key_facts": [
+        "계열사 공동 AI 반도체 투자 펀드 조성",
+        "그룹 반도체 포트폴리오 확대 전략"
+      ]
+    },
+    {
+      "id": "NEWS-G-2026-09-22-01",
+      "event": "brightcell-customer-concentration",
+      "date": "2026-09-22",
+      "source": "배터리저널 (가상)",
+      "headline": "브라이트셀, 최대 고객 공급계약 2027년 만료…재계약 조건 미확정",
+      "summary": "브라이트셀 매출의 52%를 차지하는 완성차 고객과의 공급계약이 2027년 6월 만료되며, 재계약 단가 조건이 아직 정해지지 않았다.",
+      "companies": [
+        "브라이트셀",
+        "BrightCell"
+      ],
+      "risk": {
+        "category": "customer_concentration",
+        "label": "고객 집중도",
+        "level": "HIGH"
+      },
+      "key_facts": [
+        "최대 고객 공급계약 2027년 6월 만료",
+        "재계약 단가 조건 미확정"
       ]
     }
   ]

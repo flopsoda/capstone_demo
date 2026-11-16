@@ -75,6 +75,8 @@ def test_group_registry_content():
         "update_action_item": ("tool", {"meeting"}),
         "run_meeting_schedule": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
+        "news_briefing": ("skill", {"news"}),
+        "run_news_briefing": ("tool", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
         "run_mna_review": ("tool", {"advisory"}),
@@ -108,7 +110,7 @@ def test_group_delegation_tools_point_at_group_agents():
     assert "계열사" in dm.DESCRIPTION and "A2A" in dm.DESCRIPTION  # the Group Super's view of who does what
 
 
-def test_group_tools_read_group_data_not_k_data(meeting_db):
+def test_group_tools_read_group_data_not_k_data(meeting_db, news_db):
     from app.systems.k_electronics import registry as k_registry
 
     g_meet = group_registry.get_capability("run_meeting_context_retrieval").impl
@@ -227,7 +229,7 @@ def test_group_super_may_delegate_to_its_own_specialists(scripted, meeting_db):
     assert all(e["system"] == "group" and not e.get("relayed") for e in events)
 
 
-def test_group_specialist_direct_chat_endpoints(scripted):
+def test_group_specialist_direct_chat_endpoints(scripted, news_db):
     scripted([
         _call("run_company_risk_news_analysis", 1, query="K바이오 리스크", company="K바이오"),
         AIMessage("K바이오: 핵심 연구인력 이탈 리스크 HIGH"),
