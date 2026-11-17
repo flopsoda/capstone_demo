@@ -101,22 +101,46 @@ function companyRiskNewsBlocks(result: unknown): MessageBlock[] {
   });
 }
 
-/** Shape returned by run_mna_review (backend/app/workflows/mna_review.py). */
+interface MnaInputs {
+  financials: { revenue: string; revenue_cagr_3y: string; operating_margin: string };
+  valuation: { asking: string; fair_value: string };
+  customers: { largest: string; largest_share: string };
+  technology: { internal_development: string; integration_after_acquisition: string; time_to_market_gain: string };
+}
+
+interface MnaAssessment {
+  label: string;
+  verdict: string;
+  level: string | null;
+  finding: string;
+}
+
+/**
+ * Shape returned by run_mna_review (backend/app/workflows/mna_review.py).
+ * `mode` is absent for a single-persona review. "executive_summary" (persona ALL) and
+ * "what_if" return the extra fields below instead of `assessments`.
+ */
 interface MnaReviewResult {
   found: boolean;
   message?: string;
-  persona_label: string;
-  inputs: {
-    financials: { revenue: string; revenue_cagr_3y: string; operating_margin: string };
-    valuation: { asking: string; fair_value: string };
-    customers: { largest: string; largest_share: string };
-    technology: { internal_development: string; integration_after_acquisition: string; time_to_market_gain: string };
-  };
-  assessments: { label: string; verdict: string; level: string | null; finding: string }[];
-  concerns: { label: string; level: string | null; finding: string }[];
+  mode?: string;
+  persona_label?: string;
+  inputs?: MnaInputs;
+  assessments?: MnaAssessment[];
+  concerns?: { label: string; level: string | null; finding: string }[];
   recommendation: string;
   recommendation_label: string;
   conditions: string[];
+  // mode "executive_summary"
+  key_risks?: { label: string; level: string | null; finding: string }[];
+  key_opportunities?: { label: string; finding: string }[];
+  executive_reviews?: Record<string, { assessments: MnaAssessment[] }>;
+  // mode "what_if"
+  assumptions?: { asking_trillion_krw?: number | null; operating_margin?: number | null; revenue_share?: number | null };
+  before_inputs?: MnaInputs;
+  after_inputs?: MnaInputs;
+  before_recommendation?: string;
+  changes?: { label: string; before: Omit<MnaAssessment, "label">; after: Omit<MnaAssessment, "label"> }[];
 }
 
 function isMnaReviewResult(v: unknown): v is MnaReviewResult {
@@ -136,12 +160,8 @@ function assessmentText(a: { verdict: string; level: string | null; finding: str
   return `${VERDICT_TEXT[a.verdict] ?? a.verdict}${level} — ${a.finding}`;
 }
 
-function mnaReviewBlocks(result: unknown): MessageBlock[] {
-  if (!isMnaReviewResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
-  if (!result.found) return [{ kind: "text", text: result.message ?? "기업 데이터를 찾지 못했습니다." }];
-  const { inputs } = result;
+function mnaInputBlocks(inputs: MnaInputs): MessageBlock[] {
   return [
-    { kind: "badge", text: result.persona_label, tone: "info" },
     { kind: "label", text: "입력 정보" },
     {
       kind: "kv",
@@ -155,12 +175,87 @@ function mnaReviewBlocks(result: unknown): MessageBlock[] {
         { k: "기대 단축 기간", v: inputs.technology.time_to_market_gain },
       ],
     },
-    { kind: "label", text: `평가 항목 · ${result.persona_label} 우선순위` },
-    { kind: "kv", items: result.assessments.map((a) => ({ k: a.label, v: assessmentText(a) })) },
-    { kind: "label", text: "권고" },
+  ];
+}
+
+function mnaRecommendationBlocks(result: MnaReviewResult, label = "권고"): MessageBlock[] {
+  return [
+    { kind: "label", text: label },
     { kind: "badge", text: result.recommendation_label, tone: RECOMMENDATION_TONE[result.recommendation] ?? "info" },
     { kind: "label", text: "권고 조건" },
     { kind: "list", ordered: true, items: result.conditions },
+  ];
+}
+
+/** persona ALL: CEO·CFO·CTO 관점별 평가와 통합된 핵심 위험·기회. */
+function mnaExecutiveBlocks(result: MnaReviewResult, inputs: MnaInputs): MessageBlock[] {
+  const reviews = Object.entries(result.executive_reviews ?? {}).flatMap(([persona, review]): MessageBlock[] => [
+    { kind: "label", text: `${persona} 관점 평가` },
+    { kind: "kv", items: review.assessments.map((a) => ({ k: a.label, v: assessmentText(a) })) },
+  ]);
+  return [
+    { kind: "badge", text: "CEO · CFO · CTO 종합 평가", tone: "info" },
+    ...mnaInputBlocks(inputs),
+    ...reviews,
+    { kind: "label", text: "핵심 위험" },
+    {
+      kind: "kv",
+      items: (result.key_risks ?? []).map((r) => ({
+        k: r.label,
+        v: assessmentText({ verdict: "concern", level: r.level, finding: r.finding }),
+      })),
+    },
+    { kind: "label", text: "인수 기회" },
+    { kind: "kv", items: (result.key_opportunities ?? []).map((o) => ({ k: o.label, v: o.finding })) },
+    ...mnaRecommendationBlocks(result),
+  ];
+}
+
+/** What-if: 변경한 조건의 전후 값, 항목별 평가 변화, 변경 전후 권고. */
+function mnaWhatIfBlocks(result: MnaReviewResult, inputs: MnaInputs): MessageBlock[] {
+  const { assumptions, before_inputs: before, after_inputs: after } = result;
+  const changed: { k: string; v: string }[] = [];
+  if (before && after) {
+    if (assumptions?.asking_trillion_krw != null) {
+      changed.push({ k: "요구가격", v: `${before.valuation.asking} → ${after.valuation.asking}` });
+    }
+    if (assumptions?.operating_margin != null) {
+      changed.push({ k: "영업이익률", v: `${before.financials.operating_margin} → ${after.financials.operating_margin}` });
+    }
+    if (assumptions?.revenue_share != null) {
+      changed.push({ k: "최대 고객 매출 비중", v: `${before.customers.largest_share} → ${after.customers.largest_share}` });
+    }
+  }
+  const changes = result.changes ?? [];
+  return [
+    { kind: "badge", text: result.persona_label ? `${result.persona_label} · What-if` : "What-if", tone: "info" },
+    { kind: "label", text: "변경 조건 (변경 전 → 후)" },
+    { kind: "kv", items: changed },
+    { kind: "label", text: "평가 변화 (변경 전 → 후)" },
+    changes.length === 0
+      ? { kind: "text", text: "평가 항목의 변화가 없습니다." }
+      : { kind: "kv", items: changes.map((c) => ({ k: c.label, v: `${assessmentText(c.before)} → ${assessmentText(c.after)}` })) },
+    { kind: "label", text: "변경 전 권고" },
+    { kind: "text", text: result.before_recommendation ?? "-" },
+    ...mnaInputBlocks(inputs),
+    ...mnaRecommendationBlocks(result, "변경 후 권고"),
+  ];
+}
+
+function mnaReviewBlocks(result: unknown): MessageBlock[] {
+  if (!isMnaReviewResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  if (!result.found) return [{ kind: "text", text: result.message ?? "기업 데이터를 찾지 못했습니다." }];
+  const { inputs } = result;
+  // found인데 입력 정보가 없는 결과(예: 시나리오 입력 오류)는 아는 모양이 아니므로 그대로 보여 준다.
+  if (!inputs) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  if (result.mode === "executive_summary") return mnaExecutiveBlocks(result, inputs);
+  if (result.mode === "what_if") return mnaWhatIfBlocks(result, inputs);
+  return [
+    { kind: "badge", text: result.persona_label ?? "", tone: "info" },
+    ...mnaInputBlocks(inputs),
+    { kind: "label", text: `평가 항목 · ${result.persona_label ?? ""} 우선순위` },
+    { kind: "kv", items: (result.assessments ?? []).map((a) => ({ k: a.label, v: assessmentText(a) })) },
+    ...mnaRecommendationBlocks(result),
   ];
 }
 
