@@ -62,7 +62,10 @@ def save(viewer=SECRETARY, **overrides):
 
 @pytest.fixture
 def directory(monkeypatch):
-    """Registered emails by name (what the gateway's directory lookup would answer)."""
+    """Registered emails by name (what the gateway's directory lookup would answer). The K store starts empty here:
+    its sample meetings name the same people (박지훈 CFO, 이서연 CTO) and its directory has their fixture addresses,
+    while these tests build their own records from scratch."""
+    monkeypatch.setattr(STORE, "seed", None)
     emails = {"김민수": "ceo@example.com", "박지훈": "staff@example.com"}
     monkeypatch.setattr(outbox, "lookup_email", lambda name: (emails[name], f"sub-{name}") if name in emails else None)
     return emails

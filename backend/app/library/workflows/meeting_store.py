@@ -416,7 +416,7 @@ def find_decision(conn: psycopg.Connection, ref: str, viewer: Viewer) -> int | N
 
 def seed_fixture(conn: psycopg.Connection, data: dict[str, Any]) -> None:
     """Fixture meetings become held meetings with final minutes. Optional fields:
-    classification (default 2), summary, decisions[].kind, action_items[].due."""
+    classification (default 2), summary, decisions[].kind, action_items[].due, action_items[].note (the latest progress note)."""
     created: list[str] = []
     for m in data["meetings"]:
         starts = datetime.combine(date.fromisoformat(m["date"]), DEFAULT_MEETING_TIME, KST)
@@ -439,19 +439,27 @@ def seed_fixture(conn: psycopg.Connection, data: dict[str, Any]) -> None:
         for n, a in enumerate(m["action_items"], 1):
             owner_person, owner_unit = resolve_owner(conn, a.get("owner"), created)
             status = a.get("status", "open")
-            conn.execute(
+            item = conn.execute(
                 """INSERT INTO action_items (code, meeting_id, text, owner_person_id, owner_unit_id, due_date, status, completed_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
                 (f"{m['id']}-A{n}", meeting, a["text"], owner_person, owner_unit, parse_date(a.get("due")), status,
                  starts + timedelta(days=7) if status == "done" else None),
-            )
+            ).fetchone()["id"]
+            if a.get("note"):
+                conn.execute(
+                    "INSERT INTO action_item_updates (action_item_id, old_status, new_status, note) VALUES (%s, 'open', %s, %s)",
+                    (item, status, a["note"]),
+                )
 
 
 def seed_directory(conn: psycopg.Connection, entries: list[dict[str, Any]]) -> None:
-    """The fixture's staff · contacts directory (name, email; optional title, department, organization, external)."""
+    """The fixture's staff · contacts directory (name, email; optional title, department, organization, external).
+    `email_env`: an environment variable that, when set, replaces the fixture's (undeliverable, example.com) address —
+    how a demo points a person at a mailbox the team controls without committing that address."""
     for e in entries:
+        email = (os.environ.get(e["email_env"], "").strip() if e.get("email_env") else "") or e["email"]
         conn.execute(
             """INSERT INTO staff_directory (name, title, department, organization, email, is_external)
                VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (email) DO NOTHING""",
-            (e["name"], e.get("title"), e.get("department"), e.get("organization"), e["email"], bool(e.get("external"))),
+            (e["name"], e.get("title"), e.get("department"), e.get("organization"), email, bool(e.get("external"))),
         )

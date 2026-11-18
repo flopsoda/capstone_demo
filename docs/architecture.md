@@ -170,7 +170,9 @@ Advisory Agent  → run_mna_review
 **Current implementation** — Agent-visible Tool과 내부 workflow를 분리한다.
 - **회의 저장소 (2026-10-27).** 미팅 Tool 다섯 개는 Postgres 회의 저장소를 쓴다. `library/workflows/meeting_store.MeetingStore(schema, seed)`가 system마다 하나 있고
   (`systems/<system>/__init__.py`의 `MEETING_STORE`: K는 schema `kelec`, Group은 `grp`), 연결은 `MEETINGS_DATABASE_URL`이다. 처음 쓸 때 schema(`meeting_schema.sql`, 테이블 15개)가 없으면 만들고,
-  회의가 하나도 없으면 그 system의 `data/meetings.json`으로 채운다 (`MEETINGS_SEED_MEETINGS=0`이면 예시 회의 없이 빈 채로 시작하고 임직원 연락처만 넣는다 — 2026-11-04). 배포에서는 system마다 DB role이 따로라 Group은 K의 schema를 읽을 수 없다.
+  회의가 하나도 없으면 그 system의 `data/meetings.json`으로 채운다 (`MEETINGS_SEED_MEETINGS=0`이면 예시 회의 없이 빈 채로 시작하고 임직원 연락처만 넣는다 — 2026-11-04).
+  fixture의 Action Item은 마지막 진행 메모(`note` → `action_item_updates`)를, 연락처는 주소를 바꿔 넣을 환경변수(`email_env`, 예: `DEMO_MAIL_KELEC_CFO`)를 가질 수 있다 —
+  fixture 주소는 배달되지 않는 `example.com`이고, 시연은 팀이 관리하는 주소를 환경변수로 넣는다 (2026-11-18, 최종 시나리오 02). seed는 빈 schema에서만 돌므로 이미 채워진 저장소에는 반영되지 않는다. 배포에서는 system마다 DB role이 따로라 Group은 K의 schema를 읽을 수 없다.
   Tool factory는 `path` 대신 store를 받는다: `make_<tool>(store)`. workflow 함수는 `store`와 `viewer`를 인자로 받는 함수이고 LLM 없이 테스트한다 (`tests/test_meeting_records.py`, 테스트 DB 필요).
 - **요청자(viewer).** 모든 미팅 workflow는 `Viewer(email, name, groups, clearance, can_write)`로 거른다. Tool은 이를 모델 인자가 아니라 run에서 읽는다
   (`library/tools/meeting_access.current_viewer()` ← `RunContext.principal` · `origin`, [6장](#6-backend와-frontend의-책임)). 등급 규칙은 gateway `shared/access.py`와 같다:

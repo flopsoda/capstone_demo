@@ -46,7 +46,22 @@ Step 8  REAL   그룹 최종 판단                                            G
 (다시 시작해도 같은 행을 갱신할 뿐 중복 없음), 이후 언론사 RSS로 모은 기사와 **같은 저장소 · 같은 파이프라인**으로 검색 · 분석합니다. 별도 데모 모드는 없습니다.
 기본 조회 기간은 120일입니다(`NEWS_LOOKBACK_DAYS`로 변경). 검색은 키워드(본문 · 연결된 기업명)와 의미(임베딩 유사도)를 합쳐 순위를 매깁니다(하이브리드, RRF).
 선택: 녹음 transcript 연결(`SPEECH_SERVICE_URL`), 메일 받는 사람 조회(`DIRECTORY_URL`), 메일 발송(`SMTP_*`, `MEETINGS_BACKGROUND_JOBS=1`), 서명된 요청자(`PRINCIPAL_SIGNING_KEY`) — 배포(gateway 레포)가 채웁니다.
-로컬 데모에서 회의록을 확정하려면 `MEETINGS_CONFIRM_GROUPS=*` (principal 없는 요청은 그룹이 없으므로).
+로컬 데모에서 회의록을 확정하려면 `MEETINGS_CONFIRM_GROUPS=*` (principal 없는 요청은 그룹이 없으므로). 이 값과 `MEETINGS_ANONYMOUS_CLEARANCE=4`가 없는 예전 `.env`는
+`.env.example`의 `MEETINGS_*` 줄을 옮겨 넣으세요 — 없으면 회의록이 초안으로만 저장되어 다른 Agent가 읽지 못하고, 독촉 메일도 거부됩니다. 배포는 자기 값(`secretary,executive` 등)을 씁니다.
+
+**시연 메일 (최종 시나리오 02).** 그룹이 A2A로 요청하면 K전자 미팅 에이전트가 9/15 회의의 할 일 담당자(박지훈 CFO · 이서연 CTO)에게 독촉 메일을 보냅니다.
+fixture 주소는 배달되지 않는 `example.com`이므로, 받을 주소를 `DEMO_MAIL_KELEC_CFO` · `DEMO_MAIL_KELEC_CTO`(팀이 관리하는 메일함만)로 넣고 K 저장소가 **처음 채워질 때** 반영됩니다.
+메일은 K 프로세스에서만 보내고 자동 기한 알림은 끕니다 (`.env`보다 셸 변수가 우선):
+
+```bash
+MEETINGS_BACKGROUND_JOBS=1 MEETINGS_DELIVERY_INTERVAL=15 MEETINGS_DAILY_HOUR=23 \
+  .venv/bin/uvicorn app.main:app --port 8000      # SMTP_* 는 .env에. Group(:8001)은 그대로 (발송 작업 없음)
+```
+
+`MEETINGS_DAILY_HOUR=23`이면 매일 아침 작업(기한 알림 · 주소 재조회 · transcript 정리)이 밤 11시 전에는 돌지 않습니다 (최댓값 23). 같은 할 일의 독촉은 하루 한 번이므로 리허설 뒤 본 시연에서 다시 보내려면 날짜가 바뀌거나 저장소를 다시 채워야 합니다.
+SMTP를 켜기 전에 `outbox`에 남은 `approved` 메일(리허설분)이 없는지 확인하세요 — 켜는 순간 3일 이내 것은 모두 나갑니다.
+이미 채워진 K 저장소에 바뀐 시나리오 데이터(담당자 · 상태 · 진행 메모 · 연락처)를 넣으려면 schema를 백업한 뒤 다시 채웁니다 (뉴스 `kelec_news`는 그대로):
+`pg_dump -n kelec "$MEETINGS_DATABASE_URL" > kelec_backup.sql` → `psql "$MEETINGS_DATABASE_URL" -c 'DROP SCHEMA kelec CASCADE'` → backend 재시작.
 
 ```bash
 # 1) Python backend — K Electronics system (별도 터미널)

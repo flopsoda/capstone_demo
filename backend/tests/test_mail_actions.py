@@ -42,7 +42,9 @@ class FakeSMTP:
 
 @pytest.fixture
 def mail(meeting_db, monkeypatch):
-    """Finalized minutes whose assignment went out; returns the sent messages by kind."""
+    """Finalized minutes whose assignment went out; returns the sent messages by kind. The K store starts empty
+    (its sample meetings and directory name the same people)."""
+    monkeypatch.setattr(STORE, "seed", None)
     emails = {"김민수": "ceo@example.com", "박지훈": "staff@example.com"}
     monkeypatch.setattr(outbox, "lookup_email", lambda name: (emails[name], f"sub-{name}") if name in emails else None)
     monkeypatch.setenv("PRINCIPAL_SIGNING_KEY", KEY)

@@ -111,7 +111,7 @@ def test_tracking_overdue_first_with_counts_and_scope():
     # A 사내 user does not see the 대외비 meeting's items at all.
     assert all(i["meeting"]["id"] != "MTG-2026-09-15" for i in track_action_items(store=STORE, viewer=STAFF, today=TODAY)["items"])
     # By owner, by due window, by text.
-    assert [i["id"] for i in track_action_items(store=STORE, viewer=SECRETARY, owner="재무기획", today=TODAY)["items"]] == ["MTG-2026-09-15-A1"]
+    assert [i["id"] for i in track_action_items(store=STORE, viewer=SECRETARY, owner="박지훈", today=TODAY)["items"]] == ["MTG-2026-09-15-A1"]
     soon = track_action_items(store=STORE, viewer=SECRETARY, due_within_days=7, today=TODAY)["items"]
     assert [i["id"] for i in soon] == ["MTG-2026-09-15-A1", "MTG-2026-07-08-A2", "MTG-2026-09-15-A3"]  # overdue + due 10-31
     assert [i["id"] for i in track_action_items(store=STORE, viewer=SECRETARY, query="기업가치", today=TODAY)["items"]] == ["MTG-2026-09-15-A1"]
