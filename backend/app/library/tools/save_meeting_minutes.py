@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool, tool
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from ..workflows.meeting_minutes import save_minutes
 from ..workflows.meeting_store import MeetingStore
@@ -74,7 +74,9 @@ class Decision(BaseModel):
 
 
 class ActionItem(BaseModel):
-    text: str = Field(description="해야 할 일")
+    # A decision's field is `statement`; models often reuse that name for an item's text (then fail the call
+    # again and again until the run's step limit). Both names are read; the schema shows `text`.
+    text: str = Field(validation_alias=AliasChoices("text", "statement"), description="해야 할 일")
     owner: str | None = Field(default=None, description="담당 부서 또는 사람 (예: 재무기획팀, 박지훈). 회의에서 정해진 경우만")
     due: str | None = Field(default=None, description="기한 YYYY-MM-DD. 회의에서 정해진 경우만")
     id: str | None = Field(default=None, description="기존 항목을 고칠 때 그 id (예: MTG-2026-10-25-01-A2)")
