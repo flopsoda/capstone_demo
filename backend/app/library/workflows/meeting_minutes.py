@@ -372,7 +372,7 @@ def save_minutes(
     attendees: list[dict[str, Any]] | None = None,
     topics: list[str] | None = None,
     body: str | None = None,
-    classification: int = 2,
+    classification: int | None = None,
     location: str | None = None,
     meeting_id: str | None = None,
     finalize: bool = False,
@@ -386,9 +386,10 @@ def save_minutes(
 ) -> dict[str, Any]:
     if not viewer.can_write:
         return _fail("다른 Agent System이 보낸 요청으로는 회의 기록을 바꿀 수 없습니다. 이 시스템의 사용자가 직접 요청해야 합니다.")
-    if classification not in (1, 2, 3, 4):
+    # classification · topics를 보내지 않으면(None · 빈 목록) 저장된 회의는 그 값을 그대로 두고, 새 회의는 2(사내) · 없음으로 만든다
+    if classification is not None and classification not in (1, 2, 3, 4):
         return _fail("classification은 1(공개) · 2(사내) · 3(대외비) · 4(극비) 중 하나여야 합니다.")
-    if classification > viewer.clearance:
+    if classification is not None and classification > viewer.clearance:
         return _fail(f"요청자의 열람 등급({viewer.clearance})보다 높은 등급({classification})으로는 저장할 수 없습니다.")
     try:
         day = parse_date(date)
@@ -460,13 +461,16 @@ def save_minutes(
                     (mid, row["version"], Jsonb(minutes_record(conn, mid)), viewer.email, correction_reason.strip()),
                 )
             conn.execute(
-                """UPDATE meetings SET title = %s, starts_at = %s, ends_at = %s, location = coalesce(%s, location), topics = %s,
-                                       classification = %s, subject = %s, status = 'held', updated_at = now() WHERE id = %s""",
-                (title, starts, ends, location, topics or [], classification,
+                """UPDATE meetings SET title = %s, starts_at = %s, ends_at = %s, location = coalesce(%s, location),
+                                       topics = coalesce(%s::text[], topics), classification = coalesce(%s::int, classification), subject = %s, status = 'held', updated_at = now() WHERE id = %s""",
+                (title, starts, ends, location, topics or None, classification,
                  row["subject"] if row["subject"] and not subject else subject_for(conn, viewer, title, named=subject), mid),
             )
         else:
             was = None
+            classification = 2 if classification is None else classification
+            if classification > viewer.clearance:
+                return _fail(f"요청자의 열람 등급({viewer.clearance})보다 높은 등급({classification})으로는 저장할 수 없습니다.")
             code = new_meeting_code(conn, day)
             mid = conn.execute(
                 """INSERT INTO meetings (code, title, status, starts_at, ends_at, location, topics, classification, subject, created_by)

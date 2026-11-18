@@ -102,7 +102,7 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
         attendees: list[Attendee] | None = None,
         topics: list[str] | None = None,
         body: str | None = None,
-        classification: int = 2,
+        classification: int | None = None,
         location: str | None = None,
         meeting_id: str | None = None,
         finalize: bool = False,
@@ -132,9 +132,10 @@ def make_save_meeting_minutes(store: MeetingStore) -> BaseTool:
             저장된 회의(meeting_id)를 다시 저장할 때 빼면 저장된 목록을 그대로 둔다. 보내면 보낸 목록으로 바뀐다.
         action_items: 후속 조치 목록. 담당 · 기한은 회의에서 정해진 경우만 채운다. 다시 저장할 때 빼면 그대로 둔다.
         attendees: 참석자 · 불참자 · 배석자 (모르면 비워 둔다).
-        topics: 검색용 주제 키워드 (예: ["NeuroEdge", "M&A"]).
+        topics: 검색용 주제 키워드 (예: ["NeuroEdge", "M&A"]). 저장된 회의를 다시 저장할 때 빼면 그대로 둔다.
         body: 안건별 논의 경과 · 발언 요지 (서술, 선택).
-        classification: 1 공개 · 2 사내 · 3 대외비 · 4 극비. 사용자가 정하지 않으면 2.
+        classification: 1 공개 · 2 사내 · 3 대외비 · 4 극비. 사용자가 등급을 말했을 때만 보낸다.
+            새 회의에서 빼면 2, 저장된 회의를 다시 저장할 때 빼면 저장된 등급을 그대로 둔다.
         location: 장소 (선택).
         meeting_id: 이미 저장된 초안 · 예약된 회의에 쓸 때 그 id. 새 회의면 비워 둔다.
         finalize: 사용자가 확정을 요청했을 때만 true.

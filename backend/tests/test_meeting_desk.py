@@ -136,3 +136,27 @@ def test_desk_without_a_user_sees_nothing(desk, monkeypatch):
     anonymous = desk("overview", None)
     assert anonymous["minutes"] == [] and anonymous["counts"]["flags_open"] == 0
     assert desk("items", None, view="mine")["error"]
+
+
+def _level(code):
+    with STORE.connect() as conn:
+        row = conn.execute("SELECT classification, topics FROM meetings WHERE code = %s", (code,)).fetchone()
+    return row["classification"], list(row["topics"])
+
+
+def test_finalizing_or_saving_again_keeps_the_classification_and_topics_unless_given(desk):
+    from app.library.workflows import meeting_desk
+
+    minutes = {**MINUTES, "body": None, "classification": 3, "topics": ["공급망", "안전재고"]}
+    code = save_minutes(store=STORE, viewer=WRITER, **minutes)["meeting_id"]
+    assert meeting_desk.finalize(store=STORE, viewer=WRITER, meeting_id=code)["finalized"]
+    assert _level(code) == (3, ["공급망", "안전재고"])  # the desk sends neither: kept, not reset to 2 and []
+    again = {k: v for k, v in MINUTES.items() if k not in ("body", "classification")}
+    out = save_minutes(store=STORE, viewer=WRITER, **again, meeting_id=code, correction_reason="요약 보완", finalize=True)
+    assert out["status"] == "final", out
+    assert _level(code) == (3, ["공급망", "안전재고"])  # a correction that leaves them out keeps them
+    save_minutes(store=STORE, viewer=WRITER, **again, meeting_id=code, correction_reason="등급 조정", classification=2, topics=["재고"],
+                 finalize=True)
+    assert _level(code) == (2, ["재고"])  # given explicitly: changed
+    new = save_minutes(store=STORE, viewer=WRITER, **{**again, "title": "새 회의"})
+    assert _level(new["meeting_id"]) == (2, [])  # a new meeting without them: 2 and none, as before
