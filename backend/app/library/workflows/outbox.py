@@ -51,6 +51,17 @@ STALE_DAYS = 3  # mail not sent within this many days (no mail server yet) is dr
 REMINDER_DAYS_BEFORE = (3, 1, 0)
 OVERDUE_EVERY_DAYS = 7  # overdue reminders: the day after the due date, then weekly
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def valid_email(text: str | None) -> bool:
+    """One plain address that a mail header takes as it is: no list ("a,b@c.com"), display name, angle brackets or line break."""
+    if not text or not _EMAIL.match(text.strip()):
+        return False
+    try:
+        Address(addr_spec=text.strip())
+    except Exception:  # noqa: BLE001 — ValueError, HeaderParseError and parser defects alike
+        return False
+    return True
 FOOTER = "\n\n--\n이 메일은 Navitech 회의지원 Agent가 회의 기록을 바탕으로 작성해 자동으로 보냈습니다. 내용이 다르면 회의지원 Agent에 알려 주세요."
 
 
@@ -112,6 +123,8 @@ def queue(conn: psycopg.Connection, *, kind: str, meeting_id: int, person_id: in
     if who and unnamed_speaker(who["display_name"]):
         return None
     label, email = address_of(conn, person_id)
+    if email and not valid_email(email):  # a malformed address on record is no address: the mail waits instead of failing
+        email = None
     row = conn.execute(
         """INSERT INTO outbox (kind, meeting_id, action_item_id, person_id, to_name, to_email, subject, body, status,
                                approved_by, approved_at, dedupe_key, created_by)
@@ -360,7 +373,7 @@ def manage_outbox(
             return {"ok": False, "action": action, "error": "다른 Agent System이 보낸 요청으로는 메일을 다시 보내거나 취소할 수 없습니다."}
         if not ids and not (meeting_id and action in ("resend", "reject")):
             return {"ok": False, "action": action, "error": "mail_ids(예: MAIL-12) 또는 meeting_id가 필요합니다."}
-        if action == "set_address" and (len(ids) != 1 or not email or not _EMAIL.match(email.strip())):
+        if action == "set_address" and (len(ids) != 1 or not valid_email(email)):
             return {"ok": False, "action": action, "error": "set_address에는 메일 하나(mail_ids)와 올바른 email이 필요합니다."}
         rows = conn.execute(
             f"""SELECT o.id, o.status, o.person_id, o.meeting_id FROM outbox o JOIN meetings m ON m.id = o.meeting_id
@@ -466,25 +479,28 @@ def deliver_approved(conn: psycopg.Connection, *, limit: int = 20, connect=_conn
         return 0
     try:
         for r in rows:
-            msg = EmailMessage()
-            msg["From"], msg["To"], msg["Subject"] = cfg["sender"], Address(display_name=r["to_name"], addr_spec=r["to_email"]), r["subject"]
-            msg["Date"], msg["Message-ID"] = formatdate(localtime=True), make_msgid(domain="navitech")
-            # 업무 배정 · 기한 알림 · 독촉 메일에는 담당자가 바로 진행 상황을 알리는 버튼 (mail_actions)
-            urls = (mail_actions.links(r["action_item_id"], r["person_id"])
-                    if r["kind"] in ("assignment", "reminder") and r["action_item_id"] and r["person_id"] else None)
-            if urls:
-                main = r["body"].removesuffix(FOOTER)
-                msg.set_content(main + mail_actions.text_block(urls) + FOOTER)
-                msg.add_alternative(mail_actions.html_mail(main, urls, FOOTER), subtype="html")
-            else:
-                msg.set_content(r["body"])
-            if r["kind"] == "minutes":
-                for name, content in _documents(conn, r, rendered):
-                    msg.add_attachment(content, maintype="application", subtype="pdf", filename=name)
+            # 한 통의 실패(서버 거절 · 연결 끊김 · 헤더에 넣을 수 없는 주소나 제목)는 그 메일에만 남긴다. 밖으로 던지면 이
+            # 트랜잭션이 롤백되어 이미 보낸 메일의 'sent' 기록까지 사라지고, 다음 회차에 같은 메일이 다시 나간다.
             try:
+                msg = EmailMessage()
+                msg["From"], msg["To"], msg["Subject"] = cfg["sender"], Address(display_name=r["to_name"], addr_spec=r["to_email"]), r["subject"]
+                msg["Date"], msg["Message-ID"] = formatdate(localtime=True), make_msgid(domain="navitech")
+                # 업무 배정 · 기한 알림 · 독촉 메일에는 담당자가 바로 진행 상황을 알리는 버튼 (mail_actions)
+                urls = (mail_actions.links(r["action_item_id"], r["person_id"])
+                        if r["kind"] in ("assignment", "reminder") and r["action_item_id"] and r["person_id"] else None)
+                if urls:
+                    main = r["body"].removesuffix(FOOTER)
+                    msg.set_content(main + mail_actions.text_block(urls) + FOOTER)
+                    msg.add_alternative(mail_actions.html_mail(main, urls, FOOTER), subtype="html")
+                else:
+                    msg.set_content(r["body"])
+                if r["kind"] == "minutes":
+                    for name, content in _documents(conn, r, rendered):
+                        msg.add_attachment(content, maintype="application", subtype="pdf", filename=name)
                 server.send_message(msg)
-            except smtplib.SMTPException as e:
-                _failed(conn, r, str(e))
+            except Exception as e:  # noqa: BLE001 — see above
+                log.warning("could not send %s: %s", mail_ref(r["id"]), e)
+                _failed(conn, r, f"{type(e).__name__}: {e}")
                 continue
             conn.execute("UPDATE outbox SET status = 'sent', sent_at = now(), attempts = attempts + 1, last_error = NULL WHERE id = %s", (r["id"],))
             sent += 1

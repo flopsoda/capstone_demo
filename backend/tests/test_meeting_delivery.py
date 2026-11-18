@@ -590,3 +590,47 @@ def test_the_tool_takes_the_caller_from_the_run(meeting_db):
     run = new_run(system="k_electronics", root_agent="meeting", principal=CEO)
     list(stream_run(lambda: direct.append(tool.invoke({"action": "submit", "title": "재고 점검"})), run=run, hub=None))
     assert direct[0]["ok"] is False
+
+
+class DroppingSMTP(FakeSMTP):
+    """Loses the connection while sending one subject."""
+
+    def __init__(self, drop_subject: str):
+        super().__init__()
+        self.drop_subject = drop_subject
+
+    def send_message(self, msg):
+        if msg["Subject"].startswith(self.drop_subject):
+            raise ConnectionResetError("connection reset by peer")
+        super().send_message(msg)
+
+
+def test_a_mail_that_cannot_go_out_does_not_undo_or_resend_the_others(meeting_db, directory, monkeypatch):
+    draft = save()
+    save(meeting_id=draft["meeting_id"], finalize=True)  # minutes → 김민수, 박지훈; assignment → 박지훈
+    with STORE.connect() as conn:  # an address a header cannot take, stored before addresses were checked
+        bad = conn.execute("SELECT min(id) AS id FROM outbox WHERE status = 'approved'").fetchone()["id"]
+        conn.execute("UPDATE outbox SET to_email = 'ceo@example.com,x@example.com' WHERE id = %s", (bad,))
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    first = DroppingSMTP("[업무 배정]")
+    with STORE.connect() as conn:  # the bad address fails while building the mail, the assignment while sending it
+        assert deliver_approved(conn, connect=lambda cfg: first) == 1
+    second = FakeSMTP()
+    with STORE.connect() as conn:  # the mail already sent is recorded as sent and does not go out again
+        assert deliver_approved(conn, connect=lambda cfg: second) == 1
+    assert [m["Subject"].split("]")[0] for m in first.sent] == ["[회의록"]
+    assert [m["Subject"].split("]")[0] for m in second.sent] == ["[업무 배정"]
+    with STORE.connect() as conn:
+        rows = {r["id"]: r for r in conn.execute("SELECT id, status, attempts, last_error FROM outbox WHERE status <> 'needs_address'")}
+    assert rows[bad]["status"] == "approved" and rows[bad]["attempts"] == 2 and "ValueError" in rows[bad]["last_error"]
+    assert sorted(r["status"] for i, r in rows.items() if i != bad) == ["sent", "sent"]
+
+
+def test_addresses_are_checked_before_they_are_stored(meeting_db, directory):
+    draft = save()
+    final = save(meeting_id=draft["meeting_id"], finalize=True)
+    waiting = [m["id"] for m in final["mail_queued"] if m["to"] == "이서연"]
+    for wrong in ("a,b@example.com", "이서연 <s@example.com>", "s@example.com\nBcc: x@example.com"):
+        out = manage_outbox(store=STORE, viewer=SECRETARY, action="set_address", mail_ids=waiting, email=wrong)
+        assert out["ok"] is False, wrong
+    assert outbox.valid_email("secretary@example.com") and not outbox.valid_email("a;b@example.com")
