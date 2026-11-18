@@ -351,7 +351,8 @@ _STATUS_REPORTED = (  # the gateway's history format (navitech agents/remote.py 
 @pytest.mark.parametrize("utterance, mails", [
     ("담당자한테 어떻게 된 건지 물어봐.", True),   # an indirect ask to check with the owners: the reminder goes out
     ("이건 담당자들한테 직접 들어 봐야겠다.", True),
-    ("왜 아직 안 끝났어?", False),              # a question: look it up, no mail
+    ("왜 이렇게 늦어지는 거지? 한번 확인해 봐야겠다.", True),  # a question with a wish to check: ask the owners why
+    ("왜 아직 안 끝났어?", False),              # a question alone: look it up, no mail
     ("생각보다 많이 늦네.", False),             # a remark: answer only
 ])
 def test_group_super_reads_a_reminder_intent_from_the_conversation(utterance, mails):
