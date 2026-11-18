@@ -39,6 +39,7 @@ def make_update_action_item(store: MeetingStore) -> BaseTool:
         owner: 새 담당 부서 또는 사람.
         remind: true면 담당자에게 지금 진행 확인 요청(독촉) 메일을 보낸다. 사용자가 독촉 · 재촉 · 알림을 요청했을 때만 쓴다.
             확정된 회의록의 열린 할 일, 담당이 사람일 때만 보내며 같은 할 일은 하루 한 번. 사용자가 덧붙인 말은 note로 넘긴다.
+            다른 Agent System(그룹 등)이 보낸 요청으로는 remind만 할 수 있다 (status · due · owner는 바꿀 수 없다).
     """
         viewer = current_viewer()
         return store_call(lambda: update_item(

@@ -175,7 +175,7 @@ Advisory Agent  → run_mna_review
 - **요청자(viewer).** 모든 미팅 workflow는 `Viewer(email, name, groups, clearance, can_write)`로 거른다. Tool은 이를 모델 인자가 아니라 run에서 읽는다
   (`library/tools/meeting_access.current_viewer()` ← `RunContext.principal` · `origin`, [6장](#6-backend와-frontend의-책임)). 등급 규칙은 gateway `shared/access.py`와 같다:
   `classification <= clearance AND (allowed_groups IS NULL OR 겹침)`을 SQL 안에서 먼저 적용하므로 볼 수 없는 회의는 읽히지도 않는다.
-  principal이 없는 요청(로컬 UI · 테스트)은 `MEETINGS_ANONYMOUS_CLEARANCE`(배포 0, 로컬 예시 4)를 쓴다. 다른 system의 A2A 요청으로 시작된 run(`origin = "a2a"`)은 읽기만 한다.
+  principal이 없는 요청(로컬 UI · 테스트)은 `MEETINGS_ANONYMOUS_CLEARANCE`(배포 0, 로컬 예시 4)를 쓴다. 다른 system의 A2A 요청으로 시작된 run(`origin = "a2a"`)은 읽기만 한다 — 예외는 업무 요청 접수(`submit`, 11장 18번)와 기존 할 일의 독촉(`remind`, 11장 21번)뿐이다.
 - `run_meeting_context_retrieval(query, topics, meeting_id?, date_from?, date_to?)` → `library/workflows/meeting_context_retrieval.retrieve_meeting_context`:
   열람 가능한 회의 중 **확정 회의록**만(id로 한 회의를 볼 때는 초안 포함) 키워드 점수(topic 3점, title 2점, decision 1점, 절대/상대 threshold — 기존 그대로)로 고른다.
   반환 dict의 기존 key(`matched`, `meetings[].id · date · title · decisions[{speaker, statement}] · open_action_items[{text, owner}]`)는 유지하고
@@ -187,6 +187,7 @@ Advisory Agent  → run_mna_review
 - `run_action_item_tracking(query?, owner?, status?, due_before?, due_within_days?, overdue_only, meeting_id?, mine)` → `action_items.track_action_items`: 회의를 가로질러
   지연 일수 큰 순 → 기한 순, 같은 범위의 상태별 건수(`summary`)와 기준일(`as_of`, 요일 포함 — 모델은 오늘 날짜를 모른다)을 준다. 조회만 한다.
 - `update_action_item(item_id, status?, note?, due?, owner?, remind?)` → `action_items.update_action_item`: 변경마다 `action_item_updates`에 누가 · 언제 · 이전/새 상태 · 메모를 남긴다. 모르는 id면 `candidates`. `remind=true`는 사용자가 독촉을 요청할 때 담당자에게 지금 확인 요청 메일을 보낸다 (`outbox.queue_nudge_mail`: 확정된 회의록의 열린 할 일 · 사람 담당 · 확정 권한, 할 일마다 하루 한 번, 매일 아침 기한 알림과 별개).
+  A2A run은 `remind`만 쓸 수 있다: `status` · `due` · `owner` · 독촉 없는 `note`는 거부하고, 할 일 행은 바꾸지 않으며, 이력에 "독촉 메일 (다른 Agent System 요청)"을 남긴다 (11장 21번).
 - `run_meeting_schedule(action = list | draft | create | update | cancel, ...)` → `meeting_schedule.meeting_schedule`: 외부 캘린더 동기화 없는 사내 일정.
   `draft`(2026-11-04)는 저장 · 메일 없이 예약 요청을 점검한다: 같은 주제의 지난 회의에서 참석자 · 장소 · 이어지는 안건을 채우고(assumed), 빠진 것(missing: title · date · start · attendees), 여러 사람에 맞거나 기록에 없는 이름(unclear, 후보), 겹치는 회의(conflicts)를 돌려준다. 끝 시각이 없으면 1시간. Skill은 complete면 바로 create, 아니면 빠진 것만 묻고 화면이 예약 양식을 띄운다 (gateway `schedule_form` 카드, 관제의 '+ 회의 예약'과 같은 양식 → desk `schedule` create).
   `create`의 `carry_over_from`은 이전 회의의 보류 안건과 미결 쟁점(`issue`)을 새 회의 안건으로 이월한다. 시각은 한국 시간이며 `list`는 `today`(요일 포함)를 준다.
@@ -508,7 +509,7 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 | --- | --- |
 | `GET /api/health` | 상태 확인 (`system` 포함) |
 | `GET /api/events` | 관찰 채널. 이 프로세스의 모든 run 이벤트를 SSE로 스트리밍 (Demo Monitor · 플랫폼 UI의 외부 실행 표시용) |
-| `POST /api/a2a/run` `{request, trace_id?, caller?, principal?}` | **A2A 수신 표면.** 다른 system의 Super Agent가 보낸 요청으로 K Super 실행(`invocation="a2a"`, 필요한 전문 Agent에게 순차 위임 후 최종 검토 결과 작성). lifecycle을 NDJSON으로 스트리밍하고 `agent_end(k_super).response`가 A2A 응답이다. `trace_id` · `caller`는 이벤트 stamp로만 쓰인다 (업무 payload 아님). `principal`은 상대 system이 대신 요청하는 사용자다: K는 자기 자료에 그 사용자의 등급을 적용하고, 이 run에서는 회의 기록을 바꾸지 않는다 |
+| `POST /api/a2a/run` `{request, trace_id?, caller?, principal?}` | **A2A 수신 표면.** 다른 system의 Super Agent가 보낸 요청으로 K Super 실행(`invocation="a2a"`, 필요한 전문 Agent에게 순차 위임 후 최종 검토 결과 작성). lifecycle을 NDJSON으로 스트리밍하고 `agent_end(k_super).response`가 A2A 응답이다. `trace_id` · `caller`는 이벤트 stamp로만 쓰인다 (업무 payload 아님). `principal`은 상대 system이 대신 요청하는 사용자다: K는 자기 자료에 그 사용자의 등급을 적용하고, 이 run에서는 회의 기록을 바꾸지 않는다 (예외: 업무 요청 접수, 기존 할 일의 독촉 메일 — 11장 18번 · 21번) |
 | `POST /api/agents/k-super/run` `{request}` | 사용자 → K Super 직접 대화 (`invocation="direct"`, 위임 없이 답해도 된다). 같은 Agent core |
 
 `backend/app/systems/group/app.py` (FastAPI, `uvicorn app.systems.group.app:app --port 8001`)
@@ -788,7 +789,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
     fixture는 seed로만 쓴다. backend 의존성에 `psycopg[binary]` 추가. Tool은 회의록 작성(초안 → 확정 → 정정), Action Item 진행 조회 · 갱신, 사내 일정(외부 캘린더 동기화 없음)까지 다섯 개.
     회의록 항목은 공공기록물법 시행령 제18조②(참석자 · 배석자, 안건, 발언 요지, 결정 사항과 표결 내용)와 상법 제391조의3(반대자와 반대 이유, 출석자 서명)을 기준으로 잡았다.
 13. **요청자 전달 (2026-10-27 결정 · 구현됨, 2026-10-28 수정).** gateway가 run 요청에 `principal`을 담고, runtime은 그것을 `RunContext`에 두며, Tool이 읽는다 (모델 인자로 받지 않음).
-    A2A는 principal을 넘기되 수신 측은 읽기만 한다 — 예외는 18번의 업무 요청 접수(`submit`)뿐이다.
+    A2A는 principal을 넘기되 수신 측은 읽기만 한다 — 예외는 18번의 업무 요청 접수(`submit`)와 21번의 독촉(`remind`)뿐이다.
 14. **서명된 요청자 (2026-10-28 결정 · 구현됨, 12장 옛 13번).** gateway가 principal을 `PRINCIPAL_SIGNING_KEY`로 HS256 서명해 보내고 backend는 키가 있으면 서명된 값만 믿는다. A2A는 토큰을 그대로 전달한다.
     표준 라이브러리로 검증한다 (의존성 추가 없음). mTLS는 하지 않는다.
 15. **확정 권한 (2026-10-28 결정 · 구현됨, 12장 옛 14번).** 회의록 확정 · 정정 · Compliance 검토 · 메일 재발송 · 취소 · 업무 요청 접수 = 그 회의의 의장 · 간사 + secretary · executive 그룹 (`MEETINGS_CONFIRM_GROUPS`).
@@ -806,6 +807,11 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
     위임 Tool(`library/tools/delegation`)은 그 밖의 Agent에는 위임하지 않고 `delegation_skipped`를 보낸 뒤 Super Agent에게 "권한이 없어 빠졌다고 밝히라"는 결과를 돌려준다 —
     전에는 gateway가 권한 없는 `delegation_start`에서 응답을 끊었다 (그 검사는 안전장치로 남김). A2A로 받은 K Super의 위임도 같은 토큰으로 거른다.
     Skill `specialist_delegation`: 조회 · 분석만 위임하고, 기록 · 발송(회의록 확정, 일정, 메일, 업무 전달)은 요청이 시켰을 때만 — 아니면 "다음에 할 수 있는 일"로 제안한다.
+21. **A2A 독촉 (2026-11-18 결정 · 구현됨).** 최종 시나리오 02("그룹이 K전자에 미완료 업무 확인을 요청 → K전자 미팅 에이전트가 담당자에게 확인 메일")를 위해
+    13번의 "A2A 수신 측은 읽기만"에 두 번째 예외를 둔다: A2A run은 기존 Action Item에 `update_action_item(remind=true)`만 할 수 있다.
+    상태 · 기한 · 담당은 바꿀 수 없고(같은 호출에 섞이면 거부), 할 일 행도 갱신하지 않는다. 독촉은 전달된 사용자에게 15번의 확정 권한(확정 그룹 또는 그 회의의 의장 · 간사)이 있을 때만,
+    할 일마다 하루 한 번(기존 dedupe)이다. 이력(`action_item_updates`)에 "독촉 메일 (다른 Agent System 요청)"과 요청 문구를 남기고, 메일 본문의 요청한 사람은 전달된 사용자(없으면 "다른 Agent System의 요청").
+    Skill `meeting_follow_up`이 이런 요청을 업무 요청 접수(`submit`)가 아니라 독촉으로 처리하게 한다.
 
 ### 전환 단계와 상태
 
@@ -823,6 +829,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 | 8 | 정리 · 문서 (옛 단일 앱 · scenario mock · `/api/k-super/run` 제거, reducer를 `state/runState.ts`로) | 완료 |
 | 8+ | K UI의 외부 A2A 실행 표시 (11번 결정, 12장 11번) | 완료 |
 | 9 | 회의 후속 기능: 서명된 요청자 · 확정 권한 · Compliance 검토 · transcript 연결과 보존 · 메일 발송함과 기한 알림 · A2A 업무 요청 · migration (14~19번 결정) | 완료 (2026-10-28) |
+| 9+ | 최종 시나리오 02: A2A 독촉 (21번 결정) | 완료 (2026-11-18) |
 
 각 Phase가 끝날 때 현재 데모가 그대로 동작해야 한다는 규칙으로 진행했다 (Phase 7 전까지는 옛 단일 frontend의 mock Step 1·2·7·8을 유지).
 

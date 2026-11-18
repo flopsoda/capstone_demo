@@ -291,10 +291,18 @@ def queue_nudge_mail(conn: psycopg.Connection, item_id: int, viewer: Viewer, tod
     body = (f"{a['title']} ({kst_date(a['starts_at'])})에서 배정된 업무의 진행 상황을 확인해 달라는 요청입니다.\n\n"
             f"- {a['code']} {a['text']}\n- 기한: {due_text}{f' ({late}일 지남)' if late else ''}\n"
             + (f"- 요청 내용: {note.strip()}\n" if note and note.strip() else "")
-            + f"\n요청한 사람: {viewer.name or viewer.email}\n완료했거나 기한이 바뀌었으면 회의지원 Agent에 알려 주세요.")
+            + f"\n요청한 사람: {requester(viewer)}\n완료했거나 기한이 바뀌었으면 회의지원 Agent에 알려 주세요.")
     mail_id = queue(conn, kind="reminder", meeting_id=a["meeting_id"], person_id=a["owner_person_id"], action_item_id=a["id"],
                     subject=subject, body=body, created_by=viewer.email, dedupe_key=f"nudge:{a['id']}:{today.isoformat()}")
     return (mail_id, None) if mail_id else (None, f"{a['code']}의 독촉 메일은 오늘 이미 보냈습니다.")
+
+
+def requester(viewer: Viewer) -> str:
+    """Who asked, for a mail body: the user's name or email; a request without a user says where it came from."""
+    who = viewer.name or viewer.email
+    if not viewer.can_write:  # another agent system's A2A request
+        return f"{who} (다른 Agent System을 통한 요청)" if who else "다른 Agent System(그룹 등)의 요청"
+    return who or "회의지원 Agent 사용자"
 
 
 def retry_addresses(conn: psycopg.Connection) -> int:

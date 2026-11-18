@@ -634,3 +634,36 @@ def test_addresses_are_checked_before_they_are_stored(meeting_db, directory):
         out = manage_outbox(store=STORE, viewer=SECRETARY, action="set_address", mail_ids=waiting, email=wrong)
         assert out["ok"] is False, wrong
     assert outbox.valid_email("secretary@example.com") and not outbox.valid_email("a;b@example.com")
+
+
+def test_another_system_may_only_ask_for_a_reminder(meeting_db, directory, monkeypatch):
+    monkeypatch.setenv("MEETINGS_CONFIRM_GROUPS", "secretary,executive")
+    draft = save()
+    save(meeting_id=draft["meeting_id"], finalize=True)
+    item = f"{draft['meeting_id']}-A1"
+    a2a = dict(store=STORE, item_id=item, today=date(2026, 10, 30))
+    for change in ({"status": "done"}, {"due": "2026-11-30"}, {"owner": "김민수"}, {"note": "진행 중"},
+                   {"status": "done", "remind": True}):  # over A2A no field of the item may change
+        out = update_action_item(viewer=GROUP_VIA_A2A, **a2a, **change)
+        assert out["updated"] is False and "독촉 메일을 보내는 것만" in out["error"], change
+    nobody = Viewer(None, "", frozenset(), 4, False)  # forwarded without a user who may confirm
+    assert "의장 · 간사" in update_action_item(viewer=nobody, remind=True, **a2a)["error"]
+
+    out = update_action_item(viewer=GROUP_VIA_A2A, remind=True, note="지연 사유를 알려 주세요", **a2a)
+    assert out["updated"] and [(m["to"], m["status"]) for m in out["mail_queued"]] == [("박지훈 (CFO)", "approved")]
+    assert out["item"]["status"] == "open" and out["item"]["due"] == "2026-10-28"  # the item itself is untouched
+    assert out["history"][0]["note"] == "독촉 메일 (다른 Agent System 요청); 지연 사유를 알려 주세요"
+    again = update_action_item(viewer=GROUP_VIA_A2A, remind=True, note="다시", **a2a)
+    assert again["updated"] is False and "오늘 이미" in again["error"]  # once a day, and nothing recorded
+    with STORE.connect() as conn:
+        body = conn.execute("SELECT body FROM outbox WHERE dedupe_key LIKE 'nudge:%%'").fetchone()["body"]
+        notes = conn.execute("SELECT count(*) AS n FROM action_item_updates u JOIN action_items a ON a.id = u.action_item_id "
+                             "WHERE a.code = %s", (item,)).fetchone()["n"]
+    assert "요청한 사람: 김민수 (다른 Agent System을 통한 요청)" in body and "None" not in body and notes == 1
+
+    monkeypatch.setenv("MEETINGS_CONFIRM_GROUPS", "*")  # local demo: a forwarded request without a user may remind
+    out = update_action_item(viewer=nobody, remind=True, **{**a2a, "today": date(2026, 10, 31)})
+    assert out["updated"]
+    with STORE.connect() as conn:
+        last = conn.execute("SELECT body FROM outbox WHERE dedupe_key LIKE 'nudge:%%' ORDER BY id DESC LIMIT 1").fetchone()["body"]
+    assert "요청한 사람: 다른 Agent System(그룹 등)의 요청" in last
