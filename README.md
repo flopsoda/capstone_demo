@@ -60,6 +60,9 @@ MEETINGS_BACKGROUND_JOBS=1 MEETINGS_DELIVERY_INTERVAL=15 MEETINGS_DAILY_HOUR=23 
 
 `MEETINGS_DAILY_HOUR=23`이면 매일 아침 작업(기한 알림 · 주소 재조회 · transcript 정리)이 밤 11시 전에는 돌지 않습니다 (최댓값 23). 같은 할 일의 리마인더는 하루 한 번이므로 리허설 뒤 본 시연에서 다시 보내려면 날짜가 바뀌거나 저장소를 다시 채워야 합니다.
 SMTP를 켜기 전에 `outbox`에 남은 `approved` 메일(리허설분)이 없는지 확인하세요 — 켜는 순간 3일 이내 것은 모두 나갑니다.
+시나리오 뉴스(`data/news.json`, 11/17 알파모바일 공급계약 중단 포함)는 처음 쓸 때 등록되지만, 요청 시 임베딩은 최근 7일 기사부터 예산만큼만 하므로
+RSS 기사가 많이 쌓인 저장소에서는 등록 기사가 의미 검색에 잡히지 않을 수 있습니다. 시연 전에 한 번 `python -m app.library.workflows.news.collect --schema kelec_news --embed-only`로
+모두 임베딩해 두세요 (키워드 · 기업 리스크 조회는 이것 없이도 됩니다).
 이미 채워진 K 저장소에 바뀐 시나리오 데이터(담당자 · 상태 · 진행 메모 · 연락처)를 넣으려면 schema를 백업한 뒤 다시 채웁니다 (뉴스 `kelec_news`는 그대로):
 `pg_dump -n kelec "$MEETINGS_DATABASE_URL" > kelec_backup.sql` → `psql "$MEETINGS_DATABASE_URL" -c 'DROP SCHEMA kelec CASCADE'` → backend 재시작.
 
