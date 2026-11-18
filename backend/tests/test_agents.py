@@ -318,6 +318,80 @@ def test_group_super_asks_k_electronics_over_a2a_and_writes_the_group_judgment(m
     assert "본실사" in final["response"] or "승인" in final["response"], final["response"]
 
 
+def _group_super_first_handoff(request: str) -> str:
+    """The Group Super's first handoff for `request` (one model turn; nothing is run)."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.runtime.agent_core import SUPER_INVOCATION_CONTEXT
+    from app.runtime.llm import get_chat_model
+    from app.systems.group.agents import group_super
+
+    model = get_chat_model().bind_tools(group_super.TOOLS)
+    message = model.invoke([SystemMessage(f"{group_super.SYSTEM_PROMPT}\n\n{SUPER_INVOCATION_CONTEXT['direct']}"), HumanMessage(request)])
+    return message.tool_calls[0]["name"] if message.tool_calls else ""
+
+
+@pytest.mark.parametrize("request_text, handoff", [
+    # A meeting held at the subsidiary is the subsidiary's record, even when the group also discussed the deal.
+    ("거, 저번에 K전자에서 인수한다고 회의했던 거 있잖아. 그거 뭐였지?", "request_k_electronics_review"),
+    ("K전자 쪽 회의에서 나온 후속 업무들 지금 어떻게 되고 있어?", "request_k_electronics_review"),
+    ("그룹 투자심의 사전회의에서 뉴로엣지 건 뭐라고 정했지?", "delegate_to_meeting_agent"),
+])
+def test_group_super_routes_by_who_owns_the_record(request_text, handoff):
+    assert _group_super_first_handoff(request_text) == handoff
+
+
+_STATUS_REPORTED = (  # the gateway's history format (navitech agents/remote.py build_request)
+    "[이전 대화]\n사용자: K전자 뉴로엣지 인수 건 후속 업무는 지금 어떻게 되고 있어?\n"
+    "AI: K전자에 확인한 결과 9/15 AI 반도체 전략회의의 후속 업무 중 적정 기업가치 산정(박지훈 CFO, 기한 10/10)은 39일 지연 · 미착수, "
+    "핵심인력 Retention 확인(이서연 CTO)은 협의가 막혀 18일 지연, 고객사 의존도 확인은 진행 중입니다.\n\n[현재 요청]\n"
+)
+
+
+@pytest.mark.parametrize("utterance, mails", [
+    ("담당자한테 어떻게 된 건지 물어봐.", True),   # an indirect ask to check with the owners: the reminder goes out
+    ("이건 담당자들한테 직접 들어 봐야겠다.", True),
+    ("왜 이렇게 늦어지는 거지? 한번 확인해 봐야겠다.", True),  # a question with a wish to check: ask the owners why
+    ("왜 아직 안 끝났어?", False),              # a question alone: look it up, no mail
+    ("생각보다 많이 늦네.", False),             # a remark: answer only
+])
+def test_group_super_reads_a_reminder_intent_from_the_conversation(utterance, mails):
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.runtime.agent_core import SUPER_INVOCATION_CONTEXT
+    from app.runtime.llm import get_chat_model
+    from app.systems.group.agents import group_super
+
+    model = get_chat_model().bind_tools(group_super.TOOLS)
+    message = model.invoke([SystemMessage(f"{group_super.SYSTEM_PROMPT}\n\n{SUPER_INVOCATION_CONTEXT['direct']}"),
+                            HumanMessage(_STATUS_REPORTED + utterance)])
+    asks = [c["args"].get("request", "") for c in message.tool_calls if c["name"] == "request_k_electronics_review"]
+    assert any("메일" in a for a in asks) is mails, (utterance, message.tool_calls or message.content)
+    if mails:  # a self-contained order: the items and owners, not "그거"
+        assert "박지훈" in asks[0] or "기업가치" in asks[0]
+
+
+def test_no_reminder_goes_out_for_owners_nobody_named(monkeypatch):
+    """Group app → K app over A2A with the real LLM: only the deal was discussed, then "the owners need checking".
+    Whatever the Group Super writes, K mails only items its request names — here none, so no mail is queued."""
+    from fastapi.testclient import TestClient
+
+    from app.systems.group.app import app as group_app
+    from app.systems.group.tools import request_k_electronics_review as a2a_tool
+    from app.systems.k_electronics import MEETING_STORE
+    from app.systems.k_electronics.app import app as k_app
+
+    monkeypatch.setenv("MEETINGS_CONFIRM_GROUPS", "*")
+    monkeypatch.setattr(a2a_tool, "make_client", lambda: TestClient(k_app))
+    request = ("[이전 대화]\n사용자: K전자가 검토 중인 뉴로엣지 인수안에 대해 알려 줘.\n"
+               "AI: 요구가 2.8조 원으로 적정가치(2.0~2.3조 원)를 웃돌아 조건부 진행 의견입니다.\n\n[현재 요청]\n담당자한테 확인이 필요하겠는데.")
+    with TestClient(group_app).stream("POST", "/api/agents/group-super/run", json={"request": request}) as res:
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    assert events[-1]["type"] == "done", events[-1]
+    with MEETING_STORE.connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM outbox WHERE dedupe_key LIKE 'nudge:%%'").fetchone()["n"] == 0
+
+
 def test_group_super_direct_small_talk_does_not_call_a2a():
     from fastapi.testclient import TestClient
 

@@ -222,3 +222,12 @@ def test_tools_report_a_missing_store_as_a_result(monkeypatch):
     assert "MEETINGS_DATABASE_URL" in tool.invoke({"query": "뉴로엣지"})["error"]
     _, events = collect_events(lambda: tool.invoke({"query": "뉴로엣지"}))
     assert events == []
+
+
+def test_an_action_item_written_with_the_decisions_field_name_is_read():
+    # Models reuse a decision's `statement` for an item's text; the call goes through instead of failing again and again.
+    from app.library.tools.save_meeting_minutes import ActionItem
+    from app.systems.k_electronics.tools.save_meeting_minutes import save_meeting_minutes as tool
+
+    assert ActionItem.model_validate({"statement": "Retention 패키지 설계", "owner": "인사팀"}).model_dump()["text"] == "Retention 패키지 설계"
+    assert list(tool.tool_call_schema.model_json_schema()["$defs"]["ActionItem"]["required"]) == ["text"]  # the schema still says text

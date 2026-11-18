@@ -60,6 +60,7 @@ class RunContext:
     caller: str | None = None  # for origin "a2a": the requesting agent system
     principal: Principal | None = None  # the user the run acts for; read by tools, never stamped on events
     principal_token: str | None = None  # the gateway's signature of `principal`, forwarded over A2A as received
+    request: str | None = None  # for origin "a2a": the peer's request as received (tools check what it named; never stamped)
 
     def stamp(self, event: AgentEvent) -> AgentEvent:
         event.setdefault("run_id", self.run_id)
@@ -159,10 +160,11 @@ def new_run(
     caller: str | None = None,
     principal: Principal | None = None,
     principal_token: str | None = None,
+    request: str | None = None,
 ) -> RunContext:
     return RunContext(
         run_id=uuid.uuid4().hex, system=system, root_agent=root_agent, origin=origin, trace_id=trace_id, caller=caller,
-        principal=principal, principal_token=principal_token,
+        principal=principal, principal_token=principal_token, request=request,
     )
 
 

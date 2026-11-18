@@ -44,6 +44,12 @@ RECURSION_LIMIT = 10
 
 Invocation = Literal["delegation", "a2a", "direct"]
 
+# A direct chat's earlier turns arrive inside the request, before the current one ("[이전 대화] … [현재 요청] …",
+# the gateway's format: navitech agents/remote.py build_request). Delegations and A2A requests never carry them.
+HISTORY_CONTEXT = (
+    "요청 앞에 [이전 대화]가 붙어 오면 사용자와 앞서 나눈 대화다. 대상(기업 · 안건 · 업무 · 담당자 · 조건)을 이해하는 데만 쓰고 [현재 요청]만 수행한다. 이전 대화에서 이미 끝낸 메일 발송 · 저장 · 등록은 다시 하지 않는다 (조회는 필요하면 다시 한다)."
+)
+
 # Specialist agents: "delegation" (a Super Agent handed over a task) or "direct".
 INVOCATION_CONTEXT: dict[Invocation, str] = {
     "delegation": (
@@ -53,7 +59,7 @@ INVOCATION_CONTEXT: dict[Invocation, str] = {
     "direct": (
         "호출 맥락: 이 요청은 사용자와의 직접 대화다. 인사, 일반적인 개념 설명, 네 역할에 대한 질문에는 "
         "Tool 없이 자연스럽게 답한다. 실제 데이터나 기록에 근거해야 하는 업무 요청이면 등록된 Workflow Tool을 "
-        "사용한 뒤 그 결과에 근거해 답한다."
+        "사용한 뒤 그 결과에 근거해 답한다. " + HISTORY_CONTEXT
     ),
 }
 
@@ -67,7 +73,7 @@ SUPER_INVOCATION_CONTEXT: dict[Invocation, str] = {
     "direct": (
         "호출 맥락: 이 요청은 사용자와의 직접 대화다. 인사, 일반적인 개념 설명, 네 역할에 대한 질문에는 "
         "Tool 없이 자연스럽게 답한다. 데이터나 기록에 근거해야 하는 검토 요청이면 등록된 Tool로 담당 에이전트(전문 에이전트, "
-        "또는 다른 Agent System의 슈퍼에이전트)에게 맡긴 뒤 그 결과에 근거해 답한다."
+        "또는 다른 Agent System의 슈퍼에이전트)에게 맡긴 뒤 그 결과에 근거해 답한다. " + HISTORY_CONTEXT
     ),
 }
 
