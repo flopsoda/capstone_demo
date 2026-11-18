@@ -341,6 +341,35 @@ def test_group_super_routes_by_who_owns_the_record(request_text, handoff):
     assert _group_super_first_handoff(request_text) == handoff
 
 
+_STATUS_REPORTED = (  # the gateway's history format (navitech agents/remote.py build_request)
+    "[이전 대화]\n사용자: K전자 뉴로엣지 인수 건 후속 업무는 지금 어떻게 되고 있어?\n"
+    "AI: K전자에 확인한 결과 9/15 AI 반도체 전략회의의 후속 업무 중 적정 기업가치 산정(박지훈 CFO, 기한 10/10)은 39일 지연 · 미착수, "
+    "핵심인력 Retention 확인(이서연 CTO)은 협의가 막혀 18일 지연, 고객사 의존도 확인은 진행 중입니다.\n\n[현재 요청]\n"
+)
+
+
+@pytest.mark.parametrize("utterance, mails", [
+    ("담당자한테 어떻게 된 건지 물어봐.", True),   # an indirect ask to check with the owners: the reminder goes out
+    ("이건 담당자들한테 직접 들어 봐야겠다.", True),
+    ("왜 아직 안 끝났어?", False),              # a question: look it up, no mail
+    ("생각보다 많이 늦네.", False),             # a remark: answer only
+])
+def test_group_super_reads_a_reminder_intent_from_the_conversation(utterance, mails):
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.runtime.agent_core import SUPER_INVOCATION_CONTEXT
+    from app.runtime.llm import get_chat_model
+    from app.systems.group.agents import group_super
+
+    model = get_chat_model().bind_tools(group_super.TOOLS)
+    message = model.invoke([SystemMessage(f"{group_super.SYSTEM_PROMPT}\n\n{SUPER_INVOCATION_CONTEXT['direct']}"),
+                            HumanMessage(_STATUS_REPORTED + utterance)])
+    asks = [c["args"].get("request", "") for c in message.tool_calls if c["name"] == "request_k_electronics_review"]
+    assert any("메일" in a for a in asks) is mails, (utterance, message.tool_calls or message.content)
+    if mails:  # a self-contained order: the items and owners, not "그거"
+        assert "박지훈" in asks[0] or "기업가치" in asks[0]
+
+
 def test_group_super_direct_small_talk_does_not_call_a2a():
     from fastapi.testclient import TestClient
 
