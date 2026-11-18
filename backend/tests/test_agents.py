@@ -318,6 +318,29 @@ def test_group_super_asks_k_electronics_over_a2a_and_writes_the_group_judgment(m
     assert "본실사" in final["response"] or "승인" in final["response"], final["response"]
 
 
+def _group_super_first_handoff(request: str) -> str:
+    """The Group Super's first handoff for `request` (one model turn; nothing is run)."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.runtime.agent_core import SUPER_INVOCATION_CONTEXT
+    from app.runtime.llm import get_chat_model
+    from app.systems.group.agents import group_super
+
+    model = get_chat_model().bind_tools(group_super.TOOLS)
+    message = model.invoke([SystemMessage(f"{group_super.SYSTEM_PROMPT}\n\n{SUPER_INVOCATION_CONTEXT['direct']}"), HumanMessage(request)])
+    return message.tool_calls[0]["name"] if message.tool_calls else ""
+
+
+@pytest.mark.parametrize("request_text, handoff", [
+    # A meeting held at the subsidiary is the subsidiary's record, even when the group also discussed the deal.
+    ("거, 저번에 K전자에서 인수한다고 회의했던 거 있잖아. 그거 뭐였지?", "request_k_electronics_review"),
+    ("K전자 쪽 회의에서 나온 후속 업무들 지금 어떻게 되고 있어?", "request_k_electronics_review"),
+    ("그룹 투자심의 사전회의에서 뉴로엣지 건 뭐라고 정했지?", "delegate_to_meeting_agent"),
+])
+def test_group_super_routes_by_who_owns_the_record(request_text, handoff):
+    assert _group_super_first_handoff(request_text) == handoff
+
+
 def test_group_super_direct_small_talk_does_not_call_a2a():
     from fastapi.testclient import TestClient
 
