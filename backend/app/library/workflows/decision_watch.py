@@ -28,14 +28,14 @@ import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
-from datetime import date
+from datetime import date, datetime, time
 from typing import Any
 
 import psycopg
 
 from .meeting_context_retrieval import visible_meetings
 from .meeting_store import (
-    PERSON_LABEL, VISIBLE, MeetingStore, Viewer, can_confirm, confirm_denied, decision_ref, kst_date, kst_minute, time_label, today_kst,
+    KST, PERSON_LABEL, VISIBLE, MeetingStore, Viewer, can_confirm, confirm_denied, decision_ref, kst_date, kst_minute, time_label, today_kst,
 )
 from .outbox import queue
 
@@ -335,7 +335,7 @@ def review_decisions(query: str, topics: list[str] | None = None, *, store: Meet
             agenda.append(f"새 계획 {c['proposed']} 승인 여부 — {c['decision']} 결정 {c['decided']} 초과")
         title = f"{base['title']} 재검토"
         with store.connect() as conn:
-            booked = _booked_review(conn, viewer, title, [d["ref"] for d in decisions])
+            booked = _booked_review(conn, viewer, title, [d["ref"] for d in decisions], today)
             attendees = _attendees(conn, base["id"])
         if booked:
             out["scheduled_review"] = booked
@@ -344,15 +344,18 @@ def review_decisions(query: str, topics: list[str] | None = None, *, store: Meet
     return out
 
 
-def _booked_review(conn: psycopg.Connection, viewer: Viewer, title: str, refs: list[str]) -> dict[str, Any] | None:
+def _booked_review(conn: psycopg.Connection, viewer: Viewer, title: str, refs: list[str],
+                   today: date | None = None) -> dict[str, Any] | None:
     """A re-review already on the calendar: an upcoming meeting with that title or an agenda item naming one of the
-    decisions — so the same re-review is not proposed twice."""
+    decisions — so the same re-review is not proposed twice. "Upcoming" is from an hour ago, or, for a `today`
+    other than the real one (tests), from the start of that day."""
+    since = None if today in (None, today_kst()) else datetime.combine(today, time.min, KST)
     row = conn.execute(
         f"""SELECT m.code, m.title, m.starts_at, m.ends_at, m.location FROM meetings m
-            WHERE {VISIBLE} AND m.status = 'scheduled' AND m.starts_at >= now() - interval '1 hour'
+            WHERE {VISIBLE} AND m.status = 'scheduled' AND m.starts_at >= coalesce(%(since)s::timestamptz, now() - interval '1 hour')
               AND (m.title = %(title)s OR EXISTS (SELECT 1 FROM agenda_items a WHERE a.meeting_id = m.id AND a.title LIKE ANY(%(refs)s)))
             ORDER BY m.starts_at LIMIT 1""",
-        {**viewer.scope(), "title": title, "refs": [f"%{r}%" for r in refs]},
+        {**viewer.scope(), "title": title, "refs": [f"%{r}%" for r in refs], "since": since},
     ).fetchone()
     if not row:
         return None

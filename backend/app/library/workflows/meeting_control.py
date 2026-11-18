@@ -14,7 +14,7 @@ what the agent saw and did. Nothing here is stored anew; it is read from what th
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, time
 from typing import Any
 
 from .decision_watch import EFFECT_LABEL, WATCHED_KINDS
@@ -97,7 +97,9 @@ def control(*, store: MeetingStore, viewer: Viewer, today: date | None = None) -
                FROM action_items a WHERE a.meeting_id = ANY(%(ids)s) AND a.status <> 'cancelled' GROUP BY a.meeting_id""",
             {"ids": ids, "open": list(OPEN_ITEM), "today": today},
         )}
-        now = conn.execute("SELECT now() AS t").fetchone()["t"]
+        # 기준 시각: 실제 오늘이면 지금, 다른 날(테스트가 주입한 today)이면 그날 0시 — 주입한 날짜와 DB 시각을 섞지 않는다
+        now = (conn.execute("SELECT now() AS t").fetchone()["t"] if today == today_kst()
+               else datetime.combine(today, time.min, KST))
         owned = conn.execute(
             """SELECT a.code, a.text, a.status, a.due_date, a.meeting_id, a.owner_person_id, a.owner_unit_id,
                       p.display_name, p.title, p.email, (p.is_external OR coalesce(sd.is_external, false)) AS is_external,
