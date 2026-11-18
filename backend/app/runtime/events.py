@@ -8,6 +8,7 @@ Event shapes (all have "type"):
   agent_start      {agent, request}
   agent_token      {agent, text}        a piece of the agent's answer as the model writes it
   delegation_start {from, to, task}
+  delegation_skipped {from, to, reason}  the user may not use `to` (principal.agents); nothing ran
   tool_start       {agent, tool, args}
   tool_end         {agent, tool, result}
   agent_end        {agent, response}
@@ -58,6 +59,7 @@ class RunContext:
     trace_id: str | None = None  # shared by runs that belong to one end-to-end request
     caller: str | None = None  # for origin "a2a": the requesting agent system
     principal: Principal | None = None  # the user the run acts for; read by tools, never stamped on events
+    principal_token: str | None = None  # the gateway's signature of `principal`, forwarded over A2A as received
 
     def stamp(self, event: AgentEvent) -> AgentEvent:
         event.setdefault("run_id", self.run_id)
@@ -156,10 +158,11 @@ def new_run(
     trace_id: str | None = None,
     caller: str | None = None,
     principal: Principal | None = None,
+    principal_token: str | None = None,
 ) -> RunContext:
     return RunContext(
         run_id=uuid.uuid4().hex, system=system, root_agent=root_agent, origin=origin, trace_id=trace_id, caller=caller,
-        principal=principal,
+        principal=principal, principal_token=principal_token,
     )
 
 

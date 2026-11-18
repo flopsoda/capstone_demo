@@ -41,13 +41,17 @@ def request_review(
     caller: str,
     trace_id: str | None,
     principal: Principal | None = None,
+    principal_token: str | None = None,
     observe: Callable[[AgentEvent], None] | None = None,
 ) -> str:
     """Posts `request` to the peer's A2A surface and returns the peer's final answer.
-    `principal` (the user this run acts for) goes along so the peer applies its access rules to that user."""
+    `principal` (the user this run acts for) goes along so the peer applies its access rules to that user;
+    `principal_token` is the gateway's signature of it, which a peer with a signing key requires."""
     body: dict[str, Any] = {"request": request, "trace_id": trace_id, "caller": caller}
     if principal is not None:
         body["principal"] = principal.model_dump()
+    if principal_token:
+        body["principal_token"] = principal_token
     final: str | None = None
     finished = False
     try:

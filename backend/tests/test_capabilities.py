@@ -17,11 +17,14 @@ def test_registry_lists_capabilities_with_permissions():
         "meeting_context_analysis": ("skill", {"meeting"}),
         "meeting_minutes_writing": ("skill", {"meeting"}),
         "meeting_follow_up": ("skill", {"meeting"}),
+        "inbound_task_requests": ("skill", {"meeting"}),
         "run_meeting_context_retrieval": ("tool", {"meeting"}),
         "save_meeting_minutes": ("tool", {"meeting"}),
         "run_action_item_tracking": ("tool", {"meeting"}),
         "update_action_item": ("tool", {"meeting"}),
         "run_meeting_schedule": ("tool", {"meeting"}),
+        "manage_mail_outbox": ("tool", {"meeting"}),
+        "run_task_requests": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
         "news_briefing": ("skill", {"news"}),
         "run_news_briefing": ("tool", {"news"}),
@@ -38,17 +41,24 @@ def test_tool_definition_is_the_source_of_truth():
     assert set(cap.impl.args) == {"query", "topics", "meeting_id", "date_from", "date_to"}
     for name, args in {
         "save_meeting_minutes": {"title", "date", "summary", "decisions", "action_items", "attendees", "topics", "body",
-                                 "classification", "location", "meeting_id", "finalize", "correction_reason"},
+                                 "classification", "location", "meeting_id", "finalize", "correction_reason", "transcript_id",
+                                 "flag_reviews", "start_time", "end_time", "checkin_code", "subject"},
         "run_action_item_tracking": {"query", "owner", "status", "due_before", "due_within_days", "overdue_only", "meeting_id", "mine"},
-        "update_action_item": {"item_id", "status", "note", "due", "owner"},
+        "update_action_item": {"item_id", "status", "note", "due", "owner", "remind"},
         "run_meeting_schedule": {"action", "meeting_id", "title", "starts_at", "ends_at", "location", "attendees", "agenda",
                                  "classification", "carry_over_from", "date_from", "date_to", "mine"},
+        "manage_mail_outbox": {"action", "mail_ids", "meeting_id", "email", "note"},
+        "run_task_requests": {"action", "request_id", "title", "detail", "due", "suggested_owner", "source_ref", "classification",
+                              "owner", "meeting_id", "note", "status"},
     }.items():
         impl = get_capability(name).impl
         assert isinstance(impl, BaseTool) and set(impl.args) == args and get_capability(name).description == impl.description
     # Who the call acts for is never a model argument.
-    assert not any({"principal", "viewer", "email", "clearance"} & set(get_capability(n).impl.args) for n in (
-        "run_meeting_context_retrieval", "save_meeting_minutes", "run_action_item_tracking", "update_action_item", "run_meeting_schedule"))
+    # (manage_mail_outbox's `email` is a recipient address the user gives, not the requester's identity.)
+    assert not any({"principal", "viewer", "email", "clearance", "caller"} & set(get_capability(n).impl.args) for n in (
+        "run_meeting_context_retrieval", "save_meeting_minutes", "run_action_item_tracking", "update_action_item", "run_meeting_schedule",
+        "run_task_requests"))
+    assert not {"principal", "viewer", "clearance", "caller"} & set(get_capability("manage_mail_outbox").impl.args)
 
     cap = get_capability("run_company_risk_news_analysis")
     assert isinstance(cap.impl, BaseTool)
@@ -83,8 +93,9 @@ def test_each_agent_gets_only_its_subset():
         "delegate_to_advisory_agent",
     ]
     assert [c.name for c in capabilities_for("meeting")] == [
-        "meeting_context_analysis", "meeting_minutes_writing", "meeting_follow_up",
+        "meeting_context_analysis", "meeting_minutes_writing", "meeting_follow_up", "inbound_task_requests",
         "run_meeting_context_retrieval", "save_meeting_minutes", "run_action_item_tracking", "update_action_item", "run_meeting_schedule",
+        "manage_mail_outbox", "run_task_requests",
     ]
     assert [c.name for c in capabilities_for("news")] == [
         "external_risk_analysis", "news_briefing", "run_news_briefing", "run_company_risk_news_analysis",

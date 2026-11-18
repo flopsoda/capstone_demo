@@ -463,6 +463,14 @@ export function createAgentEventMapper(resolveAgent: AgentResolver = (_system, a
         ];
       }
 
+      case "delegation_skipped": {
+        // The user may not use `to` (principal.agents): nothing ran, the Super Agent answers without it.
+        const from = id(ev, ev.from);
+        const to = id(ev, ev.to);
+        if (!isAgentId(from) || !isAgentId(to)) return [];
+        return [{ type: "agent_status", agent: from, status: `${AGENTS[to].shortName} 사용 권한 없음 · 건너뜀` }];
+      }
+
       case "a2a_start": {
         // The Group's A2A Tool asks a peer system's Super Agent. The peer keeps its own id.
         const from = id(ev, ev.from);
@@ -539,6 +547,10 @@ export function createAgentEventMapper(resolveAgent: AgentResolver = (_system, a
 
       case "error":
       case "done":
+        return [];
+
+      default:
+        // An event type this UI does not know yet (a newer backend): show nothing rather than break the stream.
         return [];
     }
   };

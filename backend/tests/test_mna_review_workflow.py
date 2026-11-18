@@ -1,6 +1,8 @@
 """run_mna_review workflow: persona-specific emphasis over the same data, context
 signals, recommendation and conditions (no LLM needed)."""
 
+import json
+
 import pytest
 
 from functools import partial
@@ -25,7 +27,7 @@ CONTEXT = (
 )
 CANONICAL_CONDITIONS = {
     "인수 협상 기준가격 2.3조 원 이하",
-    "창업자 CTO 중심의 핵심 설계팀 retention 조건 확보",
+    "창업자 CTO 및 핵심 설계팀 retention 조건 확보",
     "코어NPU 특허소송 잠재손실 검증",
     "알파모바일 계약 지속 여부 검증",
 }
@@ -51,7 +53,7 @@ def test_persona_changes_emphasis_and_condition_order():
     assert cto["assessments"][0]["criterion"] == "technology_fit"
     assert ceo["assessments"][0]["criterion"] == "strategic_fit"
     assert cfo["conditions"][0] == "인수 협상 기준가격 2.3조 원 이하"
-    assert cto["conditions"][0] == "창업자 CTO 중심의 핵심 설계팀 retention 조건 확보"   
+    assert cto["conditions"][0] == "창업자 CTO 및 핵심 설계팀 retention 조건 확보"   
     assert [c["label"] for c in cfo["concerns"]] == ["요구가격과 적정가치", "수익성", "고객 집중도", "재무적 downside"]
     assert [c["label"] for c in cto["concerns"]] == ["핵심 기술인력 유지", "IP / 특허 리스크"]
     assert ceo["positives"][:2] == ["AI NPU 설계 역량이 K전자 전략과 부합", "자체 개발 대비 약 24~30개월 빠른 시장 진입"]
@@ -77,6 +79,27 @@ def test_context_signals_sharpen_evidence():
     assert [(a["verdict"], a["level"]) for a in with_ctx["assessments"]] == [
         (a["verdict"], a["level"]) for a in without["assessments"]
     ]
+
+
+def test_profitable_company_without_ip_dispute_is_described_as_such():
+    """Group's 브라이트셀: positive margin, no pending dispute, no founder CTO — the wording follows the data."""
+    from app.systems.group import DATA_DIR as GROUP_DATA
+
+    out = _review_acquisition("브라이트셀 인수 검토", "브라이트셀", "CFO", path=GROUP_DATA / "companies.json")
+    text = json.dumps(out, ensure_ascii=False)
+    assert "적자" not in text and "없음 특허소송" not in text and "창업자 CTO" not in text
+    assert "공정 개발 총괄 및 핵심 공정팀 retention 조건 확보" in out["conditions"]
+    assert not any("특허소송" in c for c in out["conditions"])
+    ip = next(a for a in out["assessments"] + out["other_considerations"] if a["criterion"] == "ip_risk")
+    assert ip["verdict"] == "positive" and ip["level"] == "LOW"
+    assert out["recommendation"] == "CONDITIONAL_PROCEED"
+
+
+def test_escalation_threshold_is_not_a_price_ceiling():
+    """'2조 원 초과 건은 본회의 상정' says where the deal is decided, not what price is acceptable."""
+    escalation = "그룹 투자심의위원회 사전회의: 인수금액 2조 원 초과 건은 본회의 안건으로 상정하고 분할 납입 조건을 우선 검토"
+    assert extract_context_signals(escalation)["price_ceiling_trillion_krw"] is None
+    assert extract_context_signals(escalation + ". CFO — 1.5조 원을 넘으면 가격 타당성 재검토")["price_ceiling_trillion_krw"] == 1.5
 
 
 def test_company_aliases_and_persona_aliases():

@@ -9,6 +9,7 @@ a row in action_item_updates with who reported it. Not agent-visible; no LangCha
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any
 
@@ -19,6 +20,8 @@ from .meeting_store import (
     VISIBLE,
     MeetingStore,
     Viewer,
+    can_confirm,
+    confirm_denied,
     day_label,
     kst_date,
     parse_date,
@@ -126,23 +129,28 @@ def update_action_item(
     note: str | None = None,
     due: str | None = None,
     owner: str | None = None,
+    remind: bool = False,
     today: date | None = None,
 ) -> dict[str, Any]:
     today = today or today_kst()
-    if not viewer.can_write:
-        return {"updated": False, "error": "다른 Agent System이 보낸 요청으로는 Action Item을 바꿀 수 없습니다."}
+    # 다른 Agent System(A2A)의 요청은 기록을 바꾸지 못한다. 예외는 독촉(remind)뿐: 상태 · 기한 · 담당은 그대로 두고
+    # 담당자에게 확인 요청 메일만 보낸다 (그 요청을 전달한 사용자에게 확정 권한이 있을 때, 하루 한 번 규칙 그대로).
+    a2a_remind = not viewer.can_write and remind and status is None and due is None and not owner
+    if not viewer.can_write and not a2a_remind:
+        return {"updated": False, "error": "다른 Agent System이 보낸 요청으로는 Action Item을 바꿀 수 없습니다 "
+                                           "(담당자에게 독촉 메일을 보내는 것만 할 수 있습니다)."}
     if status is not None and status not in ITEM_STATUSES:
         return {"updated": False, "error": f"status는 {', '.join(ITEM_STATUSES)} 중 하나여야 합니다."}
     try:
         new_due = parse_date(due)
     except ValueError:
         return {"updated": False, "error": "due는 YYYY-MM-DD 형식이어야 합니다."}
-    if status is None and not note and new_due is None and not owner:
-        return {"updated": False, "error": "바꿀 내용(status, note, due, owner)이 하나 이상 있어야 합니다."}
+    if status is None and not note and new_due is None and not owner and not remind:
+        return {"updated": False, "error": "바꿀 내용(status, note, due, owner) 또는 remind가 하나 이상 있어야 합니다."}
     code = (item_id or "").strip()
     with store.connect() as conn:
         row = conn.execute(
-            f"""SELECT a.id, a.status, a.due_date, {OWNER_LABEL} AS owner FROM action_items a JOIN meetings m ON m.id = a.meeting_id
+            f"""SELECT a.id, a.meeting_id, a.status, a.due_date, {OWNER_LABEL} AS owner FROM action_items a JOIN meetings m ON m.id = a.meeting_id
                 LEFT JOIN people p ON p.id = a.owner_person_id LEFT JOIN org_units u ON u.id = a.owner_unit_id
                 WHERE upper(a.code) = upper(%(code)s) AND {VISIBLE} FOR UPDATE OF a""",
             {"code": code, **viewer.scope()},
@@ -159,6 +167,9 @@ def update_action_item(
                 "error": f"Action Item '{code}'을 찾을 수 없거나 열람 권한이 없습니다.",
                 "candidates": [{"id": c["code"], "text": c["text"], "status": c["status"]} for c in candidates],
             }
+        # A2A 독촉은 전달된 사용자를 이 시스템의 쓰기 사용자와 같은 확정 권한 규칙으로 본다 (그룹 · 그 회의의 의장 · 간사)
+        if remind and not can_confirm(conn, viewer if viewer.can_write else replace(viewer, can_write=True), row["meeting_id"]):
+            return {"updated": False, "error": confirm_denied()}
         changes = []
         created: list[str] = []
         sets, values = ["updated_at = now()"], []
@@ -172,11 +183,35 @@ def update_action_item(
             values.append(new_due)
             changes.append(f"기한 {row['due_date'] or '없음'} → {new_due}")
         if owner:
-            owner_person, owner_unit = resolve_owner(conn, owner, created)
+            owner_person, owner_unit = resolve_owner(conn, owner, created, row["meeting_id"])
             sets.append("owner_person_id = %s, owner_unit_id = %s")
             values += [owner_person, owner_unit]
             changes.append(f"담당 {row['owner'] or '없음'} → {owner.strip()}")
-        conn.execute(f"UPDATE action_items SET {', '.join(sets)} WHERE id = %s", (*values, row["id"]))
+        if not a2a_remind:  # A2A 독촉은 할 일 자체를 건드리지 않는다
+            conn.execute(f"UPDATE action_items SET {', '.join(sets)} WHERE id = %s", (*values, row["id"]))
+        # 확정된 회의록의 할 일을 다른 사람에게 맡기거나 기한을 바꾸면, 그 담당자에게 업무 배정 메일을 다시 보낸다
+        # (초안의 할 일은 회의록을 확정할 때 함께 보냄). 같은 내용이면 다시 보내지 않는다 (outbox의 dedupe).
+        mails: list[dict[str, Any]] = []
+        reassigned = owner or (new_due is not None and new_due != row["due_date"])
+        if reassigned and conn.execute(
+            "SELECT 1 FROM action_items a JOIN minutes mi ON mi.meeting_id = a.meeting_id WHERE a.id = %s AND mi.status = 'final'",
+            (row["id"],),
+        ).fetchone():
+            from .outbox import queue_assignment_mail, summarize  # outbox → meeting_minutes → … 순환을 피함
+
+            mail_id = queue_assignment_mail(conn, row["id"], viewer)
+            mails = summarize(conn, [mail_id]) if mail_id else []
+        # 독촉: 사용자가 요청하면 기한 알림(매일 아침)과 별도로 담당자에게 지금 확인 요청 메일을 보낸다 (확정 권한이 있는 사람만)
+        remind_note = None
+        if remind:
+            from .outbox import queue_nudge_mail, summarize
+
+            nudge_id, remind_note = queue_nudge_mail(conn, row["id"], viewer, today, note)
+            if nudge_id:
+                mails += summarize(conn, [nudge_id])
+                changes.append("독촉 메일 (다른 Agent System 요청)" if a2a_remind else "독촉 메일")
+            elif a2a_remind or (status is None and not note and new_due is None and not owner):
+                return {"updated": False, "error": remind_note}
         text = "; ".join([*changes, note.strip()] if note else changes) or None
         conn.execute(
             "INSERT INTO action_item_updates (action_item_id, by_email, old_status, new_status, note) VALUES (%s, %s, %s, %s, %s)",
@@ -195,4 +230,6 @@ def update_action_item(
             for h in history
         ],
         "new_directory_entries": created,
+        "mail_queued": mails,
+        **({"remind_skipped": remind_note} if remind_note else {}),
     }

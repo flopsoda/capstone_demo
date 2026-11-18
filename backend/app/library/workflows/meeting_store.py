@@ -3,8 +3,12 @@
 A system binds its store with MeetingStore(schema, seed); that system's Tools read and write
 only that schema. The connection string comes from MEETINGS_DATABASE_URL. In deployment each
 system connects with its own DB role, which has no access to the other system's schema.
-On first use the schema (meeting_schema.sql) is created when missing and, while it has no
-meetings, seeded from the system's fixture file (data/meetings.json).
+On first use the schema (meeting_schema.sql, version 1) is created when missing, the numbered
+migrations in meeting_migrations/ (NNN_name.sql) it has not had yet are applied in order and
+recorded in its schema_migrations table, and, while it has no meetings (no staff directory), its
+meetings (staff directory) are seeded from the system's fixture file (data/meetings.json).
+MEETINGS_SEED_MEETINGS=0 leaves the sample meetings out (a deployment that starts empty); the staff
+directory is still seeded.
 
 Who is asking (`Viewer`) is decided by the Tool layer from the run — never from model
 arguments — and every query filters by it in SQL, before anything is read
@@ -32,6 +36,7 @@ from psycopg import sql
 from psycopg.rows import dict_row
 
 SCHEMA_FILE = Path(__file__).with_name("meeting_schema.sql")
+MIGRATIONS_DIR = Path(__file__).with_name("meeting_migrations")
 KST = timezone(timedelta(hours=9), "KST")  # no DST in Korea; dates and "overdue" are Korean dates
 DEFAULT_MEETING_TIME = time(10, 0)
 
@@ -52,6 +57,7 @@ class Viewer:
     groups: frozenset[str]
     clearance: int  # 0 none · 1 공개 · 2 사내 · 3 대외비 · 4 극비
     can_write: bool
+    user_id: str | None = None  # Keycloak user id, when the gateway knows it (QR check-in → voiceprint key)
 
     def scope(self) -> dict[str, Any]:
         return {"clearance": self.clearance, "groups": sorted(self.groups)}
@@ -72,7 +78,40 @@ def viewer_for(principal: Any | None, origin: str | None) -> Viewer:
     can_write = origin != "a2a"
     if principal is None:
         return Viewer(None, "", frozenset(), anonymous_clearance(), can_write)
-    return Viewer(principal.email, principal.name or "", frozenset(principal.groups), principal.clearance, can_write)
+    return Viewer(principal.email, principal.name or "", frozenset(principal.groups), principal.clearance, can_write,
+                  getattr(principal, "user_id", None))
+
+
+def confirm_groups() -> frozenset[str] | None:
+    """Groups whose members may finalize or correct minutes, review flagged statements, resend, cancel
+    or re-address outgoing mail and accept inbound task requests, on any meeting they can see
+    (MEETINGS_CONFIRM_GROUPS, comma-separated; "*" = every user who can write, for local demos)."""
+    raw = os.environ.get("MEETINGS_CONFIRM_GROUPS", "secretary,executive").strip()
+    if raw == "*":
+        return None
+    return frozenset(g.strip() for g in raw.split(",") if g.strip())
+
+
+def can_confirm(conn: psycopg.Connection, viewer: Viewer, meeting_id: int | None) -> bool:
+    """A confirm group member, or the meeting's own chair / secretary (matched by email)."""
+    if not viewer.can_write:
+        return False
+    groups = confirm_groups()
+    if groups is None or viewer.groups & groups:
+        return True
+    if meeting_id is None or not viewer.email:
+        return False
+    return conn.execute(
+        """SELECT 1 FROM meeting_participants mp JOIN people p ON p.id = mp.person_id
+           WHERE mp.meeting_id = %s AND mp.role IN ('chair', 'secretary') AND lower(p.email) = lower(%s)""",
+        (meeting_id, viewer.email),
+    ).fetchone() is not None
+
+
+def confirm_denied() -> str:
+    groups = confirm_groups() or frozenset()
+    return ("회의록 확정 · 정정, Compliance 검토, 메일 재발송 · 취소 · 주소 정정, 업무 요청 접수는 그 회의의 의장 · 간사"
+            + (f" 또는 {' · '.join(sorted(groups))} 그룹" if groups else "") + "만 할 수 있습니다.")
 
 
 # Same rule as gateway shared/access.retrieval_filter, for the meetings row aliased `m`.
@@ -127,9 +166,45 @@ class MeetingStore:
                     conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
                 if conn.execute("SELECT to_regclass(%s) AS t", (f"{self.schema}.meetings",)).fetchone()["t"] is None:
                     conn.execute(SCHEMA_FILE.read_text(encoding="utf-8"))
-                if self.seed is not None and conn.execute("SELECT count(*) AS n FROM meetings").fetchone()["n"] == 0:
-                    seed_fixture(conn, json.loads(self.seed.read_text(encoding="utf-8")))
+                migrate(conn)
+                if self.seed is not None:
+                    fixture = json.loads(self.seed.read_text(encoding="utf-8"))
+                    if seed_meetings() and conn.execute("SELECT count(*) AS n FROM meetings").fetchone()["n"] == 0:
+                        seed_fixture(conn, fixture)
+                    if not conn.execute("SELECT 1 FROM staff_directory LIMIT 1").fetchone():
+                        seed_directory(conn, fixture.get("directory", []))
             self._ready = True
+
+
+def seed_meetings() -> bool:
+    """Whether an empty store gets the fixture's sample meetings (MEETINGS_SEED_MEETINGS, default on)."""
+    return os.environ.get("MEETINGS_SEED_MEETINGS", "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def migrations() -> list[tuple[int, str, Path]]:
+    """(version, name, file) of meeting_migrations/NNN_name.sql, in order. Version 1 is meeting_schema.sql."""
+    found = []
+    for path in sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql")):
+        found.append((int(path.name[:3]), path.stem[4:], path))
+    return found
+
+
+def migrate(conn: psycopg.Connection) -> list[int]:
+    """Applies the migrations this schema has not had, in order, in the caller's transaction."""
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS schema_migrations (
+               version int PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())"""
+    )
+    conn.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'meeting_schema') ON CONFLICT DO NOTHING")
+    applied = {r["version"] for r in conn.execute("SELECT version FROM schema_migrations")}
+    done = []
+    for version, name, path in migrations():
+        if version in applied:
+            continue
+        conn.execute(path.read_text(encoding="utf-8"))
+        conn.execute("INSERT INTO schema_migrations (version, name) VALUES (%s, %s)", (version, name))
+        done.append(version)
+    return done
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +243,22 @@ def kst_minute(ts: datetime | None) -> str | None:
     return ts.astimezone(KST).strftime("%Y-%m-%d %H:%M") if ts else None
 
 
+def time_label(starts: datetime | None, ends: datetime | None) -> str | None:
+    """14:00~15:00 (KST), or just 14:00 without an end."""
+    if not starts:
+        return None
+    text = starts.astimezone(KST).strftime("%H:%M")
+    return f"{text}~{ends.astimezone(KST).strftime('%H:%M')}" if ends else text
+
+
+def parse_time_of_day(value: str | None) -> time | None:
+    """'14:05' (KST) → time; None/'' → None. Raises ValueError on anything else."""
+    if not value or not str(value).strip():
+        return None
+    hour, minute = str(value).strip().split(":")[:2]
+    return time(int(hour), int(minute))
+
+
 # ---------------------------------------------------------------------------
 # People · org units (the directory the records point to)
 # ---------------------------------------------------------------------------
@@ -185,18 +276,71 @@ def split_label(label: str) -> tuple[str, str | None]:
     return (m.group(1).strip(), m.group(2).strip()) if m else (label.strip(), None)
 
 
-def find_person(conn: psycopg.Connection, label: str) -> int | None:
-    name, title = split_label(label)
-    row = conn.execute(
-        "SELECT id FROM people WHERE lower(display_name) = lower(%s) AND (%s::text IS NULL OR title = %s) ORDER BY id LIMIT 1",
-        (name, title, title),
-    ).fetchone()
-    return row["id"] if row else None
+# Words in a label's parentheses that say what the person does at this meeting, not their job title.
+_ROLE_WORDS = {"의장": "chair", "간사": "secretary", "배석": "observer", "선택참석": "optional"}
+# A courtesy suffix after the name ("정전략 실장", "한상우 위원") is not part of the name.
+_COURTESY = re.compile(r"\s+(님|실장|위원|위원장|팀장|본부장|부장|차장|과장|대리|이사|상무|전무|부사장|사장|대표|교수|변호사|회계사)$")
 
 
-def person_id(conn: psycopg.Connection, label: str, created: list[str], *, title: str | None = None) -> int:
-    """Existing person by name (and title, if the label has one); otherwise a new directory entry."""
-    name, label_title = split_label(label)
+def _squash(text: str | None) -> str:
+    return re.sub(r"\s+", "", text or "").lower()
+
+
+def parse_person_label(label: str) -> tuple[str, str | None, str | None]:
+    """(name, title, meeting role) of a label: "김회장 (의장)" → chair with no title,
+    "박지훈 (K전자 CFO, 간사)" → title "K전자 CFO" and secretary, "정전략 실장" → name 정전략."""
+    name, inside = split_label(label)
+    role, parts = None, []
+    for part in (inside or "").split(","):
+        word = part.strip()
+        if _squash(word) in _ROLE_WORDS:
+            role = role or _ROLE_WORDS[_squash(word)]
+        elif word:
+            parts.append(word)
+    return _COURTESY.sub("", name).strip() or name, ", ".join(parts) or None, role
+
+
+# A voice the speech service could not match to an enrolled voiceprint: "화자 A", "화자 B", … in the order the voices
+# first speak (one letter, one voice, within a recording). Older transcripts said "미확인 화자 1".
+_UNNAMED = re.compile(r"화자 [A-Z]{1,2}|미확인 화자(?: \d+)?")
+
+
+def unnamed_speaker(label: str | None) -> bool:
+    """A transcript label that names no one: a voice of one recording, not a person to link or mail."""
+    return bool(label) and _UNNAMED.fullmatch(label.strip()) is not None
+
+
+def find_person(conn: psycopg.Connection, label: str, meeting_id: int | None = None) -> int | None:
+    """The person a label names: same name, and when the label has a title, the same title — or one that
+    contains or is contained in it ("K전자 CFO" ~ "CFO"). A voice label ("화자 A") names one entry of one
+    meeting (people.speaker_meeting_id): only that meeting's, never another recording's same letter."""
+    if unnamed_speaker(label):
+        if meeting_id is None:
+            return None
+        row = conn.execute("SELECT id FROM people WHERE display_name = %s AND speaker_meeting_id = %s ORDER BY id LIMIT 1",
+                           (label.strip(), meeting_id)).fetchone()
+        return row["id"] if row else None
+    name, title, _ = parse_person_label(label)
+    rows = conn.execute("SELECT id, title FROM people WHERE lower(display_name) = lower(%s) AND speaker_meeting_id IS NULL ORDER BY id",
+                        (name,)).fetchall()
+    if title:
+        rows = [r for r in rows if r["title"] == title] or [
+            r for r in rows if r["title"] and (_squash(r["title"]) in _squash(title) or _squash(title) in _squash(r["title"]))
+        ]
+    return rows[0]["id"] if rows else None
+
+
+def person_id(conn: psycopg.Connection, label: str, created: list[str], *, title: str | None = None,
+              meeting_id: int | None = None) -> int:
+    """Existing person by name (and title, if the label has one); otherwise a new directory entry.
+    A voice label gets an entry of `meeting_id` alone (see find_person)."""
+    if unnamed_speaker(label):
+        found = find_person(conn, label, meeting_id)
+        if found is not None:
+            return found
+        return conn.execute("INSERT INTO people (display_name, speaker_meeting_id) VALUES (%s, %s) RETURNING id",
+                            (label.strip(), meeting_id)).fetchone()["id"]
+    name, label_title, _ = parse_person_label(label)
     title = title or label_title
     found = find_person(conn, f"{name} ({title})" if title else name)
     if found is not None:
@@ -207,11 +351,15 @@ def person_id(conn: psycopg.Connection, label: str, created: list[str], *, title
     ).fetchone()["id"]
 
 
-def resolve_owner(conn: psycopg.Connection, label: str | None, created: list[str]) -> tuple[int | None, int | None]:
-    """(person_id, org_unit_id) for an Action Item owner label; a label nobody has is registered."""
+def resolve_owner(conn: psycopg.Connection, label: str | None, created: list[str],
+                  meeting_id: int | None = None) -> tuple[int | None, int | None]:
+    """(person_id, org_unit_id) for an Action Item owner label; a label nobody has is registered.
+    `meeting_id`: the meeting the item belongs to, which a voice label ("화자 A") is scoped to."""
     if not label or not label.strip():
         return None, None
     label = label.strip()
+    if unnamed_speaker(label):
+        return person_id(conn, label, created, meeting_id=meeting_id), None
     unit = conn.execute("SELECT id FROM org_units WHERE lower(name) = lower(%s)", (label,)).fetchone()
     if unit:
         return None, unit["id"]
@@ -268,7 +416,7 @@ def find_decision(conn: psycopg.Connection, ref: str, viewer: Viewer) -> int | N
 
 def seed_fixture(conn: psycopg.Connection, data: dict[str, Any]) -> None:
     """Fixture meetings become held meetings with final minutes. Optional fields:
-    classification (default 2), summary, decisions[].kind, action_items[].due."""
+    classification (default 2), summary, decisions[].kind, action_items[].due, action_items[].note (the latest progress note)."""
     created: list[str] = []
     for m in data["meetings"]:
         starts = datetime.combine(date.fromisoformat(m["date"]), DEFAULT_MEETING_TIME, KST)
@@ -291,9 +439,27 @@ def seed_fixture(conn: psycopg.Connection, data: dict[str, Any]) -> None:
         for n, a in enumerate(m["action_items"], 1):
             owner_person, owner_unit = resolve_owner(conn, a.get("owner"), created)
             status = a.get("status", "open")
-            conn.execute(
+            item = conn.execute(
                 """INSERT INTO action_items (code, meeting_id, text, owner_person_id, owner_unit_id, due_date, status, completed_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
                 (f"{m['id']}-A{n}", meeting, a["text"], owner_person, owner_unit, parse_date(a.get("due")), status,
                  starts + timedelta(days=7) if status == "done" else None),
-            )
+            ).fetchone()["id"]
+            if a.get("note"):
+                conn.execute(
+                    "INSERT INTO action_item_updates (action_item_id, old_status, new_status, note) VALUES (%s, 'open', %s, %s)",
+                    (item, status, a["note"]),
+                )
+
+
+def seed_directory(conn: psycopg.Connection, entries: list[dict[str, Any]]) -> None:
+    """The fixture's staff · contacts directory (name, email; optional title, department, organization, external).
+    `email_env`: an environment variable that, when set, replaces the fixture's (undeliverable, example.com) address —
+    how a demo points a person at a mailbox the team controls without committing that address."""
+    for e in entries:
+        email = (os.environ.get(e["email_env"], "").strip() if e.get("email_env") else "") or e["email"]
+        conn.execute(
+            """INSERT INTO staff_directory (name, title, department, organization, email, is_external)
+               VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (email) DO NOTHING""",
+            (e["name"], e.get("title"), e.get("department"), e.get("organization"), email, bool(e.get("external"))),
+        )

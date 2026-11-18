@@ -110,6 +110,9 @@ _FLAG_KEYWORDS: dict[str, tuple[str, ...]] = {
     "key_personnel": ("cto", "핵심인력", "핵심 인력", "핵심 설계", "이탈", "retention", "근속"),
 }
 _CEILING_WORDS = ("초과", "이하", "상한", "기준", "넘")
+# "2조 원 초과 건은 본회의 상정"처럼 금액이 심의 · 보고 경로를 정하는 기준이면 가격 상한이 아니다.
+_ESCALATION_WORDS = ("상정", "안건", "본회의", "심의", "보고")
+_PRICE_WORDS = ("가격", "타당성", "상한", "협상", "인수가")
 
 
 def extract_context_signals(context: str | None) -> dict[str, Any]:
@@ -122,12 +125,19 @@ def extract_context_signals(context: str | None) -> dict[str, Any]:
         before = text[max(0, m.start() - 14):m.start()]
         after = text[m.end():m.end() + 14]
 
-        if (
+        if not (
             any(w in after for w in _CEILING_WORDS)
             or any(w in before for w in ("상한", "기준가격", "한도"))
         ):
-            ceiling = float(m.group(1))
-            break
+            continue
+
+        # 금액이 심의 · 보고 경로를 정하는 기준이면 (가격 얘기 없이) 가격 상한이 아니다.
+        clause = re.split(r"[.,;·\n]", text[m.end() : m.end() + 40], maxsplit=1)[0]
+        if any(w in clause for w in _ESCALATION_WORDS) and not any(w in clause for w in _PRICE_WORDS):
+            continue
+
+        ceiling = float(m.group(1))
+        break
 
     ttm_years: int | None = None
     if any(k in lower for k in ("time-to-market", "시장 진입", "단축", "ttm")):
@@ -413,9 +423,15 @@ def _financial_downside(c: dict, s: dict) -> Assessment:
 
 
 
+def _retention_target(c: dict) -> str:
+    """Who a retention condition has to name: the data's retention_target, else the core team."""
+    t = c["technology"]
+    return t.get("retention_target") or t["core_team"]
+
+
 def _deal_terms(c: dict, s: dict) -> Assessment:
     high = c["valuation"]["fair_value_high_trillion_krw"]
-    core_team = c["technology"]["core_team"]
+    target = _retention_target(c)
 
     return _a(
         "deal_terms",
@@ -424,9 +440,9 @@ def _deal_terms(c: dict, s: dict) -> Assessment:
         "가격 상한과 핵심인력 유지를 거래 조건에 연계할 필요",
         [
             f"기준가격 {_trillion(high)} 이하를 협상 출발점으로 설정",
-            f"{core_team} 유지를 earn-out·락업 등 조건으로 검토",
+            f"{target} 유지를 earn-out·락업 등 조건으로 검토",
         ],
-        condition=f"{core_team} retention 조건 확보",
+        condition=f"{target} retention 조건 확보",
     )
 
 
@@ -454,7 +470,7 @@ def _key_talent_retention(c: dict, s: dict) -> Assessment:
         f"{core_team}이 이탈하면 인수로 얻는 기술 가치가 훼손될 수 있음",
         evidence,
         level="HIGH",
-        condition=f"{core_team} retention 조건 확보",
+        condition=f"{_retention_target(c)} retention 조건 확보",
     )
 
 
