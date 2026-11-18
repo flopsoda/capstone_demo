@@ -10,6 +10,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool, tool
 
 from ..workflows.action_items import update_action_item as update_item
+from ...runtime.events import current_run
 from ..workflows.meeting_store import MeetingStore
 from .meeting_access import current_viewer, store_call
 
@@ -43,8 +44,12 @@ def make_update_action_item(store: MeetingStore) -> BaseTool:
             다른 Agent System(그룹 등)이 보낸 요청으로는 remind만 할 수 있다 (status · due · owner는 바꿀 수 없다).
     """
         viewer = current_viewer()
+        run = current_run()
+        # Another system's reminder must name what it is about: its request as received, not the model's reading of it.
+        asked = run.request if run is not None and run.origin == "a2a" else None
         return store_call(lambda: update_item(
             store=store, viewer=viewer, item_id=item_id, status=status, note=note, due=due, owner=owner, remind=remind,
+            asked=asked,
         ))
 
     return update_action_item

@@ -30,6 +30,16 @@ from .meeting_store import (
 )
 
 _TOKEN = re.compile(r"[0-9A-Za-z가-힣]{2,}")
+# Words any reminder request uses: they do not say which item it is about.
+_GENERIC = frozenset({"확인", "검토", "요청", "업무", "진행", "상황", "보고", "관련", "메일", "담당", "담당자", "리마인더", "필요", "결과", "회의",
+                      "작성", "준비", "자료", "현황", "사항"})
+
+
+def names_item(request: str, text: str, owner: str | None) -> bool:
+    """Does `request` name this item — a distinctive word of its text, or its owner's name or title?"""
+    flat = re.sub(r"\s+", "", request).lower()
+    words = {w.lower() for w in _TOKEN.findall(f"{text} {owner or ''}")} - _GENERIC
+    return any(w in flat for w in words)
 
 
 def _item_rows(conn, where: str, params: dict[str, Any], *, limit: int | None = None) -> list[dict[str, Any]]:
@@ -131,7 +141,10 @@ def update_action_item(
     owner: str | None = None,
     remind: bool = False,
     today: date | None = None,
+    asked: str | None = None,
 ) -> dict[str, Any]:
+    """`asked`: for a reminder another system requested, its request as received — the reminder goes out only
+    for an item that request names (by the item's words or its owner)."""
     today = today or today_kst()
     # 다른 Agent System(A2A)의 요청은 기록을 바꾸지 못한다. 예외는 리마인더(remind)뿐: 상태 · 기한 · 담당은 그대로 두고
     # 담당자에게 확인 요청 메일만 보낸다 (그 요청을 전달한 사용자에게 확정 권한이 있을 때, 하루 한 번 규칙 그대로).
@@ -150,7 +163,7 @@ def update_action_item(
     code = (item_id or "").strip()
     with store.connect() as conn:
         row = conn.execute(
-            f"""SELECT a.id, a.meeting_id, a.status, a.due_date, {OWNER_LABEL} AS owner FROM action_items a JOIN meetings m ON m.id = a.meeting_id
+            f"""SELECT a.id, a.code, a.text, a.meeting_id, a.status, a.due_date, {OWNER_LABEL} AS owner FROM action_items a JOIN meetings m ON m.id = a.meeting_id
                 LEFT JOIN people p ON p.id = a.owner_person_id LEFT JOIN org_units u ON u.id = a.owner_unit_id
                 WHERE upper(a.code) = upper(%(code)s) AND {VISIBLE} FOR UPDATE OF a""",
             {"code": code, **viewer.scope()},
@@ -170,6 +183,9 @@ def update_action_item(
         # A2A 리마인더는 전달된 사용자를 이 시스템의 쓰기 사용자와 같은 확정 권한 규칙으로 본다 (그룹 · 그 회의의 의장 · 간사)
         if remind and not can_confirm(conn, viewer if viewer.can_write else replace(viewer, can_write=True), row["meeting_id"]):
             return {"updated": False, "error": confirm_denied()}
+        if a2a_remind and asked is not None and not names_item(asked, row["text"], row["owner"]):
+            return {"updated": False, "error": f"{row['code']}: 요청에 이 업무('{row['text']}')나 담당자({row['owner'] or '미정'})가 "
+                                                "나오지 않아 리마인더 메일을 보내지 않았습니다. 보낼 업무나 담당자를 지정해 달라고 회신하세요."}
         changes = []
         created: list[str] = []
         sets, values = ["updated_at = now()"], []

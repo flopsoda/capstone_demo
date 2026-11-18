@@ -670,3 +670,29 @@ def test_another_system_may_only_ask_for_a_reminder(meeting_db, directory, monke
     with STORE.connect() as conn:
         last = conn.execute("SELECT body FROM outbox WHERE dedupe_key LIKE 'nudge:%%' ORDER BY id DESC LIMIT 1").fetchone()["body"]
     assert "요청한 사람: 다른 Agent System(그룹 등)의 요청" in last
+
+
+def test_another_systems_reminder_goes_only_to_an_item_its_request_names(meeting_db, directory, monkeypatch):
+    monkeypatch.setenv("MEETINGS_CONFIRM_GROUPS", "secretary,executive")
+    draft = save()
+    save(meeting_id=draft["meeting_id"], finalize=True)
+    item = f"{draft['meeting_id']}-A1"  # 협력사별 재고 현황 보고, 박지훈 (CFO)
+    a2a = dict(store=STORE, viewer=GROUP_VIA_A2A, item_id=item, remind=True, today=date(2026, 10, 30))
+    vague = update_action_item(**a2a, asked="공급망 점검 건 담당자들에게 진행 상황 확인 메일을 보내 주세요.")
+    assert vague["updated"] is False and "지정" in vague["error"] and "협력사별 재고 현황 보고" in vague["error"]
+    named = update_action_item(**a2a, asked="협력사별 재고 현황 보고 담당자(박지훈 CFO)에게 진행 상황 확인 메일을 보내 주세요.")
+    assert named["updated"] and named["mail_queued"][0]["to"] == "박지훈 (CFO)"
+
+
+def test_the_tool_checks_an_a2a_reminder_against_the_request_as_received(meeting_db, directory, monkeypatch):
+    from app.runtime.events import new_run, stream_run
+    from app.systems.k_electronics.tools.update_action_item import update_action_item as tool
+
+    monkeypatch.setenv("MEETINGS_CONFIRM_GROUPS", "*")
+    draft = save()
+    save(meeting_id=draft["meeting_id"], finalize=True)
+    out = {}
+    run = new_run(system="k_electronics", root_agent="k_super", origin="a2a", caller="group",
+                  request="공급망 점검 건 담당자에게 확인 메일을 보내 주세요.")
+    list(stream_run(lambda: out.update(tool.invoke({"item_id": f"{draft['meeting_id']}-A1", "remind": True})), run=run, hub=None))
+    assert out["updated"] is False and "지정" in out["error"]  # the model's call alone is not enough: the request did not name it

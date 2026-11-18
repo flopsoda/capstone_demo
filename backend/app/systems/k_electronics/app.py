@@ -44,7 +44,8 @@ def a2a_run(body: A2ARequest) -> StreamingResponse:
     The stream also carries K's lifecycle, which the caller may relay for observation but
     must not feed to its agent as business data."""
     run = new_run(
-        system=SYSTEM, root_agent="k_super", origin="a2a", trace_id=body.trace_id, caller=body.caller, **run_identity(body)
+        system=SYSTEM, root_agent="k_super", origin="a2a", trace_id=body.trace_id, caller=body.caller, request=body.request,
+        **run_identity(body),
     )
     return ndjson_run(lambda: run_k_super(body.request, invocation="a2a"), run)
 

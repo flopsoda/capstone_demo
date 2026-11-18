@@ -371,6 +371,27 @@ def test_group_super_reads_a_reminder_intent_from_the_conversation(utterance, ma
         assert "박지훈" in asks[0] or "기업가치" in asks[0]
 
 
+def test_no_reminder_goes_out_for_owners_nobody_named(monkeypatch):
+    """Group app → K app over A2A with the real LLM: only the deal was discussed, then "the owners need checking".
+    Whatever the Group Super writes, K mails only items its request names — here none, so no mail is queued."""
+    from fastapi.testclient import TestClient
+
+    from app.systems.group.app import app as group_app
+    from app.systems.group.tools import request_k_electronics_review as a2a_tool
+    from app.systems.k_electronics import MEETING_STORE
+    from app.systems.k_electronics.app import app as k_app
+
+    monkeypatch.setenv("MEETINGS_CONFIRM_GROUPS", "*")
+    monkeypatch.setattr(a2a_tool, "make_client", lambda: TestClient(k_app))
+    request = ("[이전 대화]\n사용자: K전자가 검토 중인 뉴로엣지 인수안에 대해 알려 줘.\n"
+               "AI: 요구가 2.8조 원으로 적정가치(2.0~2.3조 원)를 웃돌아 조건부 진행 의견입니다.\n\n[현재 요청]\n담당자한테 확인이 필요하겠는데.")
+    with TestClient(group_app).stream("POST", "/api/agents/group-super/run", json={"request": request}) as res:
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    assert events[-1]["type"] == "done", events[-1]
+    with MEETING_STORE.connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM outbox WHERE dedupe_key LIKE 'nudge:%%'").fetchone()["n"] == 0
+
+
 def test_group_super_direct_small_talk_does_not_call_a2a():
     from fastapi.testclient import TestClient
 
