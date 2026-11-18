@@ -25,7 +25,7 @@ from .subjects import fill_missing
 NO_SUBJECT = "주제 없음"
 LOG_LIMIT = 40
 STATE_ORDER = {"alarm": 0, "warn": 1, "ok": 2}
-MAIL_LABEL = {"minutes": "회의록", "assignment": "업무 배정", "schedule": "회의 안내", "reminder": "기한 알림", "nudge": "업무 독촉",
+MAIL_LABEL = {"minutes": "회의록", "assignment": "업무 배정", "schedule": "회의 안내", "reminder": "기한 알림", "nudge": "리마인더",
               "alert": "전제 변화"}
 OPEN_ITEM = ("open", "in_progress", "blocked")
 
@@ -254,7 +254,7 @@ def _owners(owned, by_id, today: date) -> list[dict[str, Any]]:
         row["items"].append({"id": a["code"], "text": a["text"], "status": a["status"], "due": due.isoformat() if due else None,
                              "overdue": bool(due and due < today and a["status"] in OPEN_ITEM), "subject": m["subject"],
                              "meeting": {"id": m["code"], "title": m["title"], "date": kst_date(m["starts_at"])},
-                             # 마지막 기록 (담당자가 메일로 알린 메모, 독촉 · 기한 변경 등)
+                             # 마지막 기록 (담당자가 메일로 알린 메모, 리마인더 · 기한 변경 등)
                              "last": {"note": a["last_note"], "at": kst_minute(a["last_at"]), "by": a["last_by"]} if a["last_note"] else None})
     out = []
     for row in people.values():

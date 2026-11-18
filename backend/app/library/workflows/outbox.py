@@ -269,7 +269,7 @@ def queue_reminders(conn: psycopg.Connection, today: date) -> int:
 
 def queue_nudge_mail(conn: psycopg.Connection, item_id: int, viewer: Viewer, today: date,
                      note: str | None = None) -> tuple[int | None, str | None]:
-    """A reminder someone asks for now (독촉), apart from the daily ones: an open Action Item of final minutes with a
+    """A reminder someone asks for now (리마인더 · 진행 상황 확인), apart from the daily ones: an open Action Item of final minutes with a
     person owner → that owner, once a day per item. (mail id, None) or (None, why not)."""
     a = conn.execute(
         """SELECT a.id, a.code, a.text, a.status, a.due_date, a.owner_person_id, m.id AS meeting_id, m.title, m.starts_at,
@@ -278,7 +278,7 @@ def queue_nudge_mail(conn: psycopg.Connection, item_id: int, viewer: Viewer, tod
         (item_id,),
     ).fetchone()
     if a["status"] not in OPEN_STATUSES:
-        return None, f"{a['code']}은 이미 '{a['status']}' 상태라 독촉 메일을 보내지 않았습니다."
+        return None, f"{a['code']}은 이미 '{a['status']}' 상태라 리마인더 메일을 보내지 않았습니다."
     if a["owner_person_id"] is None:
         return None, f"{a['code']}은 담당이 사람이 아니라(부서 또는 미정) 보낼 사람이 없습니다. 담당자를 먼저 정해 주세요."
     if a["minutes"] != "final":
@@ -286,15 +286,15 @@ def queue_nudge_mail(conn: psycopg.Connection, item_id: int, viewer: Viewer, tod
     due = a["due_date"]
     late = (today - due).days if due and due < today else 0
     due_text = due.isoformat() if due else "미정"
-    subject = (f"[업무 독촉] {late}일 지남: {a['text']} (기한 {due_text})" if late
-               else f"[업무 확인 요청] {a['text']} (기한 {due_text})")
+    subject = (f"[진행 상황 확인] {late}일 지남: {a['text']} (기한 {due_text})" if late
+               else f"[진행 상황 확인] {a['text']} (기한 {due_text})")
     body = (f"{a['title']} ({kst_date(a['starts_at'])})에서 배정된 업무의 진행 상황을 확인해 달라는 요청입니다.\n\n"
             f"- {a['code']} {a['text']}\n- 기한: {due_text}{f' ({late}일 지남)' if late else ''}\n"
             + (f"- 요청 내용: {note.strip()}\n" if note and note.strip() else "")
             + f"\n요청한 사람: {requester(viewer)}\n완료했거나 기한이 바뀌었으면 회의지원 Agent에 알려 주세요.")
     mail_id = queue(conn, kind="reminder", meeting_id=a["meeting_id"], person_id=a["owner_person_id"], action_item_id=a["id"],
                     subject=subject, body=body, created_by=viewer.email, dedupe_key=f"nudge:{a['id']}:{today.isoformat()}")
-    return (mail_id, None) if mail_id else (None, f"{a['code']}의 독촉 메일은 오늘 이미 보냈습니다.")
+    return (mail_id, None) if mail_id else (None, f"{a['code']}의 리마인더 메일은 오늘 이미 보냈습니다.")
 
 
 def requester(viewer: Viewer) -> str:
@@ -493,7 +493,7 @@ def deliver_approved(conn: psycopg.Connection, *, limit: int = 20, connect=_conn
                 msg = EmailMessage()
                 msg["From"], msg["To"], msg["Subject"] = cfg["sender"], Address(display_name=r["to_name"], addr_spec=r["to_email"]), r["subject"]
                 msg["Date"], msg["Message-ID"] = formatdate(localtime=True), make_msgid(domain="navitech")
-                # 업무 배정 · 기한 알림 · 독촉 메일에는 담당자가 바로 진행 상황을 알리는 버튼 (mail_actions)
+                # 업무 배정 · 기한 알림 · 리마인더 메일에는 담당자가 바로 진행 상황을 알리는 버튼 (mail_actions)
                 urls = (mail_actions.links(r["action_item_id"], r["person_id"])
                         if r["kind"] in ("assignment", "reminder") and r["action_item_id"] and r["person_id"] else None)
                 if urls:

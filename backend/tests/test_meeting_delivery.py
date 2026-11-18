@@ -488,7 +488,7 @@ def test_a_reminder_asked_for_now(meeting_db, directory):
     assert not early["updated"] and "초안" in early["error"]  # not assigned before the minutes are final
     save(meeting_id=draft["meeting_id"], finalize=True)
     out = update_action_item(**{**nudge, "note": "이번 주 안에 공유 부탁드립니다"})
-    assert [(m["to"], m["subject"]) for m in out["mail_queued"]] == [("박지훈 (CFO)", "[업무 독촉] 2일 지남: 협력사별 재고 현황 보고 (기한 2026-10-28)")]
+    assert [(m["to"], m["subject"]) for m in out["mail_queued"]] == [("박지훈 (CFO)", "[진행 상황 확인] 2일 지남: 협력사별 재고 현황 보고 (기한 2026-10-28)")]
     again = update_action_item(**nudge)
     assert not again["updated"] and "오늘 이미" in again["error"]  # once a day
     with STORE.connect() as conn:
@@ -648,14 +648,14 @@ def test_another_system_may_only_ask_for_a_reminder(meeting_db, directory, monke
     for change in ({"status": "done"}, {"due": "2026-11-30"}, {"owner": "김민수"}, {"note": "진행 중"},
                    {"status": "done", "remind": True}):  # over A2A no field of the item may change
         out = update_action_item(viewer=GROUP_VIA_A2A, **a2a, **change)
-        assert out["updated"] is False and "독촉 메일을 보내는 것만" in out["error"], change
+        assert out["updated"] is False and "리마인더 메일을 보내는 것만" in out["error"], change
     nobody = Viewer(None, "", frozenset(), 4, False)  # forwarded without a user who may confirm
     assert "의장 · 간사" in update_action_item(viewer=nobody, remind=True, **a2a)["error"]
 
     out = update_action_item(viewer=GROUP_VIA_A2A, remind=True, note="지연 사유를 알려 주세요", **a2a)
     assert out["updated"] and [(m["to"], m["status"]) for m in out["mail_queued"]] == [("박지훈 (CFO)", "approved")]
     assert out["item"]["status"] == "open" and out["item"]["due"] == "2026-10-28"  # the item itself is untouched
-    assert out["history"][0]["note"] == "독촉 메일 (다른 Agent System 요청); 지연 사유를 알려 주세요"
+    assert out["history"][0]["note"] == "리마인더 메일 (다른 Agent System 요청); 지연 사유를 알려 주세요"
     again = update_action_item(viewer=GROUP_VIA_A2A, remind=True, note="다시", **a2a)
     assert again["updated"] is False and "오늘 이미" in again["error"]  # once a day, and nothing recorded
     with STORE.connect() as conn:
