@@ -36,7 +36,10 @@ def test_returns_three_neuroedge_risks_high_first(stores):
     ]
     customer = out["risks"][0]
     assert "알파모바일" in customer["headline"] and any("46%" in f for f in customer["key_facts"])
-    assert customer["source"]["date"] == "2026-10-02"
+    # The supply termination (11/17) follows up the 10/02 diversification report: one matter, led by the latest report.
+    assert customer["source"]["date"] == "2026-11-17" and "공급계약 중단" in customer["headline"]
+    assert [e["id"] for e in customer["timeline"]] == ["NEWS-2026-10-02-01", "NEWS-2026-11-17-01"]
+    assert customer["report_count"] == 2 and customer["trend"].startswith("지속")
 
 
 def test_company_aliases_match_english_and_mixed_forms(stores):
@@ -44,7 +47,7 @@ def test_company_aliases_match_english_and_mixed_forms(stores):
     for name in ("NeuroEdge", "neuroedge"):
         assert analyze_company_risk_news("risks", name)["matched"] == 3  # the stored analysis toward that name
     mixed = analyze_company_risk_news("risks", "뉴로엣지(NeuroEdge)")
-    assert mixed["coverage"]["stored_matches"] == 6  # found; analyzed afresh toward "뉴로엣지 neuroedge" (rules here)
+    assert mixed["coverage"]["stored_matches"] == 7  # found; analyzed afresh toward "뉴로엣지 neuroedge" (rules here)
 
 
 def test_topics_narrow_to_requested_categories(stores):
@@ -61,7 +64,7 @@ def test_no_topic_hint_returns_every_risk_of_the_company(stores):
 
 def test_other_companies_are_filtered_out(stores):
     out = analyze_company_risk_news("최대 고객사 리스크", "뉴로엣지", ["주요 고객"])
-    assert [r["source"]["id"] for r in out["risks"]] == ["NEWS-2026-10-02-01"]
+    assert [r["source"]["id"] for r in out["risks"]] == ["NEWS-2026-11-17-01"]
     out = analyze_company_risk_news("가동률", "오메가파운드리")
     assert [r["category"] for r in out["risks"]] == ["customer_concentration"]
 
@@ -148,8 +151,10 @@ def test_without_a_news_database_the_tool_answers_with_an_error():
 def test_the_registered_articles_keep_their_ids_dates_and_outlets(stores):
     out = analyze_company_risk_news("리스크", "뉴로엣지")
     customer = _risk(out, "customer_concentration")
-    assert customer["source"] == {"id": "NEWS-2026-10-02-01", "date": "2026-10-02", "name": "테크데일리 (가상)"}  # no link: no url
-    assert out["coverage"]["stored_matches"] == 6 and out["freshness"]["fetched_now"] == 0
+    assert customer["source"] == {"id": "NEWS-2026-11-17-01", "date": "2026-11-17", "name": "반도체경제 (가상)"}  # no link: no url
+    earlier = customer["timeline"][0]
+    assert (earlier["id"], earlier["date"], earlier["name"]) == ("NEWS-2026-10-02-01", "2026-10-02", "테크데일리 (가상)")
+    assert out["coverage"]["stored_matches"] == 7 and out["freshness"]["fetched_now"] == 0
 
 
 # ── Golden outputs: the scenario's results stay the same across refactors ──

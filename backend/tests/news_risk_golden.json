@@ -14,13 +14,14 @@
     {
      "category": "customer_concentration",
      "level": "HIGH",
-     "report_count": 1,
-     "outlet_count": 1,
-     "trend": "단일 보도",
+     "report_count": 2,
+     "outlet_count": 2,
+     "trend": "지속 (후속 보도 1건)",
      "escalated_by_coverage": false,
-     "source_id": "NEWS-2026-10-02-01",
+     "source_id": "NEWS-2026-11-17-01",
      "timeline": [
-      "NEWS-2026-10-02-01"
+      "NEWS-2026-10-02-01",
+      "NEWS-2026-11-17-01"
      ]
     },
     {
@@ -55,18 +56,18 @@
    ],
    "tone": [
     [
+     "반도체경제 (가상)",
+     3,
+     0,
+     0,
+     "비우호"
+    ],
+    [
      "AI비즈 (가상)",
      2,
      1,
      0,
      "중립"
-    ],
-    [
-     "반도체경제 (가상)",
-     2,
-     0,
-     0,
-     "비우호"
     ],
     [
      "테크데일리 (가상)",
@@ -87,13 +88,14 @@
     {
      "category": "customer_concentration",
      "level": "HIGH",
-     "report_count": 1,
-     "outlet_count": 1,
-     "trend": "단일 보도",
+     "report_count": 2,
+     "outlet_count": 2,
+     "trend": "지속 (후속 보도 1건)",
      "escalated_by_coverage": false,
-     "source_id": "NEWS-2026-10-02-01",
+     "source_id": "NEWS-2026-11-17-01",
      "timeline": [
-      "NEWS-2026-10-02-01"
+      "NEWS-2026-10-02-01",
+      "NEWS-2026-11-17-01"
      ]
     },
     {
@@ -128,18 +130,18 @@
    ],
    "tone": [
     [
+     "반도체경제 (가상)",
+     3,
+     0,
+     0,
+     "비우호"
+    ],
+    [
      "AI비즈 (가상)",
      2,
      1,
      0,
      "중립"
-    ],
-    [
-     "반도체경제 (가상)",
-     2,
-     0,
-     0,
-     "비우호"
     ],
     [
      "테크데일리 (가상)",
@@ -191,18 +193,26 @@
     {
      "category": "customer_concentration",
      "level": "HIGH",
-     "report_count": 1,
-     "outlet_count": 1,
-     "trend": "단일 보도",
+     "report_count": 2,
+     "outlet_count": 2,
+     "trend": "지속 (후속 보도 1건)",
      "escalated_by_coverage": false,
-     "source_id": "NEWS-2026-10-02-01",
+     "source_id": "NEWS-2026-11-17-01",
      "timeline": [
-      "NEWS-2026-10-02-01"
+      "NEWS-2026-10-02-01",
+      "NEWS-2026-11-17-01"
      ]
     }
    ],
    "positive": [],
    "tone": [
+    [
+     "반도체경제 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ],
     [
      "테크데일리 (가상)",
      1,
@@ -549,7 +559,8 @@
     "NEWS-2026-09-30-01"
    ],
    [
-    "NEWS-2026-10-02-01"
+    "NEWS-2026-10-02-01",
+    "NEWS-2026-11-17-01"
    ],
    [
     "NEWS-2026-10-06-01"

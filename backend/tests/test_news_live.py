@@ -271,7 +271,7 @@ def test_semantic_hits_never_become_another_companys_risk(news_db, monkeypatch):
     assert r["coverage"]["search"]["mode"] == "hybrid" and r["coverage"]["search"]["semantic_only"] == 0
     reports = {t["id"] for x in r["risks"] for t in x["timeline"]}
     assert "NEWS-2026-09-18-01" not in reports  # 오메가파운드리's customer cut is close in meaning, not 뉴로엣지's risk
-    assert r["matched"] == 3 and emb.documents == 8  # the registered articles were embedded on this first request
+    assert r["matched"] == 3 and emb.documents == 9  # the registered articles were embedded on this first request
 
 
 def _local_embedding_model():
@@ -313,7 +313,7 @@ def test_the_seed_registers_once_and_keeps_its_ids(news_db):
     from app.systems.k_electronics import NEWS_STORE
 
     first = _counts(NEWS_STORE)
-    assert first["news_articles"] == 8 and first["news_events"] == 6
+    assert first["news_articles"] == 9 and first["news_events"] == 6  # the 11/17 report joins the 10/02 event
     NEWS_STORE.reset()  # a restart: the file is applied again
     assert _counts(NEWS_STORE) == first
     article = NEWS_STORE.get_article("NEWS-2026-10-08-01")
@@ -351,5 +351,5 @@ def test_registered_and_collected_articles_are_one_store(news_db, monkeypatch, t
     r = tool.invoke({"query": "뉴로엣지 리스크", "company": "뉴로엣지"})
     assert asked == ["art_" + __import__("hashlib").sha256(b"https://f.example/1").hexdigest()[:20]]  # the new one only
     categories = {x["category"]: x["source"]["id"] for x in r["risks"]}
-    assert categories["customer_concentration"] == "NEWS-2026-10-02-01" and categories["regulatory"].startswith("art_")
-    assert r["coverage"]["stored_matches"] == 7 and r["freshness"]["discovered_now"] == 1
+    assert categories["customer_concentration"] == "NEWS-2026-11-17-01" and categories["regulatory"].startswith("art_")
+    assert r["coverage"]["stored_matches"] == 8 and r["freshness"]["discovered_now"] == 1

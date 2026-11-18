@@ -6,6 +6,21 @@
   },
   "articles": [
     {
+      "id": "NEWS-2026-11-17-01",
+      "event": "alphamobile-npu-supplier-review",
+      "date": "2026-11-17",
+      "source": "반도체경제 (가상)",
+      "headline": "알파모바일, 뉴로엣지와 차세대 NPU 공급계약 중단 발표",
+      "summary": "뉴로엣지의 최대 고객사 알파모바일이 차세대 스마트폰용 NPU 공급계약을 중단한다고 발표했다. 알파모바일은 뉴로엣지 매출의 46%를 차지해 뉴로엣지의 매출 전망과 기업가치에 큰 영향이 예상된다. 알파모바일은 지난달 NPU 공급업체 다변화를 검토하는 것으로 알려진 바 있다.",
+      "companies": ["뉴로엣지", "NeuroEdge", "알파모바일", "AlphaMobile"],
+      "risk": { "category": "customer_concentration", "label": "고객 집중도", "level": "HIGH" },
+      "key_facts": [
+        "알파모바일, 뉴로엣지와의 차세대 NPU 공급계약 중단 발표",
+        "알파모바일은 뉴로엣지 매출의 46%를 차지하는 최대 고객사",
+        "10월 공급업체 다변화 검토 보도에 이어 계약 중단으로 이어짐"
+      ]
+    },
+    {
       "id": "NEWS-2026-10-02-01",
       "event": "alphamobile-npu-supplier-review",
       "date": "2026-10-02",
