@@ -308,3 +308,17 @@ def test_advisory_reads_the_graph_and_carries_it_into_its_review(kg, monkeypatch
     assert review["found"] and review["context_signals"]  # the KG's criterion reached the workflow's signals
     # the KG result reached the model as a tool message before it wrote the review call
     assert any("SUPPLIES_TO" in getattr(m, "content", "") for m in model.seen[1])
+
+
+def test_the_extractor_is_told_the_names_the_articles_are_linked_to(kg):
+    """A real model left 알파모바일 and AlphaMobile apart unless it was shown both names the stores link to the articles."""
+    prompts = []
+
+    def model(system, user):
+        prompts.append(user)
+        return Extractor()(system, user)
+
+    kg.sync(model)
+    supply = next(p for p in prompts if SUPPLY_EVENT in p)
+    linked = next(line for line in supply.splitlines() if line.startswith("기사에 연결된 이름:"))
+    assert {"AlphaMobile", "알파모바일", "NeuroEdge", "뉴로엣지"} <= {n.strip() for n in linked.split(":", 1)[1].split(",")}

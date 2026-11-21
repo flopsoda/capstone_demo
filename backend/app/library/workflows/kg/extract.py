@@ -16,7 +16,7 @@ from typing import Any
 
 from .resolve import PREDICATES, STATUSES, entity_type
 
-EXTRACTOR = "news-rel-v1"
+EXTRACTOR = "news-rel-v2"  # v2: the names the articles are linked to go into the prompt (one entity per thing)
 LEAD_CHARS = 400
 NOTICE_CHARS = 200
 MAX_ENTITIES = 15
@@ -38,9 +38,15 @@ def article_text(a: dict[str, Any]) -> str:
     return (a.get("summary") or "")[:LEAD_CHARS]
 
 
+def linked_names(articles: list[dict[str, Any]]) -> list[str]:
+    """Names the stores already link to the articles (the data file's companies, the analyses' entities)."""
+    return sorted({n for a in articles for n in (*(a.get("seeded_names") or []), *(a.get("entities") or [])) if n})
+
+
 def input_hash(event: dict[str, Any], articles: list[dict[str, Any]]) -> str:
     """What the model would read: the same input is never sent twice (kg_extractions)."""
-    payload = [event.get("title"), [(a["id"], a.get("date"), a.get("title"), article_text(a), a.get("key_facts") or []) for a in articles]]
+    payload = [EXTRACTOR, event.get("title"), linked_names(articles),
+               [(a["id"], a.get("date"), a.get("title"), article_text(a), a.get("key_facts") or []) for a in articles]]
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()[:32]
 
 
@@ -53,6 +59,8 @@ def prompt(event: dict[str, Any], articles: list[dict[str, Any]]) -> str:
             lines.append(f"  내용: {text}")
         if a.get("key_facts"):
             lines.append(f"  핵심 사실: {'; '.join(a['key_facts'][:6])}")
+    if names := linked_names(articles):
+        lines += ["", f"기사에 연결된 이름: {', '.join(names)}"]
     lines += ["", "관계 종류 (predicate):", *(f"- {k}: {v}" for k, v in PREDICATES.items()), "",
               '답 형식: {"entities": [{"name": "기사에 쓰인 이름", "type": "organization | person | product | other", '
               '"aliases": ["기사에 함께 쓰인 같은 대상의 다른 표기 (예: 영문명)"]}], '
@@ -61,7 +69,8 @@ def prompt(event: dict[str, Any], articles: list[dict[str, Any]]) -> str:
               '"article_ids": ["근거 기사 id"], "evidence": "근거 문장 (기사 그대로, 80자 이내)"}]}',
               "규칙:",
               "- entities에는 기사에 이름이 나온 기업 · 기관 · 인물 · 제품만 넣는다. '국내 가전사', '업계' 같은 일반 명사는 넣지 않는다.",
-              "- 같은 대상의 한글 · 영문 표기는 entity 하나로 쓰고 다른 표기는 aliases에 넣는다.",
+              "- 같은 대상의 한글 · 영문 표기는 entity 하나로 쓰고 다른 표기는 aliases에 넣는다. '기사에 연결된 이름'에 같은 대상의 "
+              "다른 표기가 있으면(예: 한글명과 영문명) 그 표기를 모두 aliases에 넣는다.",
               "- 관계는 기사가 사실로 전하는 것만 쓴다. 전망 · 추측은 쓰지 않고, 검토 · 계획 단계면 status를 planned로 한다.",
               "- status: 관계가 지금 유효하면 active, 중단 · 해지 · 철회 · 종료되었으면 ended.",
               "- 상태가 기사마다 다르면(예: 공급 중 → 공급 중단) 상태마다 관계를 따로 쓰고 date에 그 기사의 날짜를 쓴다.",

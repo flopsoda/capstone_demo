@@ -107,9 +107,9 @@ chat model로 관계를 뽑는다(결과 저장 · 재사용). 배경 작업(`ME
 처음 만들거나 바로 맞출 때는 CLI를 쓴다 (backend/에서):
 
 ```bash
-.venv/bin/python -m app.library.workflows.kg.build --meeting-schema kelec --news-schema kelec_news --aliases app/systems/k_electronics/data/companies.json
-.venv/bin/python -m app.library.workflows.kg.build --meeting-schema grp --news-schema grp_news --aliases app/systems/group/data/companies.json
-.venv/bin/python -m app.library.workflows.kg.build --meeting-schema kelec --news-schema kelec_news --aliases app/systems/k_electronics/data/companies.json --rebuild-only   # 모델 호출 없이 다시 해석
+.venv/bin/python -m app.library.workflows.kg.build --meeting-schema kelec --news-schema kelec_news --data app/systems/k_electronics/data
+.venv/bin/python -m app.library.workflows.kg.build --meeting-schema grp --news-schema grp_news --data app/systems/group/data
+.venv/bin/python -m app.library.workflows.kg.build --meeting-schema kelec --news-schema kelec_news --data app/systems/k_electronics/data --rebuild-only   # 모델 호출 없이 다시 해석
 ```
 
 Super Agent 대화 기억: 직접 대화(Group · K Super 탭, 배포에서는 Open WebUI의 Super Agent)를 사용자별로 저장해 다음 요청에서 관련된 과거 대화를 자동으로 찾아 붙입니다
