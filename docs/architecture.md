@@ -714,7 +714,11 @@ K Super
 delegate_to_advisory_agent(task)
     ↓
 Advisory Agent
-    ↓ LLM 판단 (persona 선택, task의 맥락을 context로 전달)
+    ↓ LLM 판단 (먼저 기업 지식 그래프 조회 — 2026-11-21)
+query_enterprise_kg(query, entities)
+    ↓
+그 기업을 다룬 회의 결정 · 보도된 관계 · 판정된 영향 (system의 KG)
+    ↓ LLM 판단 (persona 선택, task의 맥락 + 그래프에서 확인한 것을 context로 전달)
 run_mna_review(query, company, persona, context)
     ↓
 companies.json + persona 평가 기준 + context 신호
