@@ -1,6 +1,6 @@
 """Raw layer → resolved layer: which names are one entity, which claims are one fact, and where each fact stands.
 
-Rule based (VERSION "rules-v1"). Everything here is a pure function of the raw layer, so a better algorithm
+Rule based (VERSION "rules-v2"). Everything here is a pure function of the raw layer, so a better algorithm
 (embedding / LLM entity resolution, relation clustering, cross-event fact matching, contradiction models) replaces
 these functions and KGStore.rebuild(resolver=…) re-resolves the whole graph without calling a model again.
 A resolver is any object with the four functions below (this module is the default one):
@@ -24,7 +24,7 @@ from typing import Any
 
 from ..news.store import squeeze
 
-VERSION = "rules-v1"
+VERSION = "rules-v2"  # v2: a relation's state is checked against dates and the text, not taken from the model as is
 
 # Relations a news text may state (the extraction prompt lists them; anything else is OTHER with its own words kept).
 PREDICATES: dict[str, str] = {
@@ -53,8 +53,24 @@ SYNONYMS: dict[str, str] = {
 }
 INVERSES: dict[str, str] = {"CUSTOMER_OF": "SUPPLIES_TO", "BUYS_FROM": "SUPPLIES_TO", "ACQUIRED_BY": "ACQUIRES",
                             "SUED_BY": "SUES", "REGULATED_BY": "REGULATES", "EMPLOYS": "EXECUTIVE_OF"}
-# What a source says about a relation's state (extraction "status"). Only "ended" closes a fact.
-STATUSES = ("active", "ended", "planned", "unknown")
+# What a source says about a relation's state (extraction "status"). Only an "ended" that the rules accept closes a fact
+# (claim_state): an end dated after the report, or worded as planned or under review, is not an end.
+#   active      in force now (it may carry ends_on: a scheduled expiry, still in force until then)
+#   planned     agreed or announced, not started yet
+#   ended       stopped, cancelled, terminated or expired, on or before the report
+#   end_review  an end considered, threatened or announced but not settled (the relation is still in force)
+#   extended    renewed or extended (in force, ends_on the new expiry)
+STATUSES = ("active", "planned", "ended", "end_review", "extended", "unknown")
+# Words that tell what the model's "ended" really is. Korean business news writes an end as done (중단됐다 · 해지했다),
+# as scheduled (만료 예정 · 만료되며) or as considered (해지 검토 · 중단 가능성).
+# Each cue must sit right after an end word, so "실적 악화 가능성" in an article about a real termination is no review.
+_END = r"(?:종료|중단|해지|해제|철회|파기|취소|철수|만료|끝)"
+_DONE = re.compile(_END + r"\S{0,2}\s*(?:됐|되었|됨|돼|했|하였|시켰|났)")
+_FUTURE = re.compile(_END + r"\S{0,3}\s*(?:예정|될|된다|되며|하며|를 앞|을 앞|앞두|앞둔)|까지\s*(?:유효|이어|지속|계약)")
+_REVIEW = re.compile(_END + r"\S{0,3}\s*(?:검토|추진|예고|고려|타진|논의|협의|요구|경고|시사|저울질|방침|통보|가능성|우려|위기)"
+                     + "|" + _END + r"\S{0,2}\s*(?:할|될|하는|되는)\s*(?:수|가능성|방침|계획|전망)")
+_EXTEND = re.compile(r"연장|갱신|재계약")
+_LIFECYCLE = {"ended", "end_review", "extended"}  # states that update a relation reported before rather than start one
 
 TYPE_PREFIX = {"organization": "org", "person": "person", "org_unit": "unit", "product": "product", "other": "other"}
 _TYPE_ALIASES = {"company": "organization", "org": "organization", "organization": "organization", "institution": "organization",
@@ -222,6 +238,50 @@ def _date(value: Any) -> str | None:
     return str(value)[:10] if value else None
 
 
+def _day(value: Any) -> str | None:
+    """YYYY-MM-DD, YYYY-MM or YYYY as written (a contract may say only "2027년 6월"), else None."""
+    text = str(value or "").strip()[:10]
+    return text if re.fullmatch(r"\d{4}(-\d{2}(-\d{2})?)?", text) else None
+
+
+def _after(day: str | None, ref: str | None) -> bool:
+    """`day` lies after `ref`. A partial day is after only when its whole period is (2026-11 is not after 2026-11-18)."""
+    return bool(day and ref) and day[:len(ref)] > ref[:len(day)]
+
+
+def claim_state(claim: dict[str, Any]) -> dict[str, Any]:
+    """One reported claim's state, by explicit rules over what the model said (its status and dates) and the words
+    of the article: the model's "ended" is an end only if it is not dated after the report and not worded as
+    scheduled or considered. Returns status (STATUSES), reported (the report's date), ends_on (a scheduled expiry),
+    ended_on (when an accepted end happened), said (the model's own status) and rule (why the state differs)."""
+    q = claim.get("qualifiers") or {}
+    said = str(q.get("status") or "unknown")
+    status = said if said in STATUSES else "unknown"
+    reported = _day(q.get("reported_on")) or _date(claim.get("stated_at"))
+    date, ends_on = _day(q.get("date")), _day(q.get("ends_on"))
+    text = f"{q.get('expression') or ''} {claim.get('context') or ''}"
+    rule = None
+    if status == "ended":
+        when = date or ends_on
+        if _REVIEW.search(text) and not _DONE.search(text):
+            status, rule = "end_review", "검토 · 예고 표현: 종료가 확정되지 않음"
+        elif _after(when, reported):
+            status, ends_on, rule = "active", ends_on or when, "종료일이 보도일 뒤: 그때까지 유효"
+        elif _FUTURE.search(text) and not _DONE.search(text):
+            status, ends_on, rule = "active", ends_on or when, "예정 표현: 아직 종료되지 않음"
+    elif status == "active" and _REVIEW.search(text) and not _DONE.search(text):
+        status, rule = "end_review", "검토 · 예고 표현: 종료가 확정되지 않음"
+    elif status == "active" and _EXTEND.search(text):
+        status, rule = "extended", "연장 · 갱신 표현"
+    if status in ("active", "extended") and not ends_on and _after(date, reported) and (status == "extended" or _FUTURE.search(text)):
+        ends_on = date  # "2028년까지 연장": the model put the new expiry in date
+    ended_on = None
+    if status == "ended":  # the end's own day when the source gives a whole one not after the report, else the report's
+        ended_on = date if date and len(date) == 10 and not _after(date, reported) else reported
+    return {"status": status, "reported": reported, "ends_on": ends_on if status in ("active", "extended", "end_review") else None,
+            "ended_on": ended_on, "said": said, "rule": rule}
+
+
 def reconcile(predicate: str, fact_class: str, claims: list[dict[str, Any]]) -> dict[str, Any]:
     """Status and validity of one fact from the claims behind it (oldest first)."""
     claims = sorted(claims, key=lambda c: (_date(c.get("stated_at")) or "", c["id"]))
@@ -230,17 +290,38 @@ def reconcile(predicate: str, fact_class: str, claims: list[dict[str, Any]]) -> 
     latest_q = claims[-1].get("qualifiers") or {}
     out: dict[str, Any] = {"status": "active", "valid_from": first, "valid_to": None, "first_seen": first, "last_seen": last, "attrs": {}}
     if fact_class == "reported":
-        timeline = [{"date": _date(c.get("stated_at")), "status": (c.get("qualifiers") or {}).get("status", "unknown"),
-                     "expression": (c.get("qualifiers") or {}).get("expression")} for c in claims]
+        states = [claim_state(c) for c in claims]
+        timeline = []
+        for c, s in zip(claims, states):
+            entry = {"date": _date(c.get("stated_at")), "status": s["status"], "expression": (c.get("qualifiers") or {}).get("expression")}
+            if s["ends_on"]:
+                entry["ends_on"] = s["ends_on"]
+            if s["ended_on"] and s["ended_on"] != entry["date"]:
+                entry["ended_on"] = s["ended_on"]
+            if s["rule"]:
+                entry["model_status"], entry["rule"] = s["said"], s["rule"]
+            timeline.append(entry)
         expressions = sorted({t["expression"] for t in timeline if t["expression"]})
         at_last = {t["status"] for t in timeline if t["date"] == last} - {"unknown"}
         out["attrs"] = {"timeline": timeline, "expressions": expressions, "latest_status": timeline[-1]["status"]}
-        if "ended" in at_last and at_last & {"active", "planned"}:
+        if "ended" in at_last and at_last & {"active", "planned", "extended"}:
             out["status"] = "contradicted"  # the latest reports disagree: leave it to a person (or a better resolver)
         elif "ended" in at_last:
-            out["status"], out["valid_to"] = "ended", last
-            started = [t["date"] for t in timeline if t["status"] in ("active", "planned") and t["date"]]
+            out["status"] = "ended"
+            out["valid_to"] = min([s["ended_on"] for s in states if s["status"] == "ended" and s["reported"] == last and s["ended_on"]]
+                                  or [last])
+            started = [t["date"] for t in timeline if t["status"] in ("active", "planned", "extended") and t["date"]]
             out["valid_from"] = started[0] if started else None
+        else:
+            # In force. The expiry the latest report gives wins (an extension moves it); an end under review is
+            # kept until a later report says otherwise.
+            scheduled = [(s["reported"] or "", s["ends_on"], s["status"]) for s in states if s["ends_on"]]
+            if scheduled:
+                _, out["attrs"]["ends_on"], how = max(scheduled)
+                if how == "extended":
+                    out["attrs"]["extended"] = True
+            if "end_review" in at_last:
+                out["attrs"]["end_review_since"] = last
     elif predicate == "ASSIGNED_TO":
         out["attrs"] = {"item_status": latest_q.get("status"), "due": latest_q.get("due")}
         if latest_q.get("status") in ("done", "cancelled"):
@@ -252,6 +333,23 @@ def reconcile(predicate: str, fact_class: str, claims: list[dict[str, Any]]) -> 
     else:
         out["attrs"] = dict(latest_q)
     return out
+
+
+def _link_lifecycle(groups: dict[tuple[str, str, str, str], list[dict[str, Any]]], classes: dict[tuple[str, str, str, str], str]) -> None:
+    """A news event that only ends, puts under review or extends a relation (every claim in it is one of those) is
+    about a relation reported before, not a new one: its claims join the latest earlier fact of the same parties and
+    relation, so "2028년까지 연장" moves that contract's expiry instead of standing beside it. An event that starts a
+    relation (a second lawsuit, a new contract) stays its own fact; an update with nothing before it stays alone."""
+    def first_report(key: tuple[str, str, str, str]) -> str:
+        return min((_date(c.get("stated_at")) or "" for c in groups[key]), default="")
+
+    reported = [k for k in groups if classes[k] == "reported" and k[3]]
+    updates = sorted((k for k in reported if all(claim_state(c)["status"] in _LIFECYCLE for c in groups[k])), key=first_report)
+    for key in updates:
+        before = [k for k in reported if k[:3] == key[:3] and k != key and k not in updates and first_report(k) <= first_report(key)]
+        if before:
+            groups[max(before, key=first_report)].extend(groups.pop(key))
+            reported.remove(key)
 
 
 def build_facts(claims: Iterable[dict[str, Any]], endpoint: Callable[[str], str | None], resolver: Any = None) -> list[dict[str, Any]]:
@@ -270,6 +368,7 @@ def build_facts(claims: Iterable[dict[str, Any]], endpoint: Callable[[str], str 
         key = (s, predicate, o, r.instance_key(c))
         groups[key].append(c)
         classes[key] = c["claim_class"]
+    _link_lifecycle(groups, classes)
     facts = []
     for (s, p, o, ik), group in groups.items():
         state = r.reconcile(p, classes[(s, p, o, ik)], group)

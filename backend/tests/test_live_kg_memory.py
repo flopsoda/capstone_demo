@@ -115,3 +115,57 @@ def test_the_advisory_agent_builds_on_the_graph_with_the_real_model(meeting_db, 
     review = next(e for e in events if e["type"] == "tool_start" and e["tool"] == "run_mna_review")
     answer = next(e for e in events if e["type"] == "agent_end")["response"]
     assert "알파모바일" in (review["args"].get("context") or "") + answer, (review["args"], answer)
+
+
+def _article(id_, event, date, headline, summary, companies):
+    return {"id": id_, "event": event, "date": date, "source": "테크데일리 (가상)", "headline": headline, "summary": summary,
+            "companies": companies, "key_facts": []}
+
+
+# Made up for the test: one article per kind of relation state, the extension in an event of its own.
+STATES_NEWS = {"outlets": {"테크데일리 (가상)": "techdaily.example"}, "articles": [
+    _article("T-EXPIRY", "expiry", "2026-09-18", "브라이트셀, X모터스 배터리 공급계약 2027년 6월 만료 예정",
+             "브라이트셀은 완성차 고객 X모터스와의 배터리 공급계약이 2027년 6월 만료될 예정이라고 밝혔다. 현재 공급은 정상적으로 이뤄지고 있다.",
+             ["브라이트셀", "X모터스"]),
+    _article("T-ENDED", "ended", "2026-11-18", "델타센서, 오메가전자와 센서 공급계약 종료",
+             "델타센서는 오메가전자에 납품하던 센서 공급계약을 2026년 11월 17일부로 종료했다고 18일 공시했다.", ["델타센서", "오메가전자"]),
+    _article("T-REVIEW", "review", "2026-11-10", "베타모터스, 감마칩과 반도체 공급계약 해지 검토",
+             "감마칩으로부터 차량용 반도체를 공급받는 베타모터스가 감마칩과의 공급계약 해지를 검토 중인 것으로 알려졌다. 아직 최종 결정은 내려지지 않았다.",
+             ["베타모터스", "감마칩"]),
+    _article("T-SIGNED", "signed", "2026-09-01", "에타소재, 시그마전지에 양극재 공급계약 체결… 2027년 말까지",
+             "에타소재가 시그마전지에 양극재를 공급하는 계약을 체결했다. 계약 기간은 2027년 12월까지다.", ["에타소재", "시그마전지"]),
+    _article("T-EXTENDED", "extended", "2026-11-20", "에타소재-시그마전지 양극재 공급계약 2028년까지 연장",
+             "에타소재는 시그마전지와의 양극재 공급계약을 2028년 12월까지 연장했다고 20일 밝혔다.", ["에타소재", "시그마전지"]),
+]}
+
+
+@needs_model
+def test_the_real_model_and_the_rules_tell_expiry_end_review_and_extension_apart(meeting_db, news_db, tmp_path):
+    from app.library.workflows.kg.store import KGStore
+    from app.library.workflows.news.store import NewsStore
+    from app.systems.k_electronics import DATA_DIR, MEETING_STORE
+
+    (tmp_path / "news.json").write_text(__import__("json").dumps(STATES_NEWS, ensure_ascii=False), encoding="utf-8")
+    kg = KGStore(MEETING_STORE, NewsStore("test_kg_states", seed=tmp_path / "news.json"), aliases=DATA_DIR / "companies.json")
+    llm.get_chat_model.cache_clear()
+    stats = kg.sync(ask_model)
+    assert stats["llm_calls"] == 5 and stats["pending_extraction"] == 0, stats
+    with kg.connect() as conn:
+        facts = [dict(r) for r in conn.execute(
+            """SELECT s.label AS s, o.label AS o, f.status, f.valid_to, f.attrs FROM kg_facts f
+               JOIN kg_nodes s ON s.id = f.subject JOIN kg_nodes o ON o.id = f.object
+               WHERE f.fact_class = 'reported' AND f.predicate = 'SUPPLIES_TO'""")]
+
+    def between(a, b):
+        found = [f for f in facts if {a, b} <= {f["s"], f["o"]}]
+        assert len(found) == 1, (a, b, facts)
+        return found[0]
+
+    expiry = between("브라이트셀", "X모터스")
+    assert expiry["status"] == "active" and (expiry["attrs"].get("ends_on") or "").startswith("2027-06"), expiry
+    ended = between("델타센서", "오메가전자")
+    assert ended["status"] == "ended" and str(ended["valid_to"]) == "2026-11-17", ended
+    review = between("베타모터스", "감마칩")
+    assert review["status"] == "active" and review["attrs"].get("end_review_since") == "2026-11-10", review
+    extended = between("에타소재", "시그마전지")  # two events, one contract
+    assert extended["status"] == "active" and (extended["attrs"].get("ends_on") or "").startswith("2028"), extended

@@ -14,8 +14,9 @@ ENTERPRISE_KNOWLEDGE = Skill(
   (entities에 기업명). 위임받은 업무 문장에 회의 기준이나 뉴스가 이미 적혀 있어도 조회한다: 그래프는 그 문장에 없는 연결(바뀐 결정, 관계의 종료 시점,
   판정된 영향, 열린 후속 업무)과 출처를 준다. 일반 개념 질문에는 쓰지 않는다.
 - 결과는 근거별로 구분해 읽고 응답에서도 구분한다:
-  decisions · follow_ups는 회의에서 정한 것(결정 ref와 회의 id로 인용), reported_facts는 기사가 전한 관계(status가 ended면 끝난 관계이고
-  valid_to가 그 시점이다), assessed_impacts는 판정된 영향(effect broken이면 전제가 깨짐, at_risk면 흔들림, judged가 keywords면 낱말만 맞은 것이라 확인 필요),
+  decisions · follow_ups는 회의에서 정한 것(결정 ref와 회의 id로 인용), reported_facts는 기사가 전한 관계(state가 현재 상태다: status ended만 실제로 끝난 관계이고 valid_to가 그 시점이다.
+  ends_on이 있으면 그 날짜까지 유효한 관계(만료 예정)이고, end_review_since가 있으면 종료가 검토 · 예고되었을 뿐 확정되지 않은 관계다.
+  만료 예정이나 종료 검토를 '종료되었다'고 쓰지 않는다), assessed_impacts는 판정된 영향(effect broken이면 전제가 깨짐, at_risk면 흔들림, judged가 keywords면 낱말만 맞은 것이라 확인 필요),
   associations는 같은 기업을 다룰 뿐 영향이 판정되지 않은 연결이다. associations를 "영향을 주었다"고 단정하지 말고 "검토가 필요한 연관"으로 쓴다.
 - 인수 · 투자 검토에서 {REVIEW}를 부를 때는 그래프에서 확인한 회의 기준(가격 상한 · 조건 등), 보도된 관계의 변화(예: 최대 고객과의 공급 관계 종료),
   판정된 영향을 출처(결정 ref · 회의 id · 기사 날짜와 매체)와 함께 context에 넣는다. 위임받은 업무 문장에 같은 내용이 있으면 중복 없이 합친다.

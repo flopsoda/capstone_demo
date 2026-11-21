@@ -56,13 +56,14 @@ ANSWERS = {
 
 
 class Extractor:
-    def __init__(self):
+    def __init__(self, answers=None):
         self.calls = 0
+        self.answers = answers or ANSWERS
 
     def __call__(self, system, user):
         self.calls += 1
         first = user.split("\n", 1)[0] + "\n" + user
-        for words, answer in ANSWERS.items():
+        for words, answer in self.answers.items():
             if words in first:
                 return json.dumps(answer, ensure_ascii=False)
         return json.dumps({"entities": [], "relations": []})
@@ -322,3 +323,136 @@ def test_the_extractor_is_told_the_names_the_articles_are_linked_to(kg):
     supply = next(p for p in prompts if SUPPLY_EVENT in p)
     linked = next(line for line in supply.splitlines() if line.startswith("기사에 연결된 이름:"))
     assert {"AlphaMobile", "알파모바일", "NeuroEdge", "뉴로엣지"} <= {n.strip() for n in linked.split(":", 1)[1].split(",")}
+
+
+# ---------------------------------------------------------------------------
+# A relation's state: in force, in force until an expiry, an end under review, extended, ended (claim_state, reconcile)
+# ---------------------------------------------------------------------------
+
+
+def _claim(n, status, reported, expression, *, date=None, ends_on=None, event="E1", evidence="", predicate="SUPPLIES_TO"):
+    return {"id": f"c{n}", "claim_class": "reported", "subject": "org:a", "predicate_raw": predicate, "object": "org:b",
+            "event_ref": event, "stated_at": reported, "context": evidence or expression,
+            "qualifiers": {"status": status, "expression": expression, "date": date, "ends_on": ends_on,
+                           "reported_on": reported, "article_ids": []}}
+
+
+def _one_fact(*claims):
+    facts = resolve.build_facts(list(claims), lambda key: key)
+    assert len(facts) == 1, facts
+    return facts[0]
+
+
+def test_an_expiry_ahead_is_not_an_end():
+    """'2027년 6월 계약 만료 예정': still in force, ends_on the expiry. The model's misreading (status ended, dated by the
+    expiry) is caught by the date and by the words; the right reading (active, ends_on) means the same."""
+    misread = _one_fact(_claim(1, "active", "2026-09-18", "매출 52% 고객"),
+                        _claim(2, "ended", "2026-09-18", "공급계약이 2027년 6월 만료", date="2027-06-01",
+                               evidence="완성차 고객과의 공급계약이 2027년 6월 만료되며"))
+    assert (misread["status"], misread["valid_to"], misread["attrs"]["ends_on"]) == ("active", None, "2027-06-01")
+    assert misread["attrs"]["timeline"][1]["model_status"] == "ended" and misread["attrs"]["timeline"][1]["rule"]
+    no_words = _one_fact(_claim(1, "ended", "2026-09-18", "계약 만료", date="2027-06"))  # the date alone is enough
+    assert (no_words["status"], no_words["attrs"]["ends_on"]) == ("active", "2027-06")
+    worded = _one_fact(_claim(1, "ended", "2026-09-18", "공급계약 만료 예정", evidence="계약은 내년 6월 만료될 예정이다"))
+    assert worded["status"] == "active"  # no date given, the words say it is ahead
+    right = _one_fact(_claim(1, "active", "2026-09-18", "2027년 6월 계약 만료 예정", ends_on="2027-06"))
+    assert (right["status"], right["attrs"]["ends_on"]) == ("active", "2027-06")
+
+
+def test_an_end_that_happened_closes_the_relation():
+    """'2026년 11월 17일 공급계약 종료': ended, valid_to the day it ended (not the day of the report)."""
+    ended = _one_fact(_claim(1, "active", "2026-10-02", "최대 고객사"),
+                      _claim(2, "ended", "2026-11-18", "공급계약 종료", date="2026-11-17", evidence="알파모바일은 17일 공급계약을 종료했다"))
+    assert (ended["status"], ended["valid_from"], ended["valid_to"]) == ("ended", "2026-10-02", "2026-11-17")
+    # reviewed and then done, or done with a worry beside it, is still an end
+    assert _one_fact(_claim(1, "ended", "2026-11-17", "공급계약 해지", evidence="검토 끝에 공급계약을 해지했다"))["status"] == "ended"
+    assert _one_fact(_claim(1, "ended", "2026-11-17", "공급 중단",
+                            evidence="공급계약을 중단해 실적 악화 가능성이 커졌다"))["status"] == "ended"
+
+
+def test_an_end_under_review_is_not_an_end():
+    """'공급계약 해지를 검토 중': in force, with the end under review, whatever status the model gave."""
+    for status in ("ended", "end_review", "active"):
+        fact = _one_fact(_claim(1, "active", "2026-10-02", "최대 고객사"),
+                         _claim(2, status, "2026-11-10", "공급계약 해지 검토", evidence="알파모바일이 공급계약 해지를 검토 중인 것으로 알려졌다"))
+        assert (fact["status"], fact["valid_to"], fact["attrs"]["end_review_since"]) == ("active", None, "2026-11-10"), status
+    # a later report that it ended closes it; one that it goes on clears the review
+    closed = _one_fact(_claim(1, "end_review", "2026-11-10", "해지 검토"), _claim(2, "ended", "2026-11-17", "공급계약 중단"))
+    assert (closed["status"], closed["valid_to"]) == ("ended", "2026-11-17")
+    kept = _one_fact(_claim(1, "end_review", "2026-11-10", "해지 검토"), _claim(2, "active", "2026-11-20", "공급 유지"))
+    assert kept["status"] == "active" and "end_review_since" not in kept["attrs"]
+
+
+def test_an_extension_moves_the_expiry():
+    """'계약을 2028년까지 연장': in force, ends_on the new expiry, in the same event or in a later one."""
+    base = _claim(1, "active", "2026-09-18", "2027년 6월 만료 예정", ends_on="2027-06")
+    same = _one_fact(base, _claim(2, "active", "2026-12-01", "공급계약 2028년까지 연장", date="2028-12-31"))
+    assert (same["status"], same["attrs"]["ends_on"], same["attrs"]["extended"]) == ("active", "2028-12-31", True)
+    later = _one_fact(base, _claim(2, "extended", "2026-12-01", "계약 연장", ends_on="2028", event="E2"))
+    assert (later["status"], later["attrs"]["ends_on"], later["instance_key"]) == ("active", "2028", "E1")
+    assert len(later["claims"]) == 2  # the later event joined the contract it extends
+    # an end reported in a later event closes the earlier contract the same way
+    ended = _one_fact(base, _claim(2, "ended", "2026-11-17", "공급계약 중단", event="E2"))
+    assert (ended["status"], ended["valid_to"]) == ("ended", "2026-11-17")
+
+
+def test_new_matters_and_disagreements_stay_as_they_were():
+    """A second lawsuit is its own fact; reports of one day that disagree are left to a person."""
+    suits = resolve.build_facts([_claim(1, "active", "2026-09-24", "특허침해 소송", predicate="SUES"),
+                                 _claim(2, "active", "2026-09-30", "인력 빼가기 소송", predicate="SUES", event="E2")], lambda k: k)
+    assert len(suits) == 2
+    assert _one_fact(_claim(1, "active", "2026-11-17", "공급 지속"), _claim(2, "ended", "2026-11-17", "공급 중단"))["status"] == "contradicted"
+
+
+def test_the_state_in_words():
+    from app.library.workflows.kg.query import state_label
+
+    assert state_label("ended", "2026-11-17", {}, "2026-11-21") == "종료됨 (2026-11-17)"
+    assert state_label("active", None, {"ends_on": "2027-06"}, "2026-11-21") == "유효 · 2027-06 만료 예정"
+    assert "확인 필요" in state_label("active", None, {"ends_on": "2026-06"}, "2026-11-21")  # expiry passed, no report
+    assert "확정 아님" in state_label("active", None, {"end_review_since": "2026-11-10"}, "2026-11-21")
+    assert "연장됨" in state_label("active", None, {"ends_on": "2028", "extended": True}, "2026-11-21")
+
+
+EXPIRY = {SUPPLY_EVENT: {"entities": [NEUROEDGE, ALPHA], "relations": [
+    _relation("뉴로엣지", "SUPPLIES_TO", "알파모바일", "active", "2026-10-02", "NEWS-2026-10-02-01", "최대 고객사"),
+    # the misreading seen with a real model: an expiry given as "ended", dated by the expiry
+    _relation("뉴로엣지", "SUPPLIES_TO", "알파모바일", "ended", "2027-06-30", "NEWS-2026-10-02-01", "공급계약 2027년 6월 만료",
+              "공급계약은 2027년 6월 만료될 예정이다")]}}
+
+
+def test_a_misread_expiry_is_kept_in_force_and_dated_by_its_report(kg):
+    kg.sync(Extractor(EXPIRY))
+    supply = _facts("SUPPLIES_TO")
+    assert len(supply) == 1
+    assert (supply[0]["status"], supply[0]["valid_to"], supply[0]["attrs"]["ends_on"]) == ("active", None, "2027-06-30")
+    with kg.connect() as conn:  # the raw layer keeps what the model said, dated by the article that said it
+        raw = conn.execute("SELECT stated_at, qualifiers FROM kg_claims WHERE claim_class = 'reported' AND qualifiers->>'status' = 'ended'").fetchone()
+    assert str(raw["stated_at"]) == "2026-10-02" and raw["qualifiers"]["date"] == "2027-06-30"
+    fact = next(f for f in kg.query(EXEC, "뉴로엣지", ["뉴로엣지"])["reported_facts"] if f["predicate"] == "SUPPLIES_TO")
+    assert fact["status"] == "active" and fact["ends_on"] == "2027-06-30" and "만료 예정" in fact["state"]
+
+
+def test_data_written_before_the_fix_is_re_read_without_the_model(kg, monkeypatch):
+    """Claims the earlier projection wrote (dated by the expiry, under the earlier extractor) are re-read from the
+    cached extraction at the next sync: no model call, the expiry no longer ends the relation."""
+    from app.library.workflows.kg import extract, project
+
+    current = extract.EXTRACTOR, project.PROJECTOR
+    monkeypatch.setattr(extract, "EXTRACTOR", "news-rel-v2")
+    monkeypatch.setattr(project, "PROJECTOR", "kg-project-v1")
+    kg.sync(Extractor(EXPIRY))
+    with kg.connect() as conn:  # what the earlier projection wrote: the expiry as the report date, no report date kept
+        conn.execute("""UPDATE kg_claims SET stated_at = '2027-06-30', qualifiers = qualifiers - 'reported_on' - 'date'
+                        WHERE claim_class = 'reported' AND qualifiers->>'status' = 'ended'""")
+        conn.execute("UPDATE kg_facts SET status = 'ended', valid_to = '2027-06-30' WHERE predicate = 'SUPPLIES_TO'")
+    monkeypatch.setattr(extract, "EXTRACTOR", current[0])
+    monkeypatch.setattr(project, "PROJECTOR", current[1])
+    stats = kg.sync(None)
+    assert stats["llm_calls"] == 0 and stats["pending_extraction"] > 0  # waits for the new extractor, keeps the old answer
+    supply = _facts("SUPPLIES_TO")
+    assert len(supply) == 1 and (supply[0]["status"], supply[0]["attrs"]["ends_on"]) == ("active", "2027-06-30")
+    assert supply[0]["resolver"] == resolve.VERSION
+    model = Extractor()
+    kg.sync(model)  # the model answers under the new extractor: its reading replaces the old one
+    assert model.calls > 0 and _facts("SUPPLIES_TO")[0]["status"] == "ended"

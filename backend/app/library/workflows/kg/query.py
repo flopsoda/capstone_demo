@@ -12,11 +12,12 @@ inside the SQL, before anything is read. News is public, as in the news Tools.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import psycopg
 
-from ..meeting_store import VISIBLE, Viewer
+from ..meeting_store import KST, VISIBLE, Viewer
 from . import project
 from .resolve import normalize
 
@@ -27,7 +28,26 @@ MAX_ASSOCIATIONS = 8
 
 LEGEND = ("decisions · follow_ups는 회의 기록(확정 회의록)이 직접 담은 사실, reported_facts는 기사가 전한 관계(사건별, 기사에서 추출), "
           "assessed_impacts는 결정 감시가 기사와 결정의 전제를 대조해 판정한 영향, associations는 같은 기업 · 인물을 다룰 뿐 "
-          "영향 여부를 판정하지 않은 연결이다.")
+          "영향 여부를 판정하지 않은 연결이다. reported_facts의 state가 관계의 현재 상태다: 만료 예정일(ends_on)이 있거나 "
+          "종료가 검토 · 예고된 관계는 아직 유효하며, 실제로 끝난 관계만 status ended(valid_to가 종료일)다.")
+
+
+def state_label(status: str, valid_to: str | None, attrs: dict[str, Any], today: str) -> str:
+    """A reported relation's state in words: in force, in force until a scheduled expiry, in force with an end under
+    review, ended, or reports that disagree."""
+    if status == "ended":
+        return f"종료됨 ({valid_to})" if valid_to else "종료됨"
+    if status == "contradicted":
+        return "보도가 엇갈림 (확인 필요)"
+    parts = ["계획 단계" if attrs.get("latest_status") == "planned" else "유효"]
+    if ends_on := attrs.get("ends_on"):
+        if ends_on[:len(today)] < today[:len(ends_on)]:
+            parts.append(f"만료 예정일 {ends_on}이 지났으나 종료 보도 없음 (확인 필요)")
+        else:
+            parts.append(f"{ends_on} 만료 예정{' (연장됨)' if attrs.get('extended') else ''}")
+    if since := attrs.get("end_review_since"):
+        parts.append(f"종료 검토 · 예고 중, 확정 아님 ({since} 보도)")
+    return " · ".join(parts)
 
 
 def _visible(alias: str) -> str:
@@ -156,7 +176,7 @@ def query_graph(conn: psycopg.Connection, viewer: Viewer, query: str, names: lis
     article_rows = {r["id"]: r for r in conn.execute("SELECT id, label, attrs FROM kg_nodes WHERE type = 'article' AND id = ANY(%s)",
                                                       ([f"article:{i}" for f in reported for c in supports.get(f["id"], [])
                                                         for i in (c["qualifiers"] or {}).get("article_ids", [])],)).fetchall()}
-    reported_facts = []
+    reported_facts, today = [], datetime.now(KST).date().isoformat()
     for f in reported:
         reports = []
         for c in supports.get(f["id"], []):
@@ -167,7 +187,9 @@ def query_graph(conn: psycopg.Connection, viewer: Viewer, query: str, names: lis
                                     "title": r["label"], "url": r["attrs"].get("url")})
         reported_facts.append({
             "subject": f["s_label"], "predicate": f["predicate"], "object": f["o_label"], "status": f["status"],
+            "state": state_label(f["status"], _iso(f["valid_to"]), f["attrs"], today),
             "valid_from": _iso(f["valid_from"]), "valid_to": _iso(f["valid_to"]),
+            "ends_on": f["attrs"].get("ends_on"), "end_review_since": f["attrs"].get("end_review_since"),
             "expressions": f["attrs"].get("expressions", []), "timeline": f["attrs"].get("timeline", []),
             "event": event_info.get(f"event:{f['instance_key']}", {"id": f["instance_key"]}),
             "reports": reports, "evidence": [c["context"] for c in supports.get(f["id"], []) if c["context"]][:3]})

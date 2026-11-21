@@ -30,7 +30,7 @@ from ..meeting_store import KST, decision_ref, kst_date, unnamed_speaker
 from . import extract
 from .resolve import stable_id
 
-PROJECTOR = "kg-project-v1"
+PROJECTOR = "kg-project-v2"  # v2: a reported claim is dated by its report (reported_on); the model's dates are kept apart
 DICT = "dict-v1"
 
 Ask = Callable[[str, str], str]
@@ -342,24 +342,27 @@ class Budget:
         return True
 
 
-def _extraction(conn: psycopg.Connection, data: dict[str, Any], ask: Ask | None, budget: Budget) -> dict[str, Any] | None:
-    """The event's extraction: cached, or asked now when a model and budget are there, else None (asked next time)."""
+def _extraction(conn: psycopg.Connection, data: dict[str, Any], ask: Ask | None, budget: Budget) -> tuple[dict[str, Any] | None, bool]:
+    """(the event's extraction, whether it is current). Current: cached for this input and extractor, or asked now
+    when a model and budget are there. Otherwise the event's latest earlier extraction (an older extractor, fewer
+    articles) stands in until the model answers, so a new extractor version does not empty the graph meanwhile."""
     event, articles = data["event"], data["articles"]
     h = extract.input_hash(event, articles)
     row = conn.execute("SELECT output FROM kg_extractions WHERE event_id = %s AND extractor = %s AND input_hash = %s",
                        (event["id"], extract.EXTRACTOR, h)).fetchone()
     if row:
-        return row["output"]
-    if ask is None or not budget.take():
-        return None
-    try:
-        output = extract.parse(ask(extract.SYSTEM, extract.prompt(event, articles)), [a["id"] for a in articles])
-    except Exception:  # an unreadable answer or a model that is down: the event waits for the next pass
-        budget.failed += 1
-        return None
-    conn.execute("INSERT INTO kg_extractions (event_id, extractor, input_hash, output) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                 (event["id"], extract.EXTRACTOR, h, Jsonb(output)))
-    return output
+        return row["output"], True
+    if ask is not None and budget.take():
+        try:
+            output = extract.parse(ask(extract.SYSTEM, extract.prompt(event, articles)), [a["id"] for a in articles])
+        except Exception:  # an unreadable answer or a model that is down: the event waits for the next pass
+            budget.failed += 1
+        else:
+            conn.execute("INSERT INTO kg_extractions (event_id, extractor, input_hash, output) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                         (event["id"], extract.EXTRACTOR, h, Jsonb(output)))
+            return output, True
+    row = conn.execute("SELECT output FROM kg_extractions WHERE event_id = %s ORDER BY created_at DESC LIMIT 1", (event["id"],)).fetchone()
+    return (row["output"] if row else None), False
 
 
 def project_news_event(conn: psycopg.Connection, data: dict[str, Any], index: list[Alias], fp: str, ask: Ask | None,
@@ -371,7 +374,7 @@ def project_news_event(conn: psycopg.Connection, data: dict[str, Any], index: li
     current = stored_hash(conn, "news_event", event["id"])
     if current == f"{base}|x" or (current == f"{base}|-" and (ask is None or budget.used >= budget.calls)):
         return "unchanged"
-    extraction = _extraction(conn, data, ask, budget)
+    extraction, current = _extraction(conn, data, ask, budget)
     src = Source("news_event", event["id"])
     ev = src.node(f"event:{event['id']}", "news_event", event["title"],
                   {"id": event["id"], "first_published": kst_date(event["first_published"]),
@@ -397,10 +400,21 @@ def project_news_event(conn: psycopg.Connection, data: dict[str, Any], index: li
                 named[n] = key
             src.claim(ev, "MENTIONS", key, extractor=extract.EXTRACTOR, stated_at=latest, meeting=False)
         for r in extraction["relations"]:
-            when = r["date"] or max((dates[i] for i in r["article_ids"] if dates.get(i)), default=latest)
+            # Dated by its report: the latest article it cites, else the model's date if it can be a report's (a whole
+            # day not after the event's last article), else the event's last article. A date the model gives beyond
+            # that ("2027년 6월 만료") is a date in the relation, kept as said; the resolver reads it (claim_state).
+            cited = [dates[i] for i in r["article_ids"] if dates.get(i)]
+            said = r.get("date")
+            if cited:
+                reported = max(cited)
+            elif said and len(said) == 10 and latest and said <= latest:
+                reported = said
+            else:
+                reported = latest
             src.claim(named[r["subject"]], r["predicate"], named[r["object"]], cls="reported", extractor=extract.EXTRACTOR,
-                      event_ref=event["id"], stated_at=when, context=r["evidence"], meeting=False,
-                      qualifiers={"status": r["status"], "expression": r["expression"], "article_ids": r["article_ids"]},
-                      local=f"{r['status']}|{when}|{','.join(r['article_ids'])}|{r['expression']}")
-    write_source(conn, src, f"{base}|{'x' if extraction else '-'}")
-    return "extracted" if extraction else "updated"
+                      event_ref=event["id"], stated_at=reported, context=r["evidence"], meeting=False,
+                      qualifiers={"status": r["status"], "expression": r["expression"], "article_ids": r["article_ids"],
+                                  "date": said, "ends_on": r.get("ends_on"), "reported_on": reported},
+                      local=f"{r['status']}|{said}|{r.get('ends_on')}|{','.join(r['article_ids'])}|{r['expression']}")
+    write_source(conn, src, f"{base}|{'x' if current else '-'}")
+    return "extracted" if current else "updated"
