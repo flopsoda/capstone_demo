@@ -239,7 +239,7 @@ Advisory Agent  → run_mna_review · query_enterprise_kg
     발송 대기가 된 지 3일이 지난 메일은 늦게 보내지 않고 failed — 메일 서버를 나중에 설정했을 때 지난 안내가 한꺼번에 나가지 않도록),
     매일 `MEETINGS_DAILY_HOUR`(9시 KST)부터 기한 알림 · 주소 재조회 · 만료 transcript 삭제, system이 결정 감시를 주면 `MEETINGS_WATCH_INTERVAL`(600초)마다 새 기사 대조 (시작할 때 한 번 먼저). schema별 advisory lock.
   - **결정 감시 (2026-11-03, `decision_watch.py`, Tool `run_decision_review` · Skill `decision_review`, Group).** 회의록의 결정(결정 · 의결 · 기준)에 회의에서 밝힌 전제 · 조건을
-    `save_meeting_minutes`의 `decisions[].premises`(kind premise | condition, `review_when`, `watch` 단어)로 남긴다. 배경 작업이 기사 store(`data/news.json`, 시작할 때 읽어 둠)의 새 기사를
+    `save_meeting_minutes`의 `decisions[].premises`(kind premise | condition, `review_when`, `watch` 단어)로 남긴다. 배경 작업이 system 뉴스 저장소(데이터 파일로 등록된 기사와 피드로 모은 기사, 조회 기간의 최신 300건 — 2026-11-21; 저장소가 없으면 `data/news.json`)의 새 기사를
     `watch` 단어로 거른 뒤 system의 chat model에게 전제마다 broken · at_risk · none을 묻고(전제 × 기사 한 번씩, 모델 오류면 at_risk · 단어 일치), 흔들린 전제는 상태를 바꾸고
     그 회의 참석자에게 `alert` 메일을 (결정 · 기사마다 한 번) 보낸다. `run_decision_review(query, topics, decision_ref)`는 질문 · 새 계획과 관련된 결정을 하나씩 점수 매겨
     근거 발언 · 전제 상태 · 들어온 신호를 주고, 계획의 금액(조 · 억)을 결정 금액과 코드로 비교해 넘으면 `conflicts`, 전제가 흔들렸으면 재검토 회의안을 붙인다. 이후 결정이 이전 결정을 대신하면(`supersedes`) 이전 결정의 신호는 더 세지 않는다.
@@ -953,8 +953,8 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
 29. **Enterprise KG의 남은 점 (2026-11-21).** (a) 해석은 규칙 v1이다: 이름이 다르게 쓰인 같은 기업(약칭 · 오타)은 한 출처가 함께 적지 않으면 합쳐지지 않고,
     다른 뉴스 사건으로 나뉜 같은 사실은 합치지 않는다(보수적). 바꿀 자리는 `kg/resolve.py`의 네 함수다. (b) 보도끼리의 모순은 같은 날 상태가 엇갈릴 때만 표시하고,
     단일값 관계(대표이사 교체 등)의 자동 종료는 없다. (c) 뉴스 범위는 회사 데이터의 기업과 회의가 다루는 기업으로 한정한다 — 그 밖의 기업 기사는 그래프에 들어오지 않는다.
-    (d) 판정된 영향은 결정 감시(`premise_signals`)에서만 오는데, 결정 감시는 아직 system 뉴스 저장소가 아니라 `data/news.json`을 읽고 Group에서만 돈다
-    (`library/tools/run_decision_review.load_articles`). fixture 회의에는 전제가 없어, 전제를 적은 회의를 저장해야 판정된 영향이 생긴다. (e) 엔티티의 존재(이름)는
+    (d) 판정된 영향은 결정 감시(`premise_signals`)에서만 온다. 결정 감시는 system 뉴스 저장소를 읽지만(`run_decision_review.store_articles`) 배경 작업은
+    Group에서만 돈다 — K전자에서도 돌리려면 K의 결정 감시 바인딩과 알림 메일 동작을 함께 정해야 한다(미결정). fixture 회의에는 전제가 없어, 전제를 적은 회의를 저장해야 판정된 영향이 생긴다. (e) 엔티티의 존재(이름)는
     권한과 관계없이 보인다; 회의에서만 나온 기업이라도 그 회의를 볼 수 없는 사용자에게는 결정 · 연관 · 판정이 나오지 않을 뿐 이름은 찾아진다.
 
 ---
