@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ...library.workflows.kg.store import KGStore
 from ...library.workflows.meeting_store import MeetingStore
 from ...library.workflows.news.store import NewsStore
 
@@ -25,3 +26,6 @@ MEETING_STORE = MeetingStore("grp", seed=DATA_DIR / "meetings.json")
 # This system's news (articles, events, analyses): its own schema in the news database, seeded from
 # data/news.json; the publisher feeds add to it on every request and scheduled collection.
 NEWS_STORE = NewsStore("grp_news", seed=DATA_DIR / "news.json")
+# This system's Enterprise KG: built from its meeting records and its news (never another system's), in its own schema;
+# the companies of data/companies.json are its seed entities.
+KG_STORE = KGStore(MEETING_STORE, NEWS_STORE, aliases=DATA_DIR / "companies.json")

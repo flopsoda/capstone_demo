@@ -31,6 +31,8 @@ def test_registry_lists_capabilities_with_permissions():
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
         "run_mna_review": ("tool", {"advisory"}),
+        "enterprise_knowledge": ("skill", {"advisory"}),
+        "query_enterprise_kg": ("tool", {"advisory"}),
     }
 
 
@@ -100,7 +102,7 @@ def test_each_agent_gets_only_its_subset():
     assert [c.name for c in capabilities_for("news")] == [
         "external_risk_analysis", "news_briefing", "run_news_briefing", "run_company_risk_news_analysis",
     ]
-    assert [c.name for c in capabilities_for("advisory")] == ["mna_feasibility_review", "run_mna_review"]
+    assert [c.name for c in capabilities_for("advisory")] == ["mna_feasibility_review", "run_mna_review", "enterprise_knowledge", "query_enterprise_kg"]
     assert capabilities_for("group_super") == []
     for agent in ("meeting", "news", "advisory"):
         assert all(isinstance(s, Skill) for s in skills_for(agent))

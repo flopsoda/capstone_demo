@@ -5,6 +5,8 @@
                                                     delete expired transcripts
     every MEETINGS_WATCH_INTERVAL seconds (600)     the system's decision watch, when it gives one: new articles
                                                     against the premises of the decisions in force (decision_watch.py)
+    every KG_SYNC_INTERVAL seconds (600)            the system's Enterprise KG sync, when it gives one: changed meetings
+                                                    and news events into the graph (kg/store.py), after the watch
 
 Started only when MEETINGS_BACKGROUND_JOBS=1 (deployment) and the store is configured: tests and
 local runs never write on their own. Each pass takes a per-schema advisory lock, so two processes
@@ -52,17 +54,19 @@ def run_pass(store: MeetingStore, *, daily: bool) -> dict[str, int]:
 
 
 def start_meeting_jobs(store: MeetingStore, stop: threading.Event,
-                       watch: Callable[[], dict[str, int]] | None = None) -> threading.Thread | None:
+                       watch: Callable[[], dict[str, int]] | None = None,
+                       kg: Callable[[], dict] | None = None) -> threading.Thread | None:
     """`watch`: the system's decision watch pass (decision_watch.watch_news over its articles), every
-    MEETINGS_WATCH_INTERVAL seconds (600)."""
+    MEETINGS_WATCH_INTERVAL seconds (600). `kg`: the system's Enterprise KG sync pass, every KG_SYNC_INTERVAL seconds (600)."""
     if os.environ.get("MEETINGS_BACKGROUND_JOBS", "0") != "1" or not os.environ.get("MEETINGS_DATABASE_URL"):
         return None
     interval = max(10, _int_env("MEETINGS_DELIVERY_INTERVAL", 60))
     daily_hour = min(23, max(0, _int_env("MEETINGS_DAILY_HOUR", 9)))
     watch_every = max(60, _int_env("MEETINGS_WATCH_INTERVAL", 600))
+    kg_every = max(60, _int_env("KG_SYNC_INTERVAL", 600))
 
     def loop() -> None:
-        last_daily, last_watch = None, 0.0
+        last_daily, last_watch, last_kg = None, 0.0, 0.0
         while not stop.is_set():
             now = datetime.now(KST)
             daily = now.hour >= daily_hour and last_daily != now.date()
@@ -72,6 +76,11 @@ def start_meeting_jobs(store: MeetingStore, stop: threading.Event,
                     found = watch()
                     if any(found.values()):
                         log.info("decision watch (%s): %s", store.schema, found)
+                if kg and time.monotonic() - last_kg >= kg_every:
+                    last_kg = time.monotonic()
+                    synced = kg()
+                    if synced.get("meetings") or synced.get("news_events"):
+                        log.info("knowledge graph (%s): %s", store.schema, synced)
                 out = run_pass(store, daily=daily)
                 if daily and out:
                     last_daily = now.date()
@@ -85,6 +94,6 @@ def start_meeting_jobs(store: MeetingStore, stop: threading.Event,
 
     thread = threading.Thread(target=loop, name=f"meeting-jobs-{store.schema}", daemon=True)
     thread.start()
-    log.info("meeting jobs (%s) started: every %ss, daily from %02d:00 KST%s", store.schema, interval, daily_hour,
-             f", decision watch every {watch_every}s" if watch else "")
+    log.info("meeting jobs (%s) started: every %ss, daily from %02d:00 KST%s%s", store.schema, interval, daily_hour,
+             f", decision watch every {watch_every}s" if watch else "", f", knowledge graph every {kg_every}s" if kg else "")
     return thread

@@ -10,11 +10,12 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
+from ...library.tools.correct_transcript import ask_model
 from ...library.workflows.jobs import start_meeting_jobs
 from ...runtime.api import ndjson_run, run_identity, shutdown_signal, sse_events
 from ...runtime.events import new_run
 from ...runtime.schemas import A2ARequest, RunRequest
-from . import MEETING_STORE, SYSTEM
+from . import KG_STORE, MEETING_STORE, SYSTEM
 from .agents.advisory import run_advisory_agent
 from .agents.k_super import run_k_super
 from .agents.meeting import run_meeting_agent
@@ -23,7 +24,7 @@ from .agents.news import run_news_agent
 app = FastAPI(title="K Electronics agent system", version="0.5.0")
 # Observer streams end on shutdown so uvicorn --reload can restart; the meeting store's mail /
 # reminder jobs start with the app (only when MEETINGS_BACKGROUND_JOBS=1) and stop with it.
-STOP = shutdown_signal(app, on_start=lambda stop: start_meeting_jobs(MEETING_STORE, stop))
+STOP = shutdown_signal(app, on_start=lambda stop: start_meeting_jobs(MEETING_STORE, stop, kg=lambda: KG_STORE.watch_pass(ask_model)))
 
 
 @app.get("/api/health")

@@ -101,6 +101,17 @@ robots.txt를 지키고 차단 · 로그인 · 봇 확인 페이지는 우회하
 .venv/bin/python -m app.library.workflows.news.collect --schema grp_news --watch 30      # 그룹 저장소에 30분마다
 .venv/bin/python -m app.library.workflows.news.collect --schema kelec_news --embed-only   # 수집 없이 임베딩이 없는 기사만 (처음 한 번 권장)
 ```
+Enterprise KG (경영자문 Agent의 `query_enterprise_kg`): system마다 회의 저장소 · 뉴스 저장소로 기업 · 인물 · 회의 · 결정 · 전제 · 할 일 · 뉴스 사건과
+그 관계를 만든다 (같은 Postgres, 그 system의 schema `kelec` / `grp` 안의 `kg_*` 테이블). 회의 기록은 LLM 없이 그대로 옮기고, 뉴스 사건은 사건마다 한 번
+chat model로 관계를 뽑는다(결과 저장 · 재사용). 배경 작업(`MEETINGS_BACKGROUND_JOBS=1`)이 `KG_SYNC_INTERVAL`(600초)마다 바뀐 원본만 반영하고,
+처음 만들거나 바로 맞출 때는 CLI를 쓴다 (backend/에서):
+
+```bash
+.venv/bin/python -m app.library.workflows.kg.build --meeting-schema kelec --news-schema kelec_news --aliases app/systems/k_electronics/data/companies.json
+.venv/bin/python -m app.library.workflows.kg.build --meeting-schema grp --news-schema grp_news --aliases app/systems/group/data/companies.json
+.venv/bin/python -m app.library.workflows.kg.build --meeting-schema kelec --news-schema kelec_news --aliases app/systems/k_electronics/data/companies.json --rebuild-only   # 모델 호출 없이 다시 해석
+```
+
 요청 한 번은 새 기사를 최대 64건(3초)까지만 임베딩하므로, 저장소를 처음 만들었거나 기사가 많이 쌓였을 때는 `--embed-only`(약 25건/초, M2 Pro 기준)로 한 번 채워 둡니다.
 
 backend 테스트:
@@ -208,8 +219,8 @@ backend/
       api.py                         NDJSON 스트리밍 helper · run_identity(요청 → principal, 거부면 401) · SSE 관찰 채널 helper · lifespan(on_start: system의 배경 작업)
       a2a.py                         A2A client 메커니즘: 상대 system의 A2A 표면에 요청(+ principal · 토큰)을 보내고 최종 응답을 받음 (lifecycle은 observe 콜백으로)
     library/                         공용 Capability 라이브러리 (system을 import하지 않음)
-      skills/                        specialist_delegation, meeting_context_analysis, meeting_minutes_writing, meeting_follow_up, inbound_task_requests, external_risk_analysis, mna_feasibility_review (Skill 본문)
-      tools/                         run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory;
+      skills/                        specialist_delegation, meeting_context_analysis, meeting_minutes_writing, meeting_follow_up, inbound_task_requests, external_risk_analysis, mna_feasibility_review, enterprise_knowledge (Skill 본문)
+      tools/                         run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory; query_enterprise_kg — make_query_enterprise_kg(KG_STORE);
                                      run_meeting_context_retrieval, save_meeting_minutes, run_action_item_tracking, update_action_item, run_meeting_schedule,
                                      manage_mail_outbox, run_task_requests — make_<tool>(store) factory;
                                      correct_transcript — make_transcript_correction(store, glossary, agent): 회의 Agent 앞의 녹음 변환본 교정 + 다시 교정하는 Tool;
@@ -228,7 +239,7 @@ backend/
         outbox.py                    메일 발송함: 회의록 · 업무 배정 · 회의 안내 · 기한 알림 생성, 주소 자동 탐색(로그인 이메일 → 임직원 연락처), 자동 SMTP 발송, 재발송 · 취소 · 주소 정정
         mail_actions.py              메일로 진행 보고: 업무 배정 · 기한 알림 메일의 완료 · 진행 중 · 막힘 버튼(서명된 30일 링크, 로그인 없음) → /api/mail-action
         directory.py                 메일 받는 사람의 등록 이메일 조회 (gateway 내부 API)
-        jobs.py                      배경 작업: 메일 발송(매분) · 기한 알림 · 주소 재조회 · 만료 transcript 삭제(매일) · 결정 감시(10분마다 새 기사)
+        jobs.py                      배경 작업: 메일 발송(매분) · 기한 알림 · 주소 재조회 · 만료 transcript 삭제(매일) · 결정 감시(10분마다 새 기사) · KG 동기화(10분마다)
         decision_watch.py            결정의 전제 · 조건 감시: 새 기사 × 전제 → broken | at_risk 판정(chat model) · 알림 메일, 결정 검토(금액 비교 · 재검토 회의안)
         subjects.py                  회의 주제: Agent가 준 이름 · 이어지는 회의 · 회의명 단어로 정함, 주제 없는 이전 회의 채우기
         meeting_control.py           회의 관제: 주제별 상태 · 회의 목록(진행 중 · 예정 · 완료) · 담당자별 할 일 · 날짜별 활동 (desk `control`)
@@ -244,6 +255,9 @@ backend/
                                      · labels.py(리스크 분류 · 확인 사항 · 규칙) · text.py · collect.py(주기 수집 CLI)
                                      · seed.py(system의 data/news.json → 기사 · 사건 · 분석 · 언급 초기 등록, 고정 키 upsert)
                                      · embed.py(로컬 Ollama 임베딩, 실패 시 키워드 검색으로 fallback) · sql/003(pgvector 임베딩 테이블)
+        kg/                          Enterprise KG: store.py(KGStore: system schema 안 kg_* 테이블, sync · rebuild · query) · project.py(회의 → 구조 claim,
+                                     뉴스 사건 → 구조 claim + 추출) · extract.py(사건 단위 LLM 관계 추출 · 검증) · resolve.py(엔티티 · 관계 · 사실 식별, 상태 — 규칙 v1, 교체 지점)
+                                     · query.py(권한 필터 · 근거별 결과) · build.py(CLI) · sql/001(원시층 · 해석층 테이블)
         mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
         mna_scenario.py              What-if: review_what_if(path) — 인수가격·영업이익률·고객 비중 변경 전후 평가 · 권고 · 조건 비교 (context 신호 반영)
         mna_executive_summary.py     persona "ALL": review_executive_summary(path) — CEO·CFO·CTO 평가 통합, 핵심 위험·기회·인수 조건 · 권고
@@ -251,7 +265,7 @@ backend/
     systems/
       group/                         Group agent system (SYSTEM = "group") — `uvicorn app.systems.group.app:app --port 8001`
         app.py                       FastAPI: /api/health, /api/agents/{group-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE)
-        registry.py                  Group의 CAPABILITIES (22개): group_super ← subsidiary_review · specialist_delegation · request_k_electronics_review · delegate_to_*;
+        registry.py                  Group의 CAPABILITIES (24개): group_super ← subsidiary_review · specialist_delegation · request_k_electronics_review · delegate_to_*;
                                      meeting / news / advisory ← 라이브러리 Skill + Group 데이터 · 회의 저장소(schema grp)에 바인딩한 Tool
         agents/group_super.py        그룹 슈퍼에이전트: AGENT_ID · IDENTITY + Registry (Super core). 자기 Specialist 위임과 K전자 A2A 중 선택은 모델 판단
         agents/{meeting,news,advisory}.py  그룹 전문 Agent: 같은 Specialist core · 같은 Skill, Group 데이터

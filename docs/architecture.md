@@ -141,7 +141,7 @@ User        → Specialist Agent   (직접 대화)
   - Meeting: Skill `meeting_context_analysis`(조회·정리 · 브리핑 지침), `meeting_minutes_writing`(transcript → 초안 → 확정 지침), `meeting_follow_up`(진행 추적 · 갱신 · 일정 지침),
     Tool `run_meeting_context_retrieval`, `save_meeting_minutes`, `run_action_item_tracking`, `update_action_item`, `run_meeting_schedule` ([3.3](#33-workflow-tool)).
   - News: Skill `external_risk_analysis`(외부 리스크 조사·정리 지침, 응답 형식), `news_briefing`(일반 뉴스 브리핑 지침, 응답 형식), Tool `run_news_briefing`(기본 파이프라인: 주제 동향 브리핑), `run_company_risk_news_analysis`(특정 기업의 의사결정 리스크 조사). News Agent는 외부 뉴스만 다루며 회의 저장소 · 기업 검토 자료를 읽지 않는다 (둘을 잇는 일은 결과를 함께 가진 Super Agent의 몫).
-  - Advisory: Skill `mna_feasibility_review`(인수 검토 지침 — 관점 선택 · 종합 평가 · What-if 인자, 맥락 전달, 사실 정확성, mode별 응답 형식), Tool `run_mna_review`.
+  - Advisory: Skill `mna_feasibility_review`(인수 검토 지침 — 관점 선택 · 종합 평가 · What-if 인자, 맥락 전달, 사실 정확성, mode별 응답 형식) · `enterprise_knowledge`(지식 그래프를 근거별로 읽고 검토 context에 싣는 지침), Tool `run_mna_review` · `query_enterprise_kg`.
     K와 Group의 경영자문 Agent는 같은 Skill · Tool factory · workflow를 쓰고, Agent 파일에는 정체성만 다르다. 응답에 대한 별도 사후 검증 · 재작성 계층은 없다 (응답은 모델이 Tool 결과를 근거로 쓴다).
 - **호출 맥락(invocation)** 은 `"delegation" | "direct"` 두 가지다. 같은 그래프가 쓰이고, 호출 맥락은 LangGraph `config["configurable"]`로 실행마다 전달된다 (state에 넣지 않는다).
   - 모델에게는 system context 끝에 한 문단(`agent_core.INVOCATION_CONTEXT`)으로 알려 준다: delegation이면 "슈퍼에이전트에게 돌아가는 보고이므로 Tool 결과에 근거하라", direct면 "인사·개념 질문에는 Tool 없이 답하고 데이터가 필요한 업무면 Tool을 쓰라".
@@ -159,7 +159,7 @@ Workflow Tool은 **Agent가 아니다**.
 Meeting Agent   → run_meeting_context_retrieval · save_meeting_minutes · run_action_item_tracking · update_action_item · run_meeting_schedule
                   · manage_mail_outbox · run_task_requests (K만) · correct_transcript · run_decision_review (Group만)
 News Agent      → run_news_briefing · run_company_risk_news_analysis
-Advisory Agent  → run_mna_review
+Advisory Agent  → run_mna_review · query_enterprise_kg
 ```
 
 - Agent는 **어떤** capability를 쓸지 판단한다. 선택된 Tool **내부**의 반복적·결정적 절차는 LLM 자유 추론에 맡기지 않는다.
@@ -297,6 +297,33 @@ Advisory Agent  → run_mna_review
   변경 전후 권고 · 조건(`before_*` / `after_*`, `added_conditions` / `removed_conditions`), 바뀐 항목(`changes`, persona 우선순위 순)을 돌려준다. `context` 신호는 전후 평가에 똑같이 반영된다.
   개별 평가와 같은 이름의 필드(`persona_label`, `inputs`(변경 후), `assessments`, `recommendation`(변경 후), `conditions`(변경 후))도 함께 담고 `mode: "what_if"`로 구분한다.
   잘못된 변경 값은 예외 대신 `error_type: "INVALID_SCENARIO"`로 돌려준다.
+- **Enterprise KG (2026-11-21, `library/workflows/kg/`, Tool `query_enterprise_kg` · Skill `enterprise_knowledge`, 경영자문 Agent만).**
+  system마다 자기 회의 저장소와 뉴스 저장소로 만든 지식 그래프 하나 (`systems/<system>/__init__.py`의 `KG_STORE = KGStore(MEETING_STORE, NEWS_STORE, aliases=data/companies.json)`).
+  테이블은 그 system의 회의 schema(`kelec` / `grp`) 안의 `kg_*`이고 자기 migration 기록(`kg_schema_version`, `kg/sql/NNN_*.sql`)을 가진다 —
+  배포의 DB role은 schema를 만들 수 없고, 회의에서 나온 사실은 그 회의의 접근 규칙으로 걸러야 하기 때문이다. 다른 system의 데이터는 읽지 않는다.
+  - **원시층 / 해석층.** `kg_mentions`(이름이 쓰인 그대로 · 문맥 · 추출기 버전) · `kg_claims`(출처 하나의 진술: subject —predicate→ object, 원래 관계어 ·
+    qualifiers · 사건 id · 시점 · 원문 · 추출기, 회의에서 나온 것은 `meeting_id`)가 원시층이다. `kg_sources`(출처별 내용 해시)가 같으면 다시 만들지 않고,
+    다르면 그 출처의 진술을 통째로 바꾼다. 해석층(`kg_nodes`의 엔티티 · `kg_aliases` · `kg_mention_links` · `kg_facts` · `kg_fact_support`)은
+    `kg/resolve.py`가 원시층 전체에서 다시 만든다 (`KGStore.rebuild(resolver=…)`: 모델 호출 없이 다른 해석 알고리즘으로 바꿔 볼 수 있음).
+  - **변환.** 회의(확정 회의록만): 결정 · 전제 · 할 일 · 참석자 · 말한 사람 · 결정 대체(supersedes) · 쟁점 해결을 LLM 없이 그대로 (`structural`),
+    회의 글(회의명 · 주제 · 결정 · 전제 · 할 일)에 나온 알려진 이름은 별칭 사전으로 `CONCERNS`. 결정 감시가 판정한 기사 × 전제(`premise_signals`)는 `AFFECTS`(`assessed`).
+    뉴스(회사 데이터에 등록된 기사, 또는 이 system의 기업 · 회의가 다루는 기업 이름이 제목 · 요약에 있는 조회 기간 안의 기사가 속한 사건):
+    기사 → 사건(`PART_OF`), 기사가 다루는 이름(분석의 entities, 등록 기사의 기업, 별칭 사전 — `MENTIONS`), 그리고 사건마다 chat model 한 번으로 뽑은
+    관계(`reported`: 고정 어휘 ACQUIRES · INVESTS_IN · SUPPLIES_TO · PARTNERS_WITH · COMPETES_WITH · SUES · REGULATES · EXECUTIVE_OF · ADOPTS · OTHER,
+    원래 표현 · 상태 active | ended | planned · 날짜 · 근거 기사 · 근거 문장). 추출 결과는 입력 해시로 `kg_extractions`에 남아 같은 입력을 다시 보내지 않는다.
+    답을 읽을 수 없거나 동기화당 호출 수(`KG_LLM_BUDGET`, 30)를 넘으면 그 사건은 구조만 들어가고 다음 동기화에서 다시 시도한다.
+  - **해석 (규칙 `rules-v1`).** 엔티티: 이름 정규화(띄어쓰기 · 법인 표기 제거) 후 같은 이름 또는 한 출처가 같은 대상이라고 준 다른 표기(aliases)로 묶고,
+    회사 데이터의 기업과 회의 디렉터리의 사람 · 조직이 seed다 (seed 둘은 합치지 않고, 사람과 기업은 이름이 같아도 합치지 않는다).
+    관계: 동의어 · 역관계를 정규 관계어로 (CUSTOMER_OF → SUPPLIES_TO, 방향 반전). 사실: (주어, 관계, 목적어)가 같아도 **뉴스 사건이 다르면 다른 사실**
+    (같은 두 기업의 소송 두 건), 같은 사건의 여러 기사는 한 사실의 여러 출처다. 상태: 가장 최근 보도가 ended면 끝난 관계(`valid_to`), 같은 날 보도가 엇갈리면
+    `contradicted`, 대체된 결정은 `superseded`, 끝난 할 일의 담당은 `ended`, 문제없음으로 닫힌 신호는 `dismissed`.
+  - **갱신.** `KGStore.sync(ask)`: 바뀐 출처만 → 해석층 재구성, 별칭 사전이 바뀌면(새 기업 이름) 한 번 더 — 같은 데이터로 다시 돌리면 아무것도 쓰지 않는다.
+    배경 작업(`jobs.py`, `KG_SYNC_INTERVAL` 600초, `MEETINGS_BACKGROUND_JOBS=1`일 때)과 CLI(`python -m app.library.workflows.kg.build`)가 같은 함수를 쓴다.
+  - **조회.** `query_enterprise_kg(query, entities?)` → 엔티티(별칭), 그 기업을 다룬 회의의 결정(상태 · 대체 · 전제) · 후속 업무, 보도된 관계(사건별 · 상태 변화 · 근거 기사),
+    판정된 영향(`assessed_impacts`), 단순 연관(`associations`: 같은 기업을 다루는 뉴스 사건과 결정, "영향 판정 아님"), 뉴스 사건, 회의 목록(gateway 감사로그의 `meetings[].id`).
+    회의에서 나온 노드와 진술은 `meeting_store.VISIBLE`(등급 · allowed_groups)을 SQL 안에서 먼저 적용하고(그 회의의 지금 값으로), 뉴스는 공개다.
+    경영자문 Agent는 그 결과를 근거별로 구분해 답하고, 인수 검토면 `run_mna_review`의 `context`에 출처와 함께 넣는다 (workflow는 바꾸지 않음).
+    Super Agent에는 이 Tool이 없다: 기업 지식 분석이 필요하면 경영자문 Agent에게 위임한다 (위임 Tool 설명에 적음).
 
 ### 3.4 Agent Delegation과 A2A의 차이
 
@@ -383,6 +410,8 @@ systems/k_electronics/
 | `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(NEWS_STORE)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
 | `run_mna_review` | tool | `advisory` | `systems/k_electronics/tools/run_mna_review.py` = `make_run_mna_review(data/companies.json)` → `library/workflows/mna_review.review_acquisition` · `mna_executive_summary.review_executive_summary` · `mna_scenario.review_what_if` |
+| `enterprise_knowledge` | skill | `advisory` | `library/skills/enterprise_knowledge.py` |
+| `query_enterprise_kg` | tool | `advisory` | `systems/k_electronics/tools/query_enterprise_kg.py` = `make_query_enterprise_kg(KG_STORE)` → `library/workflows/kg/query.query_graph` |
 
 Group system의 Registry(`systems/group/registry.py`)는 같은 메커니즘으로 자기 내용을 가진다 (Phase 5a·5b):
 `group_super` ← Skill `subsidiary_review`(Group 전용) · `specialist_delegation`(라이브러리), Tool `request_k_electronics_review`(A2A client) · `delegate_to_{meeting,news,advisory}_agent`(Group 전용 설명, 라이브러리 factory `library/tools/delegation.make_delegate_tool`);
@@ -740,7 +769,7 @@ LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`http
 | A2A | REAL: Group Tool → K `/api/a2a/run` HTTP, 최종 응답만 Agent에 전달, lifecycle은 관찰용 relay. Group UI가 Group backend를 쓴다 | 같음 |
 | Meeting 데이터 | Postgres 회의 저장소(system별 schema, fixture로 seed, 번호 migration). 회의록 · 결정 · Action Item · 진행 이력 · 일정 · 녹음 transcript(id로 가져와 1년 보관) · Compliance 검토 · 메일 발송함 · 다른 system의 업무 요청. 키워드 점수 조회 | + 의미 검색(임베딩), 메일 회신으로 진행 갱신 |
 | 사용자 맥락 | gateway가 서명한 `principal_token`의 사용자를 run이 들고 Tool이 읽음 (A2A로 그대로 전달). 미팅 Tool만 사용 | 다른 Tool(뉴스 · 자문 자료 등급)도 같은 규칙 |
-| News 데이터 | system별 Postgres 뉴스 저장소(`kelec_news` / `grp_news`, 사건 영속, 키워드 + 임베딩 하이브리드 검색) 하나: `data/news.json`을 초기 데이터(기사 · 사건 · 분석 · 언급)로 등록하고 언론사 RSS · 뉴스 sitemap → 본문 추출로 모은 기사를 같은 테이블에 쌓는다. 요청 시 수집 + 주기 수집 CLI가 같은 파이프라인, 조회 기간 기본 120일 | KG가 `news_mentions.entity_ref`로 기사 · 사건을 기업 엔티티에 연결, 검색 API 등 추가 출처(미결정) |
+| News 데이터 | system별 Postgres 뉴스 저장소(`kelec_news` / `grp_news`, 사건 영속, 키워드 + 임베딩 하이브리드 검색) 하나: `data/news.json`을 초기 데이터(기사 · 사건 · 분석 · 언급)로 등록하고 언론사 RSS · 뉴스 sitemap → 본문 추출로 모은 기사를 같은 테이블에 쌓는다. 요청 시 수집 + 주기 수집 CLI가 같은 파이프라인, 조회 기간 기본 120일 | 검색 API 등 추가 출처(미결정). KG의 엔티티 id를 `news_mentions.entity_ref`에 되돌려 쓰기(미구현, 지금은 KG 쪽 `kg_mention_links`에만 있음) |
 | Advisory 데이터 | `data/companies.json` 고정 fixture + 결정적 규칙 evaluator | 실제 재무 모델 / 밸류에이션 / 실사 데이터 (evaluator만 교체) |
 | Workflow 결과 렌더링 | `toolResultBlocks`가 Tool 이름별 `switch` (meeting, news, advisory 전용 렌더) | Tool이 늘어나도 frontend가 Tool별 지식을 과도하게 갖지 않는 방식 (미결정) |
 | 상위 Agent로의 결과 전달 | 최종 응답 문자열만 `ToolMessage`. Advisory에 필요한 이전 결과는 K Super가 쓴 `task` 문장으로만 전달. 종합도 K Super가 history의 텍스트만 보고 쓴다 | 필요 시 범용 `artifacts` / `context` 구조 (미결정) |
@@ -921,6 +950,12 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
     남은 점: (a) 유사도 기준(0.35 · 1위와 0.08)은 저장된 한국어 기사 약 3천 건과 질의 12개로 맞춘 값이라, 관련 기사가 없는 질의("AI 기본법")에는 관련성 낮은 기사가 섞이고 기업명 질의("뉴로엣지 리스크")는 일부 기사를 놓칠 수 있다(키워드가 보완). 평가 세트를 늘려 다시 맞출 수 있다.
     (b) 의미 검색은 비슷한 주제의 다른 기업 기사를 가져온다("삼성전자 HBM" → SK하이닉스 HBM). 브리핑에서는 관련 기사로 쓰고, 기업 리스크에서는 순서에만 쓴다. (c) 임베딩 모델은 서버마다 로컬 Ollama가 필요하다(Ollama Cloud는 임베딩 미제공). 없으면 키워드 검색으로 동작한다.
     (d) 벡터는 전체 비교(정확 검색)다. 기사가 10만 건을 넘으면 모델별 HNSW 인덱스를 더한다. (e) 저장 기사가 많을 때 요청 한 번은 최신 64건까지만 임베딩하므로 주기 수집이나 `--embed-only`가 나머지를 채워야 의미 검색 범위가 넓어진다.
+29. **Enterprise KG의 남은 점 (2026-11-21).** (a) 해석은 규칙 v1이다: 이름이 다르게 쓰인 같은 기업(약칭 · 오타)은 한 출처가 함께 적지 않으면 합쳐지지 않고,
+    다른 뉴스 사건으로 나뉜 같은 사실은 합치지 않는다(보수적). 바꿀 자리는 `kg/resolve.py`의 네 함수다. (b) 보도끼리의 모순은 같은 날 상태가 엇갈릴 때만 표시하고,
+    단일값 관계(대표이사 교체 등)의 자동 종료는 없다. (c) 뉴스 범위는 회사 데이터의 기업과 회의가 다루는 기업으로 한정한다 — 그 밖의 기업 기사는 그래프에 들어오지 않는다.
+    (d) 판정된 영향은 결정 감시(`premise_signals`)에서만 오는데, 결정 감시는 아직 system 뉴스 저장소가 아니라 `data/news.json`을 읽고 Group에서만 돈다
+    (`library/tools/run_decision_review.load_articles`). fixture 회의에는 전제가 없어, 전제를 적은 회의를 저장해야 판정된 영향이 생긴다. (e) 엔티티의 존재(이름)는
+    권한과 관계없이 보인다; 회의에서만 나온 기업이라도 그 회의를 볼 수 없는 사용자에게는 결정 · 연관 · 판정이 나오지 않을 뿐 이름은 찾아진다.
 
 ---
 
