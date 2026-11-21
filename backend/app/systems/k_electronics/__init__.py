@@ -13,6 +13,8 @@ from pathlib import Path
 
 from ...library.workflows.kg.store import KGStore
 from ...library.workflows.meeting_store import MeetingStore
+from ...library.workflows.memory.memory import SuperAgentMemory
+from ...library.workflows.memory.store import MemoryStore
 from ...library.workflows.news.store import NewsStore
 
 SYSTEM = "k_electronics"  # stamped on every event this system emits
@@ -25,3 +27,5 @@ NEWS_STORE = NewsStore("kelec_news", seed=DATA_DIR / "news.json")
 # This system's Enterprise KG: built from its meeting records and its news (never another system's), in its own schema;
 # the companies of data/companies.json are its seed entities.
 KG_STORE = KGStore(MEETING_STORE, NEWS_STORE, aliases=DATA_DIR / "companies.json")
+# This system's Super Agent remembers its direct conversations, per user, in this system's schema (never another's).
+MEMORY = SuperAgentMemory(MemoryStore(MEETING_STORE))

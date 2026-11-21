@@ -112,6 +112,14 @@ chat model로 관계를 뽑는다(결과 저장 · 재사용). 배경 작업(`ME
 .venv/bin/python -m app.library.workflows.kg.build --meeting-schema kelec --news-schema kelec_news --aliases app/systems/k_electronics/data/companies.json --rebuild-only   # 모델 호출 없이 다시 해석
 ```
 
+Super Agent 대화 기억: 직접 대화(Group · K Super 탭, 배포에서는 Open WebUI의 Super Agent)를 사용자별로 저장해 다음 요청에서 관련된 과거 대화를 자동으로 찾아 붙입니다
+(OpenAI `text-embedding-3-small` → pgvector, `backend/.env`의 `MEMORY_EMBED_API_KEY`). 로컬 UI는 로그인 사용자가 없으므로 `MEMORY_ANONYMOUS_USER=local-demo`처럼 이름을 주어야 기억합니다.
+임베딩 모델을 바꾸면(예: `MEMORY_EMBED_PROVIDER=ollama`) 저장된 대화의 새 벡터를 채웁니다:
+
+```bash
+.venv/bin/python -m app.library.workflows.memory.reembed --schema grp
+```
+
 요청 한 번은 새 기사를 최대 64건(3초)까지만 임베딩하므로, 저장소를 처음 만들었거나 기사가 많이 쌓였을 때는 `--embed-only`(약 25건/초, M2 Pro 기준)로 한 번 채워 둡니다.
 
 backend 테스트:
@@ -217,6 +225,7 @@ backend/
       schemas.py                     요청 스키마 · Principal(요청한 사용자: email · name · groups · clearance · 쓸 수 있는 전문 Agent — gateway가 보내고 Tool이 run에서 읽음) · principal_token
       principal.py                   gateway가 서명한 principal_token(HS256) 검증 — PRINCIPAL_SIGNING_KEY가 있으면 서명된 사용자만 믿음
       api.py                         NDJSON 스트리밍 helper · run_identity(요청 → principal, 거부면 401) · SSE 관찰 채널 helper · lifespan(on_start: system의 배경 작업)
+      memory.py                      Super Agent 대화 기억의 계약(ConversationMemory: applies · recall · remember, Recall) — 저장소는 라이브러리, run_super가 direct 호출 앞뒤로 부름
       a2a.py                         A2A client 메커니즘: 상대 system의 A2A 표면에 요청(+ principal · 토큰)을 보내고 최종 응답을 받음 (lifecycle은 observe 콜백으로)
     library/                         공용 Capability 라이브러리 (system을 import하지 않음)
       skills/                        specialist_delegation, meeting_context_analysis, meeting_minutes_writing, meeting_follow_up, inbound_task_requests, external_risk_analysis, mna_feasibility_review, enterprise_knowledge (Skill 본문)
@@ -255,6 +264,8 @@ backend/
                                      · labels.py(리스크 분류 · 확인 사항 · 규칙) · text.py · collect.py(주기 수집 CLI)
                                      · seed.py(system의 data/news.json → 기사 · 사건 · 분석 · 언급 초기 등록, 고정 키 upsert)
                                      · embed.py(로컬 Ollama 임베딩, 실패 시 키워드 검색으로 fallback) · sql/003(pgvector 임베딩 테이블)
+        memory/                      Super Agent 대화 기억: memory.py(SuperAgentMemory: 요청 분리 · 청크 · 의미+낱말 검색 · 주입 문단) · store.py(mem_* 테이블, pgvector · pg_trgm)
+                                     · embedding.py(OpenAI · Ollama 제공자, MEMORY_EMBED_*) · reembed.py(모델 변경 뒤 벡터 채우기 CLI)
         kg/                          Enterprise KG: store.py(KGStore: system schema 안 kg_* 테이블, sync · rebuild · query) · project.py(회의 → 구조 claim,
                                      뉴스 사건 → 구조 claim + 추출) · extract.py(사건 단위 LLM 관계 추출 · 검증) · resolve.py(엔티티 · 관계 · 사실 식별, 상태 — 규칙 v1, 교체 지점)
                                      · query.py(권한 필터 · 근거별 결과) · build.py(CLI) · sql/001(원시층 · 해석층 테이블)

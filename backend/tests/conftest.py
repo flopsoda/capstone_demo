@@ -14,6 +14,7 @@ schemas dropped, so each is seeded again from its data/news.json on first use). 
 real publisher feeds (news/feeds.json reads as empty); a test that wants feeds passes its own. The
 embedding model is off (NEWS_EMBED_MODEL=none: keyword search); a test that wants semantic search
 gives the pipeline its own embedder.
+Conversation memory: off (MEMORY_ENABLED=0, no embedding provider) unless a test turns it on.
 The session fails if a test run left anything new in a system's data/ folder.
 """
 
@@ -26,12 +27,12 @@ import pytest
 from psycopg import sql
 
 from app.library.workflows.news.store import NewsStore
-from app.systems.group import KG_STORE as GROUP_KG, MEETING_STORE as GROUP_STORE, NEWS_STORE as GROUP_NEWS
-from app.systems.k_electronics import KG_STORE as K_KG, MEETING_STORE as K_STORE, NEWS_STORE as K_NEWS
+from app.systems.group import KG_STORE as GROUP_KG, MEETING_STORE as GROUP_STORE, MEMORY as GROUP_MEMORY, NEWS_STORE as GROUP_NEWS
+from app.systems.k_electronics import KG_STORE as K_KG, MEETING_STORE as K_STORE, MEMORY as K_MEMORY, NEWS_STORE as K_NEWS
 
 STORES = (K_STORE, GROUP_STORE)
 NEWS_STORES = (K_NEWS, GROUP_NEWS)
-KG_STORES = (K_KG, GROUP_KG)  # tables in the meeting schemas: dropped with them
+KG_STORES = (K_KG, GROUP_KG, K_MEMORY.store, GROUP_MEMORY.store)  # tables in the meeting schemas: dropped with them
 TEST_NEWS_SCHEMA = "test_news"
 SYSTEMS_DIR = Path(__file__).resolve().parent.parent / "app" / "systems"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
@@ -56,6 +57,16 @@ def _host(address) -> str:
 @pytest.fixture(autouse=True)
 def no_embedding_model(monkeypatch):
     monkeypatch.setenv("NEWS_EMBED_MODEL", "none")
+
+
+@pytest.fixture(autouse=True)
+def no_conversation_memory(request, monkeypatch):
+    """The Super Agents' memory is off unless a test turns it on (MEMORY_ENABLED=1); no real embedding model
+    unless the test is marked `network`."""
+    monkeypatch.setenv("MEMORY_ENABLED", "0")
+    monkeypatch.delenv("MEMORY_ANONYMOUS_USER", raising=False)
+    if not request.node.get_closest_marker("network"):
+        monkeypatch.setenv("MEMORY_EMBED_PROVIDER", "none")
 
 
 @pytest.fixture(autouse=True)

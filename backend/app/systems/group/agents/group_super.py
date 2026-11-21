@@ -15,6 +15,7 @@ from functools import lru_cache
 from langgraph.graph.state import CompiledStateGraph
 
 from ....runtime.agent_core import Invocation, SuperAgent, build_super_graph, compose_system_prompt, run_super
+from .. import MEMORY
 from ..registry import skills_for, tools_for
 
 AGENT_ID = "group_super"
@@ -34,7 +35,7 @@ SYSTEM_PROMPT = compose_system_prompt(IDENTITY, skills_for(AGENT_ID))
 TOOLS = tools_for(AGENT_ID)
 TOOLS_BY_NAME = {t.name: t for t in TOOLS}
 
-SPEC = SuperAgent(AGENT_ID, "그룹 슈퍼에이전트", SYSTEM_PROMPT, tuple(TOOLS))
+SPEC = SuperAgent(AGENT_ID, "그룹 슈퍼에이전트", SYSTEM_PROMPT, tuple(TOOLS), memory=MEMORY)
 
 
 @lru_cache(maxsize=1)

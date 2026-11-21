@@ -107,6 +107,17 @@ K Electronics Super
   어떤 항목을 어떻게 쓰는지는 실행마다 다를 수 있다. 출력 형식 규칙(한국어, 마크다운 없이 줄바꿈과 "- " 목록)은 `IDENTITY`에 있다.
 - 남은 검사는 근거 검사 둘뿐이다: 위임 Tool을 하나도 호출하지 않고 응답하면(K Super가 스스로 지어낸 답) `AgentError("k_super", ...)`,
   최종 응답이 비어 있으면 `AgentError`. mock으로 대체하지 않는다.
+- **대화 기억 (2026-11-21, `runtime/memory.py` · `library/workflows/memory/`).** Super Agent는 사용자와의 직접 대화를 사용자별로 계속 기억한다.
+  `SuperAgent(…, memory=MEMORY)`(system의 `__init__.py`: `SuperAgentMemory(MemoryStore(MEETING_STORE))`, 그 system의 schema 안 `mem_*` 테이블)이면
+  `run_super`가 `direct` 호출에서만 (1) 시작할 때 그 사용자의 과거 대화 중 현재 요청과 가까운 것을 찾아(OpenAI 임베딩 + pgvector 코사인이 주, pg_trgm 낱말이 보조,
+  RRF로 합침; 의미 일치는 0.2 이상이면서 1위와 0.05 이내) 최대 4개를 오래된 것부터 시각과 함께 한 문단으로 만들고, 그 run의 모든 model 턴 system context에 붙이고
+  (LangGraph `config["configurable"]["memory_context"]` — state에 넣지 않음), (2) `agent_end` 뒤에 현재 요청 · 최종 응답 · 위임/A2A한 내용을 `run_id`당 한 번 저장하고 임베딩한다.
+  요청에 gateway가 붙인 `[이전 대화]`에 이미 있는 대화는 주입하지 않는다(최근 대화와 중복 방지). 문단은 "지금 요청과 다르면 지금 요청, 과거 지시끼리 다르면 최근 것,
+  회사 데이터의 근거로 쓰지 말고 필요하면 다시 위임"을 알린다. 조회는 기존 이벤트 `tool_start` / `tool_end`(tool `recall_conversation_memory`, `args.auto = true`)로
+  보고되며 모델이 부르는 Tool이 아니다 (위임 Tool 목록 · 근거 검사 · A2A는 그대로). 기억이 실패하면 기억 없이 답한다.
+  누구의 기억인가: principal의 email(gateway 서명). principal이 없으면(로컬 UI) `MEMORY_ANONYMOUS_USER`를 줄 때만. A2A run(`origin = "a2a"`)은 읽지도 쓰지도 않는다 —
+  배포에서는 사용자가 Group Super와만 대화하므로 Group의 기억만 쌓인다. 임베딩 제공자는 `MEMORY_EMBED_PROVIDER`(openai | ollama | none)로 바꾸고, 벡터는 모델별 행
+  (`mem_embeddings(chunk_id, model)`)이라 모델을 바꾸면 `python -m app.library.workflows.memory.reembed --schema grp`가 새 모델의 벡터를 채운다 (그 전에는 낱말로만 찾음).
 
 ### 3.2 Specialist Agent
 
@@ -468,7 +479,8 @@ Meeting Agent MessagesState   ← 별도 그래프, 별도 history (News / Advis
 - 상위 Agent에는 필요한 결과(최종 응답)만 `ToolMessage`로 전달한다.
 
 사용자와의 대화 이력은 이 경계와 별개다: 직접 대화의 요청에만 gateway가 "[이전 대화]"를 붙여 오고(11장 22번), Super Agent는 그것으로 대상을 정한 뒤
-전문 Agent · 다른 system에는 이력 없이 자기완결적인 업무 문장만 보낸다.
+전문 Agent · 다른 system에는 이력 없이 자기완결적인 업무 문장만 보낸다. 그보다 오래된 대화는 Super Agent의 대화 기억(3.1)이 관련된 것만 골라 system context에 붙인다
+(message state가 아니라 run의 config로; 전문 Agent에는 가지 않는다).
 
 **Current implementation**: 위 그대로다. `delegate_to_*` Tool은 `run_*_agent()`의 반환 문자열만 돌려주고, K Super는 그것을 `ToolMessage`로 받는다.
 Tool 결과의 구조화 데이터(dict)는 이벤트(`tool_end.result`)로 UI에 전달될 뿐, 상위 Agent state에는 들어가지 않는다.
@@ -515,7 +527,7 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 | `a2a_end` | `from, to, response` | 위 Tool 반환 직전. 그 사이의 K 이벤트는 `relayed: true`로 relay된다 |
 | `delegation_start` | `from, to, task` | `delegate_to_*` 진입 |
 | `delegation_skipped` | `from, to, reason` | `delegate_to_*` 진입 시 `principal.agents`에 `to`가 없으면 (`reason: permission`). 전문 Agent는 실행되지 않고 Super Agent는 나머지로 답한다 |
-| `tool_start` | `agent, tool, args` | `agent_core.execute_tool_calls` (Specialist의 Workflow Tool) |
+| `tool_start` | `agent, tool, args` | `agent_core.execute_tool_calls` (Specialist의 Workflow Tool). Super Agent의 직접 대화에서는 `run_super`의 기억 조회(`recall_conversation_memory`, `args.auto`) |
 | `tool_end` | `agent, tool, result` | 위 Tool 실행 직후 |
 | `agent_end` | `agent, response` | 각 Agent 정상 종료 |
 | `delegation_end` | `from, to, response` | 위임 Tool 반환 직전 |
@@ -772,6 +784,7 @@ LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`http
 | News 데이터 | system별 Postgres 뉴스 저장소(`kelec_news` / `grp_news`, 사건 영속, 키워드 + 임베딩 하이브리드 검색) 하나: `data/news.json`을 초기 데이터(기사 · 사건 · 분석 · 언급)로 등록하고 언론사 RSS · 뉴스 sitemap → 본문 추출로 모은 기사를 같은 테이블에 쌓는다. 요청 시 수집 + 주기 수집 CLI가 같은 파이프라인, 조회 기간 기본 120일 | 검색 API 등 추가 출처(미결정). KG의 엔티티 id를 `news_mentions.entity_ref`에 되돌려 쓰기(미구현, 지금은 KG 쪽 `kg_mention_links`에만 있음) |
 | Advisory 데이터 | `data/companies.json` 고정 fixture + 결정적 규칙 evaluator | 실제 재무 모델 / 밸류에이션 / 실사 데이터 (evaluator만 교체) |
 | Workflow 결과 렌더링 | `toolResultBlocks`가 Tool 이름별 `switch` (meeting, news, advisory 전용 렌더) | Tool이 늘어나도 frontend가 Tool별 지식을 과도하게 갖지 않는 방식 (미결정) |
+| Super Agent의 대화 기억 | 직접 대화를 사용자별로 저장 · 임베딩(OpenAI `text-embedding-3-small`, pgvector)하고 다음 요청에서 관련된 것만 자동 주입 (A2A 제외) | 기억 추출 · 요약 · 통합, 지시의 유효기간, gateway `chat_id`로 대화 단위 구분, 삭제 동기화 (미결정) |
 | 상위 Agent로의 결과 전달 | 최종 응답 문자열만 `ToolMessage`. Advisory에 필요한 이전 결과는 K Super가 쓴 `task` 문장으로만 전달. 종합도 K Super가 history의 텍스트만 보고 쓴다 | 필요 시 범용 `artifacts` / `context` 구조 (미결정) |
 | K Super 최종 응답의 frontend 표시 | `agent_end.response` 문자열을 그대로 메시지로 표시 (줄바꿈 유지) | 같음 또는 구조화 표시 (미결정, 12장 4·5번) |
 | 오류 귀속 | `AgentError`가 없으면 run의 `root_agent`로 귀속 | 실행 중인 Agent에 정확히 귀속 |
@@ -956,6 +969,12 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
     (d) 판정된 영향은 결정 감시(`premise_signals`)에서만 온다. 결정 감시는 system 뉴스 저장소를 읽지만(`run_decision_review.store_articles`) 배경 작업은
     Group에서만 돈다 — K전자에서도 돌리려면 K의 결정 감시 바인딩과 알림 메일 동작을 함께 정해야 한다(미결정). fixture 회의에는 전제가 없어, 전제를 적은 회의를 저장해야 판정된 영향이 생긴다. (e) 엔티티의 존재(이름)는
     권한과 관계없이 보인다; 회의에서만 나온 기업이라도 그 회의를 볼 수 없는 사용자에게는 결정 · 연관 · 판정이 나오지 않을 뿐 이름은 찾아진다.
+30. **대화 기억의 남은 점 (2026-11-21).** (a) gateway가 Open WebUI의 `chat_id`를 backend에 보내지 않아(navitech `agents/remote.py`의 body는 request · principal · 토큰뿐)
+    기억은 대화 단위가 아니라 사용자 단위이고, 같은 대화의 최근 턴 제외는 `[이전 대화]` 글자 일치로 한다 — gateway가 `chat_id`를 보내면 대화 단위 제외 · 표시가 가능하다(navitech 수정 필요).
+    (b) Open WebUI에서 대화를 지워도 기억은 남는다(삭제 동기화 · 보존 기간 없음, 이번 범위의 결정). (c) 배포 서버에는 임베딩 모델이 없다: Ollama 임베딩 모델(예: embeddinggemma)을
+    서버에 띄우고 `MEMORY_EMBED_PROVIDER=ollama`, `MEMORY_EMBED_URL`로 바꾼 뒤 `memory.reembed`를 한 번 돌린다 (그 전까지는 OpenAI 키가 있으면 OpenAI, 없으면 낱말 검색).
+    (d) 의미 검색 기준(0.2 · 1위와 0.05)은 OpenAI 모델로 잰 값이라 모델을 바꾸면 다시 맞춰야 한다. (e) 기억은 기록 당시의 권한을 따로 두지 않는다: 같은 사용자의 대화만 찾으므로
+    사용자의 등급이 나중에 내려가도 예전 답변의 내용은 그 사용자에게 다시 보일 수 있다.
 
 ---
 
