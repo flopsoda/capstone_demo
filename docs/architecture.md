@@ -110,7 +110,7 @@ K Electronics Super
 - **대화 기억 (2026-11-21, `runtime/memory.py` · `library/workflows/memory/`).** Super Agent는 사용자와의 직접 대화를 사용자별로 계속 기억한다.
   `SuperAgent(…, memory=MEMORY)`(system의 `__init__.py`: `SuperAgentMemory(MemoryStore(MEETING_STORE))`, 그 system의 schema 안 `mem_*` 테이블)이면
   `run_super`가 `direct` 호출에서만 (1) 시작할 때 그 사용자의 과거 대화 중 현재 요청과 가까운 것을 찾아(OpenAI 임베딩 + pgvector 코사인이 주, pg_trgm 낱말이 보조,
-  RRF로 합침; 의미 일치는 0.2 이상이면서 1위와 0.05 이내) 최대 4개를 오래된 것부터 시각과 함께 한 문단으로 만들고, 그 run의 모든 model 턴 system context에 붙이고
+  RRF로 합침; 의미 일치는 코사인 0.3 이상) 최대 4개를 오래된 것부터 시각과 함께 한 문단으로 만들고, 그 run의 모든 model 턴 system context에 붙이고
   (LangGraph `config["configurable"]["memory_context"]` — state에 넣지 않음), (2) `agent_end` 뒤에 현재 요청 · 최종 응답 · 위임/A2A한 내용을 `run_id`당 한 번 저장하고 임베딩한다.
   요청에 gateway가 붙인 `[이전 대화]`에 이미 있는 대화는 주입하지 않는다(최근 대화와 중복 방지). 문단은 "지금 요청과 다르면 지금 요청, 과거 지시끼리 다르면 최근 것,
   회사 데이터의 근거로 쓰지 말고 필요하면 다시 위임"을 알린다. 조회는 기존 이벤트 `tool_start` / `tool_end`(tool `recall_conversation_memory`, `args.auto = true`)로
@@ -973,7 +973,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
     기억은 대화 단위가 아니라 사용자 단위이고, 같은 대화의 최근 턴 제외는 `[이전 대화]` 글자 일치로 한다 — gateway가 `chat_id`를 보내면 대화 단위 제외 · 표시가 가능하다(navitech 수정 필요).
     (b) Open WebUI에서 대화를 지워도 기억은 남는다(삭제 동기화 · 보존 기간 없음, 이번 범위의 결정). (c) 배포 서버에는 임베딩 모델이 없다: Ollama 임베딩 모델(예: embeddinggemma)을
     서버에 띄우고 `MEMORY_EMBED_PROVIDER=ollama`, `MEMORY_EMBED_URL`로 바꾼 뒤 `memory.reembed`를 한 번 돌린다 (그 전까지는 OpenAI 키가 있으면 OpenAI, 없으면 낱말 검색).
-    (d) 의미 검색 기준(0.2 · 1위와 0.05)은 OpenAI 모델로 잰 값이라 모델을 바꾸면 다시 맞춰야 한다. (e) 기억은 기록 당시의 권한을 따로 두지 않는다: 같은 사용자의 대화만 찾으므로
+    (d) 의미 검색 기준(코사인 0.3)은 OpenAI 모델로 잰 값이라 모델을 바꾸면 다시 맞춰야 한다. (e) 기억은 기록 당시의 권한을 따로 두지 않는다: 같은 사용자의 대화만 찾으므로
     사용자의 등급이 나중에 내려가도 예전 답변의 내용은 그 사용자에게 다시 보일 수 있다.
 
 ---

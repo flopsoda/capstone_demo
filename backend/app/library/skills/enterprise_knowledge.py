@@ -11,7 +11,8 @@ ENTERPRISE_KNOWLEDGE = Skill(
     description="회의 기록과 뉴스를 잇는 기업 지식 그래프를 조회해, 과거 결정 · 기준과 외부 사건의 관계를 경영자문에 반영하는 방법.",
     instructions=f"""\
 - 특정 기업의 인수 · 투자 검토, 또는 최근 뉴스와 과거 회의 결정 · 계획의 관계를 묻는 업무면 먼저 {TOOL_NAME}로 대상 기업을 조회한다
-  (entities에 기업명). 일반 개념 질문에는 쓰지 않는다.
+  (entities에 기업명). 위임받은 업무 문장에 회의 기준이나 뉴스가 이미 적혀 있어도 조회한다: 그래프는 그 문장에 없는 연결(바뀐 결정, 관계의 종료 시점,
+  판정된 영향, 열린 후속 업무)과 출처를 준다. 일반 개념 질문에는 쓰지 않는다.
 - 결과는 근거별로 구분해 읽고 응답에서도 구분한다:
   decisions · follow_ups는 회의에서 정한 것(결정 ref와 회의 id로 인용), reported_facts는 기사가 전한 관계(status가 ended면 끝난 관계이고
   valid_to가 그 시점이다), assessed_impacts는 판정된 영향(effect broken이면 전제가 깨짐, at_risk면 흔들림, judged가 keywords면 낱말만 맞은 것이라 확인 필요),

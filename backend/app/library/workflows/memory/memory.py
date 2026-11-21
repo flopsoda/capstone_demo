@@ -35,18 +35,19 @@ CANDIDATES = 12          # chunks each search returns before fusion
 CHUNK_CHARS = 1200       # answer characters per chunk
 PROMPT_CHARS = 400       # answer characters of a recalled exchange in the prompt
 SHORT_REQUEST = 15       # a request this short ("그거 다시") is searched with the user's previous line too
-# A meaning hit: cosine at least the floor (MEMORY_MIN_SIMILARITY) and within MARGIN of the best hit. Measured with
-# text-embedding-3-small on Korean exchanges: related 0.40–0.56, a related one in other words 0.23–0.29, unrelated
-# up to 0.32 — a floor alone either drops the second kind or lets the third in; the margin keeps the closest group.
-DEFAULT_MIN_SIMILARITY = 0.2
-MARGIN = 0.05
+# A meaning hit: cosine at least MEMORY_MIN_SIMILARITY. Measured with text-embedding-3-small on Korean exchanges:
+# the same matter 0.40–0.66, a standing instruction ("앞으로 보고는 CFO 관점으로") against a new request 0.33–0.39,
+# unrelated 0.10–0.32. No margin to the best hit: a past answer on the same matter (0.65) would push the instruction
+# out, and an instruction is what the memory is for. An unrelated exchange that slips in is ignored by the model (GUIDE).
+DEFAULT_MIN_SIMILARITY = 0.3
 WORD_FLOOR = 0.3         # pg_trgm word_similarity floor of a word hit
 RRF_K = 60
 
 GUIDE = ("[관련 과거 대화] 이 사용자와 예전에 나눈 대화 중 지금 요청과 관련 있어 보이는 기록이다 (오래된 것부터, 한국 시간).\n"
          "- 사용자의 이전 지시 · 선호 · 맡긴 업무를 이해하는 데 쓴다. 회사 데이터의 근거로 쓰지 않는다: 지금의 사실이 필요하면 담당 에이전트에게 다시 확인한다.\n"
          "- 지금 요청과 다르면 지금 요청을 따르고, 과거 지시끼리 다르면 더 최근 것을 따른다.\n"
-         "- 관련이 없으면 무시한다. 위임 · A2A 요청 문장에는 필요한 내용(사용자가 원한 관점 · 형식 · 조건 등)을 풀어 쓴다.")
+         "- 이번 요청에 해당하는 지시(관점 · 형식 · 조건 · 기준)가 있으면 위임 · A2A 요청 문장에 그 내용을 직접 적어 맡긴다: 받는 쪽은 이 대화를 보지 못한다.\n"
+         "- 관련이 없으면 무시한다.")
 
 
 def enabled() -> bool:
@@ -163,10 +164,8 @@ class SuperAgentMemory:
         else:
             try:
                 vector = embedder.embed_query(query)
-                rows = fresh(self.store.by_meaning(user, embedder.name, vector, limit=CANDIDATES, floor=min_similarity()))
-                best = max((float(r["similarity"]) for r in rows), default=0.0)
-                add([r for r in rows if float(r["similarity"]) >= best - MARGIN], "meaning")
-                search = {"mode": "meaning+keyword", "model": embedder.name, "min_similarity": min_similarity(), "margin": MARGIN}
+                add(fresh(self.store.by_meaning(user, embedder.name, vector, limit=CANDIDATES, floor=min_similarity())), "meaning")
+                search = {"mode": "meaning+keyword", "model": embedder.name, "min_similarity": min_similarity()}
             except EmbedUnavailable as e:
                 search = {"mode": "keyword", "error": str(e)}
         add(fresh(self.store.by_words(user, query, limit=CANDIDATES, floor=WORD_FLOOR)), "keyword")
