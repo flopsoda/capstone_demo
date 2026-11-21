@@ -986,6 +986,10 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
     서버에 띄우고 `MEMORY_EMBED_PROVIDER=ollama`, `MEMORY_EMBED_URL`로 바꾼 뒤 `memory.reembed`를 한 번 돌린다 (그 전까지는 OpenAI 키가 있으면 OpenAI, 없으면 낱말 검색).
     (d) 의미 검색 기준(코사인 0.3)은 OpenAI 모델로 잰 값이라 모델을 바꾸면 다시 맞춰야 한다. (e) 기억은 기록 당시의 권한을 따로 두지 않는다: 같은 사용자의 대화만 찾으므로
     사용자의 등급이 나중에 내려가도 예전 답변의 내용은 그 사용자에게 다시 보일 수 있다.
+    (f) navitech 연동 확인(2026-11-21, 로컬 docker compose + Open WebUI): navitech `docker-compose.yml`은 Agent backend에 `MEMORY_*` · `KG_*` 환경 변수를 넘기지 않아
+    그대로 배포하면 기억이 낱말 검색으로만 동작한다(`MEMORY_EMBED_PROVIDER` · `MEMORY_EMBED_API_KEY`(또는 `MEMORY_EMBED_URL`) 전달 필요, navitech 수정).
+    (g) gateway(`agents/remote.py` `_translate`)는 모든 Tool을 "Tool 이름 실행 {args JSON}" · "완료"로 생각 블록에 보이므로 기억 조회도
+    `recall_conversation_memory 실행 {"auto": true}`로 보이고 찾은 기록 수는 보이지 않는다 — 자동 기억 조회에 한국어 표시(예: "이전 대화 기억 확인 · 관련 기록 N건")를 두려면 navitech 수정이 필요하다.
 
 ---
 
