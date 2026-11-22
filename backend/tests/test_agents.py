@@ -23,6 +23,7 @@ A2A_REQUEST = (
 MEETING_WORKFLOW = "run_meeting_context_retrieval"
 NEWS_WORKFLOW = "run_company_risk_news_analysis"
 ADVISORY_WORKFLOW = "run_mna_review"
+KG_TOOL = "query_enterprise_kg"  # the advisory agent looks the company up in the graph before the review
 
 
 def test_meeting_agent_emits_tool_lifecycle():
@@ -78,8 +79,8 @@ def test_advisory_agent_emits_tool_lifecycle():
     )
     types = [e["type"] for e in events]
     assert types[0] == "agent_start" and types[-1] == "agent_end"
-    tool_end = next(e for e in events if e["type"] == "tool_end")
-    assert tool_end["tool"] == ADVISORY_WORKFLOW
+    assert [e["tool"] for e in events if e["type"] == "tool_start"] == [KG_TOOL, ADVISORY_WORKFLOW]
+    tool_end = next(e for e in events if e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW)
     assert tool_end["result"]["persona"] == "CFO"
     assert tool_end["result"]["recommendation"] == "CONDITIONAL_PROCEED"
     assert tool_end["result"]["context_signals"]["price_ceiling_trillion_krw"] == 2.5
@@ -116,9 +117,10 @@ def test_k_super_delegates_to_each_specialist_in_sequence_then_answers():
     # Real nesting, one specialist at a time: K Super delegates → specialist runs its tool → returns.
     assert [to for to, _ in blocks] == ["meeting", "news", "advisory"], blocks
     for to, inner in blocks:
-        assert inner == ["agent_start", "tool_start", "tool_end", "agent_end"], (to, inner)
+        tools = ["tool_start", "tool_end"] * (2 if to == "advisory" else 1)  # advisory: the graph, then the review
+        assert inner == ["agent_start", *tools, "agent_end"], (to, inner)
     tool_names = [e["tool"] for e in events if e["type"] == "tool_start"]
-    assert tool_names == [MEETING_WORKFLOW, NEWS_WORKFLOW, ADVISORY_WORKFLOW]
+    assert tool_names == [MEETING_WORKFLOW, NEWS_WORKFLOW, KG_TOOL, ADVISORY_WORKFLOW]
     tasks = {e["to"]: e["task"] for e in events if e["type"] == "delegation_start"}
     assert all(tasks.values())
     # K Super decided on its own to carry earlier results into the Advisory task
@@ -234,8 +236,8 @@ def test_advisory_direct_chat_uses_tool_for_real_review():
     with client.stream("POST", "/api/agents/advisory/run", json={"request": "뉴로엣지 인수를 CTO 관점에서 검토해줘."}) as res:
         assert res.status_code == 200, res.text
         events = [json.loads(line) for line in res.iter_lines() if line.strip()]
-    tool_end = next(e for e in events if e["type"] == "tool_end")
-    assert tool_end["tool"] == ADVISORY_WORKFLOW and tool_end["result"]["persona"] == "CTO"
+    tool_end = next(e for e in events if e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW)
+    assert tool_end["result"]["persona"] == "CTO"
 
 
 def test_delegation_path_still_requires_tool(monkeypatch):

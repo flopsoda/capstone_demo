@@ -84,6 +84,8 @@ def test_group_registry_content():
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
         "run_mna_review": ("tool", {"advisory"}),
+        "enterprise_knowledge": ("skill", {"advisory"}),
+        "query_enterprise_kg": ("tool", {"advisory"}),
     }
     assert set(a2a_tool.request_k_electronics_review.args) == {"request"}
     assert set(group_registry.get_capability("correct_transcript").impl.args) == {"transcript_id"}

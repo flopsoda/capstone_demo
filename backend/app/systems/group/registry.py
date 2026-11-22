@@ -9,6 +9,7 @@ the Tools' descriptions.
 from __future__ import annotations
 
 from ...library.skills.decision_review import DECISION_REVIEW
+from ...library.skills.enterprise_knowledge import ENTERPRISE_KNOWLEDGE
 from ...library.skills.external_risk_analysis import EXTERNAL_RISK_ANALYSIS
 from ...library.skills.news_briefing import NEWS_BRIEFING
 from ...library.skills.meeting_context_analysis import MEETING_CONTEXT_ANALYSIS
@@ -30,6 +31,7 @@ from .tools.run_news_briefing import run_news_briefing
 from .tools.run_action_item_tracking import run_action_item_tracking
 from .tools.run_meeting_context_retrieval import run_meeting_context_retrieval
 from .tools.run_meeting_schedule import run_meeting_schedule
+from .tools.query_enterprise_kg import query_enterprise_kg
 from .tools.run_mna_review import run_mna_review
 from .tools.save_meeting_minutes import save_meeting_minutes
 from .tools.update_action_item import update_action_item
@@ -69,6 +71,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     # Management Advisory Agent (Group's company store)
     Capability(MNA_FEASIBILITY_REVIEW, frozenset({ADVISORY})),
     Capability(run_mna_review, frozenset({ADVISORY})),
+    Capability(ENTERPRISE_KNOWLEDGE, frozenset({ADVISORY})),
+    Capability(query_enterprise_kg, frozenset({ADVISORY})),
 )
 
 REGISTRY = Registry(CAPABILITIES)

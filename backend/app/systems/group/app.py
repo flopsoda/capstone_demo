@@ -14,12 +14,13 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from ...library.workflows import decision_watch, mail_actions, meeting_control, meeting_desk, meeting_report
+from ...library.tools.correct_transcript import ask_model
 from ...library.workflows.jobs import start_meeting_jobs
 from ...library.workflows.meeting_store import StoreUnavailable, Viewer, viewer_for
 from ...runtime.api import ndjson_run, run_identity, shutdown_signal, sse_events
 from ...runtime.events import new_run
 from ...runtime.schemas import Identified, RunRequest
-from . import MEETING_STORE, SYSTEM
+from . import KG_STORE, MEETING_STORE, SYSTEM
 from .agents.advisory import run_advisory_agent
 from .agents.group_super import run_group_super
 from .agents.meeting import run_meeting_agent
@@ -31,7 +32,8 @@ app = FastAPI(title="Group agent system", version="0.5.0")
 # Observer streams end on shutdown so uvicorn --reload can restart; the meeting store's mail /
 # reminder jobs and the decision watch (news against the premises of the decisions in force) start
 # with the app (only when MEETINGS_BACKGROUND_JOBS=1) and stop with it.
-STOP = shutdown_signal(app, on_start=lambda stop: start_meeting_jobs(MEETING_STORE, stop, watch=DECISION_WATCH.scan))
+STOP = shutdown_signal(app, on_start=lambda stop: start_meeting_jobs(
+    MEETING_STORE, stop, watch=DECISION_WATCH.scan, kg=lambda: KG_STORE.watch_pass(ask_model)))
 
 
 @app.get("/api/health")

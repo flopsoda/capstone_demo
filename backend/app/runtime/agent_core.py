@@ -23,6 +23,7 @@ grounding check after the run. It is not part of the message state.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -36,8 +37,11 @@ from langgraph.graph.state import CompiledStateGraph
 from pydantic import ValidationError
 
 from .capabilities import Skill
-from .events import AgentError, emit
+from .events import AgentError, current_run, emit
 from .llm import get_chat_model
+from .memory import RECALL_TOOL, ConversationMemory
+
+log = logging.getLogger("agents")
 
 # Upper bound on LangGraph super-steps per agent invocation (model ↔ tools loop).
 RECURSION_LIMIT = 10
@@ -270,6 +274,7 @@ class SuperAgent:
     display_name: str  # Korean name used in error messages
     system_prompt: str  # identity + Skills from the registry
     tools: tuple[BaseTool, ...]  # handoff Tools from the registry
+    memory: ConversationMemory | None = None  # the system's conversation memory (direct conversations only)
 
     @property
     def tools_by_name(self) -> dict[str, BaseTool]:
@@ -289,6 +294,9 @@ def build_super_graph(spec: SuperAgent) -> CompiledStateGraph:
 
     def call_model(state: MessagesState, config: RunnableConfig) -> dict:
         system = f"{spec.system_prompt}\n\n{SUPER_INVOCATION_CONTEXT[_invocation(config, 'a2a')]}"
+        recalled = config.get("configurable", {}).get("memory_context")
+        if recalled:  # past exchanges with this user that bear on the request (run_super, direct only)
+            system = f"{system}\n\n{recalled}"
         model = get_chat_model().bind_tools(tools)
         response = invoke_model(spec.agent_id, model, [SystemMessage(system), *state["messages"]])
         return {"messages": [response]}
@@ -322,10 +330,11 @@ def run_super(spec: SuperAgent, graph: CompiledStateGraph, request: str, *, invo
     direct context (a user chatting) the model may answer without a Tool.
     """
     emit({"type": "agent_start", "agent": spec.agent_id, "request": request})
+    recalled = _recall(spec, request) if invocation == "direct" else ""
     try:
         state = graph.invoke(
             {"messages": [HumanMessage(request)]},
-            config={"recursion_limit": RECURSION_LIMIT, "configurable": {"invocation": invocation}},
+            config={"recursion_limit": RECURSION_LIMIT, "configurable": {"invocation": invocation, "memory_context": recalled}},
         )
     except AgentError:
         raise  # a downstream agent already attributed the failure
@@ -338,4 +347,35 @@ def run_super(spec: SuperAgent, graph: CompiledStateGraph, request: str, *, invo
     if not response:
         raise AgentError(spec.agent_id, f"{spec.display_name}가 최종 검토 결과를 생성하지 않았습니다.")
     emit({"type": "agent_end", "agent": spec.agent_id, "response": response})
+    if invocation == "direct":
+        _remember(spec, request, response, messages)
     return response
+
+
+def _recall(spec: SuperAgent, request: str) -> str:
+    """The memory's paragraph for this request, reported as tool_start / tool_end (args.auto: not a model's call).
+    A memory that fails leaves the run as it would be without one."""
+    run = current_run()
+    if spec.memory is None or run is None or not spec.memory.applies(run):
+        return ""
+    emit({"type": "tool_start", "agent": spec.agent_id, "tool": RECALL_TOOL, "args": {"auto": True}})
+    try:
+        recall = spec.memory.recall(run, request)
+        context, result = recall.context, recall.result
+    except Exception as e:  # the store or the embedding model is down: answer without memory
+        log.warning("conversation memory recall failed (%s): %s", spec.agent_id, e)
+        context, result = "", {"error": f"기억을 불러오지 못했습니다: {type(e).__name__}"}
+    emit({"type": "tool_end", "agent": spec.agent_id, "tool": RECALL_TOOL, "result": result})
+    return context
+
+
+def _remember(spec: SuperAgent, request: str, response: str, messages: list[BaseMessage]) -> None:
+    run = current_run()
+    if spec.memory is None or run is None or not spec.memory.applies(run):
+        return
+    handoffs = [{"tool": call["name"], **{k: v for k, v in call["args"].items() if isinstance(v, str)}}
+                for m in messages if isinstance(m, AIMessage) for call in m.tool_calls]
+    try:
+        spec.memory.remember(run, request, response, handoffs)
+    except Exception as e:  # the answer is already out; a lost memory must not turn the run into an error
+        log.warning("conversation memory not saved (%s): %s", spec.agent_id, e)

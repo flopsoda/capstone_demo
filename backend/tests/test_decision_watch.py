@@ -315,3 +315,31 @@ def test_the_control_room_shows_progress_by_owner(decided):
     assert (owner["total"], owner["done"], owner["overdue"]) == (1, 0, 1) and owner["subjects"] == ["HBM 증설"]
     assert owner["items"][0]["meeting"]["id"] == decided and owner["items"][0]["overdue"] is True
     assert rows[0]["overdue"] >= rows[-1]["overdue"]  # late work first
+
+
+def test_the_watch_reads_the_system_news_store(meeting_db, news_db, monkeypatch):
+    """The watch job's articles come from the news store (the data file's articles and whatever the feeds brought),
+    in the shape it judges: names from the stored mentions and analyses."""
+    from app.systems.group.tools.run_decision_review import DECISION_WATCH
+
+    monkeypatch.setattr(outbox, "lookup_email", lambda name: None)
+    articles = DECISION_WATCH.articles()
+    contract = next(a for a in articles if a["id"] == "NEWS-G-2026-09-22-01")
+    assert contract["date"] == "2026-09-22" and "브라이트셀" in contract["companies"] and contract["headline"].startswith("브라이트셀")
+    out = save_minutes(store=STORE, viewer=SECRETARY, title="브라이트셀 지분 투자 검토", date="2026-09-20", summary="투자 한도 승인",
+                       attendees=[{"name": "정전략", "title": "그룹 전략실장", "role": "chair"}], finalize=True,
+                       decisions=[{"kind": "decision", "statement": "브라이트셀 지분 투자 3천억 원 한도 승인",
+                                   "premises": [{"kind": "premise", "statement": "최대 고객 공급계약이 유지된다",
+                                                 "watch": ["브라이트셀"], "speaker": "정전략 (그룹 전략실장)"}]}])
+    assert out.get("finalized"), out.get("warnings")
+    with STORE.connect() as conn:
+        found = dw.scan_articles(conn, articles, Model({"effect": "at_risk", "reason": "2027년 만료, 재계약 조건 미확정"}))
+        signal = conn.execute("SELECT source_ref, effect FROM premise_signals").fetchone()
+    assert found["shaken"] == 1 and (signal["source_ref"], signal["effect"]) == ("NEWS-G-2026-09-22-01", "at_risk")
+
+
+def test_the_watch_reads_the_data_file_without_a_news_store():
+    from app.systems.group import DATA_DIR
+
+    watch = review_tool.make_decision_watch(STORE, DATA_DIR / "news.json", news=None)
+    assert {a["id"] for a in watch.articles()} >= {"NEWS-G-2026-09-22-01"}

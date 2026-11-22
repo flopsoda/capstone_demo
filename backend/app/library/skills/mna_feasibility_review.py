@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from ...runtime.capabilities import Skill
+from ..tools.query_enterprise_kg import TOOL_NAME as KG_TOOL
 from ..tools.run_mna_review import TOOL_NAME
 
 MNA_FEASIBILITY_REVIEW = Skill(
@@ -15,6 +16,7 @@ MNA_FEASIBILITY_REVIEW = Skill(
     instructions=f"""\
 Tool 사용:
 - 실제 기업에 대한 인수 검토(재무 타당성, 전략적 가치, 기술적 의미, 리스크, 권고)와 What-if 분석은 반드시 등록된 Workflow Tool({TOOL_NAME})로 수행한다.
+  그 전에 먼저 {KG_TOOL}로 대상 기업을 조회해(위임받은 문장에 맥락이 있어도) 확인한 회의 기준 · 관계 변화 · 판정된 영향을 출처와 함께 context에 넣는다 (enterprise_knowledge 지침).
   기업 데이터가 없을 것 같아도 추측하지 말고 Tool로 확인한다. 일반적인 M&A 개념, 평가 방법론, 경영 전략에 대한 질문은 Tool 없이 답해도 된다.
 - 데이터에 없는 기업 사실(매출, 가격, 고객, 소송, 계약 기간, 특허 수 등)을 기억이나 추측으로 만들어내지 않는다.
   Tool이 데이터가 없다고 돌려주면(found: false) 데이터 부족 사실을 안내한다.
