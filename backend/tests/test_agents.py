@@ -23,7 +23,14 @@ A2A_REQUEST = (
 MEETING_WORKFLOW = "run_meeting_context_retrieval"
 NEWS_WORKFLOW = "run_company_risk_news_analysis"
 ADVISORY_WORKFLOW = "run_mna_review"
-KG_TOOL = "query_enterprise_kg"  # the advisory agent looks the company up in the graph before the review
+KG_TOOL = "query_enterprise_kg"
+RECORD_TOOL = "record_advisory_opinion"
+RECOMMENDATIONS = {"PROCEED", "CONDITIONAL_PROCEED", "DO_NOT_PROCEED"}
+
+
+def _kept_judgements(events: list[dict]) -> list[dict]:
+    """The advisory agent's judgements that passed the checks and were kept (its own recommendation, never a Tool's)."""
+    return [e["result"] for e in events if e["type"] == "tool_end" and e["tool"] == RECORD_TOOL and e["result"].get("accepted")]
 
 
 def test_meeting_agent_emits_tool_lifecycle():
@@ -66,7 +73,7 @@ def test_news_agent_emits_tool_lifecycle():
     assert "코어NPU" in response and "CTO" in response
 
 
-def test_advisory_agent_emits_tool_lifecycle():
+def test_advisory_agent_computes_then_judges_and_records():
     from app.systems.k_electronics.agents.advisory import run_advisory_agent
     from app.runtime.events import collect_events
 
@@ -79,12 +86,11 @@ def test_advisory_agent_emits_tool_lifecycle():
     )
     types = [e["type"] for e in events]
     assert types[0] == "agent_start" and types[-1] == "agent_end"
-    assert [e["tool"] for e in events if e["type"] == "tool_start"] == [KG_TOOL, ADVISORY_WORKFLOW]
-    tool_end = next(e for e in events if e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW)
-    assert tool_end["result"]["persona"] == "CFO"
-    assert tool_end["result"]["recommendation"] == "CONDITIONAL_PROCEED"
-    assert tool_end["result"]["context_signals"]["price_ceiling_trillion_krw"] == 2.5
-    assert "조건부" in response and "2.3조" in response
+    reviews = [e["result"] for e in events if e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW]
+    assert reviews and all("recommendation" not in r for r in reviews)  # the numbers Tool does not recommend
+    kept = _kept_judgements(events)
+    assert kept and kept[-1]["recommendation"] in RECOMMENDATIONS, [e for e in events if e["type"] == "tool_end"]
+    assert response
 
 
 def _delegation_blocks(events: list[dict]) -> list[tuple[str, list[str]]]:
@@ -100,7 +106,7 @@ def _delegation_blocks(events: list[dict]) -> list[tuple[str, list[str]]]:
     return blocks
 
 
-def test_k_super_delegates_to_each_specialist_in_sequence_then_answers():
+def test_k_super_hands_the_acquisition_judgement_to_the_advisory_agent():
     from app.systems.k_electronics.agents.k_super import run_k_super
     from app.runtime.events import collect_events
 
@@ -108,26 +114,15 @@ def test_k_super_delegates_to_each_specialist_in_sequence_then_answers():
     types = [e["type"] for e in events]
     assert types[0] == "agent_start" and events[0]["agent"] == "k_super"
     assert types[-1] == "agent_end" and events[-1]["agent"] == "k_super"
-    # Step 6: K Super's own final review, written from its message history — no
-    # synthesis tool, no template. It answers the request's last item (본실사 진입 여부).
-    assert events[-1]["response"] == response and response
-    assert "본실사" in response, response
-
-    blocks = _delegation_blocks(events)
-    # Real nesting, one specialist at a time: K Super delegates → specialist runs its tool → returns.
-    assert [to for to, _ in blocks] == ["meeting", "news", "advisory"], blocks
-    for to, inner in blocks:
-        tools = ["tool_start", "tool_end"] * (2 if to == "advisory" else 1)  # advisory: the graph, then the review
-        assert inner == ["agent_start", *tools, "agent_end"], (to, inner)
-    tool_names = [e["tool"] for e in events if e["type"] == "tool_start"]
-    assert tool_names == [MEETING_WORKFLOW, NEWS_WORKFLOW, KG_TOOL, ADVISORY_WORKFLOW]
-    tasks = {e["to"]: e["task"] for e in events if e["type"] == "delegation_start"}
-    assert all(tasks.values())
-    # K Super decided on its own to carry earlier results into the Advisory task
-    # (no code builds this text): the meeting's price criterion and the news risks.
-    review = next(e for e in events if e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW)["result"]
-    assert review["context_signals"]["price_ceiling_trillion_krw"] == 2.5, tasks["advisory"]
-    assert set(review["context_signals"]["confirmed_risks"]) >= {"customer_concentration", "key_personnel"}, tasks["advisory"]
+    assert events[-1]["response"] == response and "본실사" in response, response
+    handoffs = [(e["from"], e["to"]) for e in events if e["type"] == "delegation_start"]
+    assert ("k_super", "advisory") in handoffs, handoffs
+    # whoever looks up meetings / news does it as a specialist handoff: K Super for items the request names,
+    # the advisory agent (look-up only) for evidence it decides it needs
+    assert all(frm in ("k_super", "advisory") for frm, to in handoffs if to in ("meeting", "news")), handoffs
+    kept = _kept_judgements(events)
+    assert kept and kept[-1]["recommendation"] in RECOMMENDATIONS
+    assert any(e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW for e in events)
 
 
 def test_k_super_decides_each_delegation_in_its_own_model_turn():
@@ -141,8 +136,8 @@ def test_k_super_decides_each_delegation_in_its_own_model_turn():
         lambda: build_k_super().invoke({"messages": [HumanMessage(A2A_REQUEST)]}, config={"recursion_limit": RECURSION_LIMIT})
     )
     turns = [[c["name"] for c in m.tool_calls] for m in state["messages"] if isinstance(m, AIMessage) and m.tool_calls]
-    # Meeting result arrives, the model decides again, then News — not both in one turn.
-    assert turns == [["delegate_to_meeting_agent"], ["delegate_to_news_agent"], ["delegate_to_advisory_agent"]], turns
+    # One handoff per model turn: each result arrives before the model decides again. The acquisition judgement goes to advisory.
+    assert all(len(t) == 1 for t in turns) and ["delegate_to_advisory_agent"] in turns, turns
     # The run ends because the model answered without a tool call, not because
     # of a termination rule: the last message is a plain AI message.
     last = state["messages"][-1]
@@ -175,7 +170,7 @@ def test_api_streams_ndjson_events():
         events = [json.loads(line) for line in res.iter_lines() if line.strip()]
     types = [e["type"] for e in events]
     assert types[-1] == "done"
-    assert [e["to"] for e in events if e["type"] == "delegation_start"] == ["meeting", "news", "advisory"]
+    assert "advisory" in [e["to"] for e in events if e["type"] == "delegation_start" and e["from"] == "k_super"]
     assert "tool_start" in types
 
 
@@ -237,7 +232,8 @@ def test_advisory_direct_chat_uses_tool_for_real_review():
         assert res.status_code == 200, res.text
         events = [json.loads(line) for line in res.iter_lines() if line.strip()]
     tool_end = next(e for e in events if e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW)
-    assert tool_end["result"]["persona"] == "CTO"
+    assert tool_end["result"]["found"] is True
+    assert events[-1]["type"] == "done"
 
 
 def test_delegation_path_still_requires_tool(monkeypatch):
@@ -311,7 +307,7 @@ def test_group_super_asks_k_electronics_over_a2a_and_writes_the_group_judgment(m
     # K's own delegations are visible as relayed observation events, in K's order. Group Super may also
     # have delegated to its own specialists first (its call); those are not relayed.
     k_delegations = [e["to"] for e in events if e["type"] == "delegation_start" and e.get("relayed")]
-    assert k_delegations == ["meeting", "news", "advisory"], events
+    assert "advisory" in k_delegations, events
     assert all(e.get("relayed") for e in events if e["system"] == "k_electronics")
     assert all(not e.get("relayed") for e in events if e["system"] == "group")
     a2a_end = next(e for e in events if e["type"] == "a2a_end")

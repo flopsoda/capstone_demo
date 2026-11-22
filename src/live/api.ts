@@ -33,7 +33,7 @@ export type AgentEvent = EventStamp &
     | { type: "agent_end"; agent: string; response: string }
     | { type: "delegation_end"; from: string; to: string; response: string }
     | { type: "delegation_skipped"; from: string; to: string; reason: string }
-    | { type: "a2a_end"; from: string; to: string; response: string }
+    | { type: "a2a_end"; from: string; to: string; response: string; artifacts?: { kind: string; id: string; system: string; title: string }[] }
     | { type: "error"; agent: string; message: string }
     | { type: "done" }
   );

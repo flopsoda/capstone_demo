@@ -206,67 +206,34 @@ function newsBriefingBlocks(result: unknown): MessageBlock[] {
   return [...head, { kind: "label", text: "주요 이슈" }, ...result.topics.flatMap(newsTopicBlocks), ...tail];
 }
 
-interface MnaInputs {
-  financials: { revenue: string; revenue_cagr_3y: string; operating_margin: string };
-  valuation: { asking: string; fair_value: string };
-  customers: { largest: string; largest_share: string };
-  technology: { internal_development: string; integration_after_acquisition: string; time_to_market_gain: string };
-}
-
-interface MnaAssessment {
-  label: string;
-  verdict: string;
-  level: string | null;
-  finding: string;
-}
-
 /**
- * Shapes returned by run_mna_review (backend/app/library/workflows): a single-perspective review
- * (mna_review.py; What-if adds the same fields, mna_scenario.py) or, for persona "ALL", the
- * CEO·CFO·CTO summary (mna_executive_summary.py, mode "executive_summary").
+ * Shapes returned by the Advisory Tools (backend/app/library/workflows/advisory): run_mna_review gives facts and
+ * computed figures (each with an id and a display string) but no recommendation; the recommendation is the advisory
+ * agent's, recorded with record_advisory_opinion (accepted, or problems to fix) together with a report reference.
  */
-interface MnaReviewResult {
+interface MnaAnalysisResult {
   found: boolean;
   message?: string;
-  mode?: string;
-  persona_label: string;
-  inputs: MnaInputs;
-  assessments: MnaAssessment[];
-  recommendation: string;
-  recommendation_label: string;
-  conditions: string[];
+  price: { label: string; trillion_krw: number };
+  figures: Record<string, string[]>; // group → "id — label: value (basis)"
+  checks: { criterion: string; actual: string; met: boolean }[];
+  scenarios: { id: string; name: string; notes: string[] }[];
 }
 
-interface MnaExecutiveSummaryResult {
-  found: true;
-  mode: "executive_summary";
-  inputs: MnaInputs;
-  executive_reviews: Record<string, { assessments: MnaAssessment[] }>;
-  key_risks: { label: string; level: string | null; finding: string }[];
-  recommendation: string;
-  recommendation_label: string;
-  conditions: string[];
+interface AdvisoryRecordResult {
+  accepted: boolean;
+  problems?: string[];
+  review_id?: string;
+  recommendation?: string;
+  recommendation_label?: string;
+  evaluation_type?: string;
+  artifacts?: { title: string; id: string }[];
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
-function isMnaReviewResult(v: unknown): v is Record<string, unknown> & { found: boolean; message?: string } {
-  return isObject(v) && typeof v.found === "boolean";
-}
-
-/** A found single-perspective (or What-if) review with every field the renderer reads. */
-function isPersonaReview(v: Record<string, unknown>): v is Record<string, unknown> & MnaReviewResult {
-  return isObject(v.inputs) && Array.isArray(v.assessments) && Array.isArray(v.conditions);
-}
-
-function isExecutiveSummary(v: Record<string, unknown>): v is Record<string, unknown> & MnaExecutiveSummaryResult {
-  return (
-    v.mode === "executive_summary" &&
-    isObject(v.inputs) &&
-    isObject(v.executive_reviews) &&
-    Array.isArray(v.key_risks) &&
-    Array.isArray(v.conditions)
-  );
+function isMnaAnalysis(v: unknown): v is MnaAnalysisResult {
+  return isObject(v) && typeof v.found === "boolean" && (!v.found || (isObject(v.figures) && isObject(v.price)));
 }
 
 const RECOMMENDATION_TONE: Record<string, BadgeTone> = {
@@ -275,82 +242,48 @@ const RECOMMENDATION_TONE: Record<string, BadgeTone> = {
   DO_NOT_PROCEED: "high",
 };
 
-const VERDICT_TEXT: Record<string, string> = { positive: "긍정", concern: "우려", neutral: "검토" };
-
-function assessmentText(a: { verdict: string; level: string | null; finding: string }): string {
-  const level = a.level ? ` · ${RISK_LEVEL_BADGE[a.level]?.text ?? a.level}` : "";
-  return `${VERDICT_TEXT[a.verdict] ?? a.verdict}${level} — ${a.finding}`;
-}
-
-function mnaInputBlocks(inputs: MnaInputs): MessageBlock[] {
-  return [
-    { kind: "label", text: "입력 정보" },
-    {
-      kind: "kv",
-      items: [
-        { k: "요구가격", v: inputs.valuation.asking },
-        { k: "추정 적정가치", v: inputs.valuation.fair_value },
-        { k: "매출 / CAGR / 영업이익률", v: `${inputs.financials.revenue} / ${inputs.financials.revenue_cagr_3y} / ${inputs.financials.operating_margin}` },
-        { k: "최대 고객", v: `${inputs.customers.largest} (${inputs.customers.largest_share})` },
-        { k: "자체 개발", v: inputs.technology.internal_development },
-        { k: "인수 + 통합", v: inputs.technology.integration_after_acquisition },
-        { k: "기대 단축 기간", v: inputs.technology.time_to_market_gain },
-      ],
-    },
-  ];
-}
-
-function mnaRecommendationBlocks(result: { recommendation: string; recommendation_label: string; conditions: string[] }): MessageBlock[] {
-  return [
-    { kind: "label", text: "권고" },
-    { kind: "badge", text: result.recommendation_label, tone: RECOMMENDATION_TONE[result.recommendation] ?? "info" },
-    { kind: "label", text: "권고 조건" },
-    { kind: "list", ordered: true, items: result.conditions },
-  ];
-}
-
-/** persona "ALL": each perspective's assessments, the merged key risks, one recommendation. */
-function mnaExecutiveSummaryBlocks(result: MnaExecutiveSummaryResult): MessageBlock[] {
-  const perspectives = Object.entries(result.executive_reviews).flatMap(([persona, review]): MessageBlock[] =>
-    Array.isArray(review?.assessments)
-      ? [
-          { kind: "label", text: `${persona} 관점 평가` },
-          { kind: "kv", items: review.assessments.map((a) => ({ k: a.label, v: assessmentText(a) })) },
-        ]
-      : [],
-  );
-  const risks = result.key_risks.map((r) => {
-    const level = r.level ? `${RISK_LEVEL_BADGE[r.level]?.text ?? r.level} · ` : "";
-    return `${level}${r.label} — ${r.finding}`;
-  });
-  const riskBlocks: MessageBlock[] = risks.length
-    ? [
-        { kind: "label", text: "핵심 위험" },
-        { kind: "list", items: risks },
-      ]
-    : [];
-  return [
-    { kind: "badge", text: "CEO·CFO·CTO 종합", tone: "info" },
-    ...mnaInputBlocks(result.inputs),
-    ...perspectives,
-    ...riskBlocks,
-    ...mnaRecommendationBlocks(result),
-  ];
-}
+const KEY_FIGURES = ["dcf.equity_value", "price.premium_vs_dcf", "val.sensitivity_low", "val.sensitivity_high", "plan.break_even_year",
+  "cust.largest_share", "cust.po_coverage", "tech.ttm_gain", "people.retention_open"];
 
 function mnaReviewBlocks(result: unknown): MessageBlock[] {
-  if (!isMnaReviewResult(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  if (!isMnaAnalysis(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
   if (!result.found) return [{ kind: "text", text: result.message ?? "기업 데이터를 찾지 못했습니다." }];
-  if (isExecutiveSummary(result)) return mnaExecutiveSummaryBlocks(result);
-  // A shape this renderer does not know (a newer mode, an error payload): show it as is.
-  if (!isPersonaReview(result)) return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
-  return [
-    { kind: "badge", text: result.persona_label, tone: "info" },
-    ...mnaInputBlocks(result.inputs),
-    { kind: "label", text: `평가 항목 · ${result.persona_label} 우선순위` },
-    { kind: "kv", items: result.assessments.map((a) => ({ k: a.label, v: assessmentText(a) })) },
-    ...mnaRecommendationBlocks(result),
+  const lines = Object.values(result.figures).flat();
+  // "A1.dcf.equity_value — DCF 주주가치: 21,493억 원 (…)" → the base figure (no scenario segment) or a scenario's
+  const figure = (key: string, scenario?: string) =>
+    lines.find((l) => l.split(" — ")[0].endsWith(`.${key}`) && (scenario ? l.includes(`.${scenario}.`) : !/\.S\d+\./.test(l.split(" — ")[0])));
+  const kv = (line: string) => {
+    const text = line.split(" — ").slice(1).join(" — ");
+    const at = text.indexOf(": ");
+    return { k: text.slice(0, at), v: text.slice(at + 2) };
+  };
+  const blocks: MessageBlock[] = [
+    { kind: "badge", text: `${result.price.label} ${result.price.trillion_krw}조 원 기준`, tone: "info" },
+    { kind: "label", text: "주요 수치 (권고 없음 — 경영자문 에이전트가 판단)" },
+    { kind: "kv", items: KEY_FIGURES.map((k) => figure(k)).filter((l): l is string => Boolean(l)).map(kv) },
   ];
+  if (result.checks.length) {
+    blocks.push({ kind: "label", text: "회의 기준 대조" },
+      { kind: "list", items: result.checks.map((c) => `${c.met ? "충족" : "미충족"} — ${c.criterion} (평가 ${c.actual})`) });
+  }
+  for (const s of result.scenarios) {
+    const extra = ["dcf.equity_value", "delta.equity_value"].map((k) => figure(k, s.id)).filter((l): l is string => Boolean(l))
+      .map((l) => { const { k, v } = kv(l); return `${k}: ${v}`; });
+    blocks.push({ kind: "label", text: `시나리오 · ${s.name}` }, { kind: "list", items: [...s.notes, ...extra] });
+  }
+  return blocks;
+}
+
+function advisoryRecordBlocks(result: unknown): MessageBlock[] {
+  if (!isObject(result) || typeof result.accepted !== "boolean") return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
+  const r = result as unknown as AdvisoryRecordResult;
+  if (!r.accepted) return [{ kind: "label", text: "판단 기록 보류 — 고칠 점" }, { kind: "list", items: r.problems ?? [] }];
+  const blocks: MessageBlock[] = [
+    { kind: "badge", text: r.recommendation_label ?? r.recommendation ?? "", tone: RECOMMENDATION_TONE[r.recommendation ?? ""] ?? "info" },
+    { kind: "kv", items: [{ k: "판단 id", v: r.review_id ?? "" }, { k: "평가 종류", v: r.evaluation_type ?? "" }] },
+  ];
+  if (r.artifacts?.length) blocks.push({ kind: "list", items: r.artifacts.map((a) => `보고서: ${a.title} (문서번호 ${a.id})`) });
+  return blocks;
 }
 
 /** Per-tool rendering of a result. Unknown tools fall back to JSON. */
@@ -364,6 +297,9 @@ function resultBlocks(tool: string, result: unknown): MessageBlock[] {
       return newsBriefingBlocks(result);
     case "run_mna_review":
       return mnaReviewBlocks(result);
+    case "record_advisory_opinion":
+    case "add_advisory_details":
+      return advisoryRecordBlocks(result);
     default:
       return [{ kind: "text", text: JSON.stringify(result, null, 2) }];
   }
@@ -464,11 +400,12 @@ export function createAgentEventMapper(resolveAgent: AgentResolver = (_system, a
       }
 
       case "delegation_skipped": {
-        // The user may not use `to` (principal.agents): nothing ran, the Super Agent answers without it.
+        // Nothing ran: the user may not use `to` (principal.agents), or `to` is already working up the chain (reason "cycle").
         const from = id(ev, ev.from);
         const to = id(ev, ev.to);
         if (!isAgentId(from) || !isAgentId(to)) return [];
-        return [{ type: "agent_status", agent: from, status: `${AGENTS[to].shortName} 사용 권한 없음 · 건너뜀` }];
+        const why = ev.reason === "cycle" ? "되돌아가는 위임" : "사용 권한 없음";
+        return [{ type: "agent_status", agent: from, status: `${AGENTS[to].shortName} ${why} · 건너뜀` }];
       }
 
       case "a2a_start": {

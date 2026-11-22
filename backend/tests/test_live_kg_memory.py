@@ -7,6 +7,8 @@ database. A model answers differently from run to run, so these check what must 
 
 from __future__ import annotations
 
+import json
+
 import os
 
 import pytest
@@ -112,9 +114,10 @@ def test_the_advisory_agent_builds_on_the_graph_with_the_real_model(meeting_db, 
     assert events[-1]["type"] == "done", events[-1]
     tools = [e["tool"] for e in events if e["type"] == "tool_start"]
     assert "query_enterprise_kg" in tools and "run_mna_review" in tools, tools
-    review = next(e for e in events if e["type"] == "tool_start" and e["tool"] == "run_mna_review")
+    reviews = [e for e in events if e["type"] == "tool_start" and e["tool"] == "run_mna_review"]
     answer = next(e for e in events if e["type"] == "agent_end")["response"]
-    assert "알파모바일" in (review["args"].get("context") or "") + answer, (review["args"], answer)
+    # what the graph says about 알파모바일 reached the numbers (a scenario) or the judgement
+    assert "알파모바일" in json.dumps([r["args"] for r in reviews], ensure_ascii=False) + answer, ([r["args"] for r in reviews], answer)
 
 
 def _article(id_, event, date, headline, summary, companies):

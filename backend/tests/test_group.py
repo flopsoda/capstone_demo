@@ -86,6 +86,11 @@ def test_group_registry_content():
         "run_mna_review": ("tool", {"advisory"}),
         "enterprise_knowledge": ("skill", {"advisory"}),
         "query_enterprise_kg": ("tool", {"advisory"}),
+        "record_advisory_opinion": ("tool", {"advisory"}),
+        "add_advisory_details": ("tool", {"advisory"}),
+        "lookup_advisory_reviews": ("tool", {"advisory"}),
+        "ask_meeting_agent": ("tool", {"advisory"}),
+        "ask_news_agent": ("tool", {"advisory"}),
     }
     assert set(a2a_tool.request_k_electronics_review.args) == {"request"}
     assert set(group_registry.get_capability("correct_transcript").impl.args) == {"transcript_id"}
@@ -132,8 +137,8 @@ def test_group_tools_read_group_data_not_k_data(meeting_db, news_db):
     assert g_news.invoke({"query": "리스크", "company": "K바이오"})["matched"] == 1
     assert g_news.invoke({"query": "리스크", "company": "뉴로엣지"})["matched"] == 0  # K's domain, not in the Group store
     g_adv = group_registry.get_capability("run_mna_review").impl
-    assert g_adv.invoke({"query": "인수 검토", "company": "브라이트셀", "persona": "CFO"})["found"] is True
-    assert g_adv.invoke({"query": "인수 검토", "company": "뉴로엣지", "persona": "CFO"})["found"] is False
+    assert g_adv.invoke({"query": "인수 검토", "company": "브라이트셀"})["found"] is True
+    assert g_adv.invoke({"query": "인수 검토", "company": "뉴로엣지"})["found"] is False
 
 
 def test_a2a_tool_relays_peer_lifecycle_and_returns_only_the_final_answer(scripted, k_in_process):

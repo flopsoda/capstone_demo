@@ -58,6 +58,13 @@ class Viewer:
     clearance: int  # 0 none · 1 공개 · 2 사내 · 3 대외비 · 4 극비
     can_write: bool
     user_id: str | None = None  # Keycloak user id, when the gateway knows it (QR check-in → voiceprint key)
+    # The run came from another agent system's A2A request (its two write exceptions apply: reminder, task request).
+    # None = inferred: a viewer that may not write came over A2A. A read-only delegation inside this system sets False.
+    peer: bool | None = None
+
+    @property
+    def via_a2a(self) -> bool:
+        return (not self.can_write) if self.peer is None else self.peer
 
     def scope(self) -> dict[str, Any]:
         return {"clearance": self.clearance, "groups": sorted(self.groups)}

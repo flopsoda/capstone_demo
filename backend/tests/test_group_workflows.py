@@ -2,7 +2,7 @@
 
 from app.library.workflows.meeting_context_retrieval import retrieve_meeting_context
 from app.library.workflows.meeting_store import Viewer
-from app.library.workflows.mna_review import review_acquisition
+from app.library.workflows.advisory.analysis import analyze
 from app.systems.group import DATA_DIR, MEETING_STORE
 from app.systems.group.tools.run_company_risk_news_analysis import run_company_risk_news_analysis as group_risk_news
 
@@ -34,9 +34,10 @@ def test_group_news_store_covers_subsidiaries_and_group_targets(news_db, monkeyp
     assert news("최대 고객", "브라이트셀")["risks"][0]["category"] == "customer_concentration"
 
 
-def test_group_company_store_reviews_the_group_level_target():
-    out = review_acquisition("브라이트셀 인수 검토", "브라이트셀", "CFO", path=COMPANIES)
-    assert out["found"] is True and out["persona"] == "CFO"
-    assert out["recommendation"] in {"PROCEED", "CONDITIONAL_PROCEED", "DO_NOT_PROCEED"}
-    assert out["inputs"]["customers"]["largest"] == "오토원"
-    assert review_acquisition("뉴로엣지", "뉴로엣지", "CEO", path=COMPANIES)["found"] is False
+def test_group_company_store_analyzes_the_group_level_target():
+    out = analyze("브라이트셀", path=COMPANIES, query="브라이트셀 인수 검토")
+    assert out["found"] is True and "recommendation" not in out  # the numbers only; the advisory agent judges
+    figures = {i["id"]: i for i in out["items"]}
+    assert figures["A1.cust.largest_share"]["display"] == "52.0%" and out["tables"]["customers"][0]["name"] == "오토원"
+    assert figures["A1.dcf.equity_value"]["value"] > 0 and figures["A1.price.premium_vs_dcf"]["unit"] == "%"
+    assert analyze("뉴로엣지", path=COMPANIES)["found"] is False

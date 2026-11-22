@@ -30,7 +30,9 @@ SYSTEM_PROMPT = compose_system_prompt(IDENTITY, skills_for(AGENT_ID))
 TOOLS = tools_for(AGENT_ID)
 TOOLS_BY_NAME = {t.name: t for t in TOOLS}
 
-SPEC = Specialist(AGENT_ID, "그룹 경영자문 에이전트", SYSTEM_PROMPT, tuple(TOOLS))
+# Gathers evidence (graph, meeting / news agents, calculations) and records a checked judgement before it answers.
+ADVISORY_RECURSION_LIMIT = 40
+SPEC = Specialist(AGENT_ID, "그룹 경영자문 에이전트", SYSTEM_PROMPT, tuple(TOOLS), recursion_limit=ADVISORY_RECURSION_LIMIT)
 
 
 @lru_cache(maxsize=1)
