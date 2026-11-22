@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -36,6 +36,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import ValidationError
 
+from . import evidence
 from .capabilities import Skill
 from .events import AgentError, current_run, emit
 from .llm import get_chat_model
@@ -54,10 +55,13 @@ HISTORY_CONTEXT = (
     "요청 앞에 [이전 대화]가 붙어 오면 사용자와 앞서 나눈 대화다. 대상(기업 · 안건 · 업무 · 담당자 · 조건)을 이해하는 데만 쓰고 [현재 요청]만 수행한다. 이전 대화에서 이미 끝낸 메일 발송 · 저장 · 등록은 다시 하지 않는다 (조회는 필요하면 다시 한다)."
 )
 
+EMPTY_TURN_NUDGE = "직전 응답이 비어 있었다. 지금까지 생각한 내용대로 바로 Tool을 호출하거나 최종 응답을 써라. 길면 핵심만 간결하게."
+EMPTY_TURN_RETRIES = 4  # the provider sometimes returns a tool call as nothing (systematically when it is very long)
+
 # Specialist agents: "delegation" (a Super Agent handed over a task) or "direct".
 INVOCATION_CONTEXT: dict[Invocation, str] = {
     "delegation": (
-        "호출 맥락: 이 요청은 슈퍼에이전트가 위임한 업무다. 응답은 슈퍼에이전트에게 돌아가는 보고이므로 "
+        "호출 맥락: 이 요청은 다른 에이전트(슈퍼에이전트 또는 다른 전문 에이전트)가 위임한 업무다. 응답은 그 에이전트에게 돌아가는 보고이므로 "
         "반드시 등록된 Workflow Tool의 결과에 근거해 작성한다. 인사말이나 되묻기 없이 결과만 보고한다."
     ),
     "direct": (
@@ -101,12 +105,20 @@ def argument_error(name: str, error: ValidationError) -> dict[str, str]:
                      + ". Tool 설명에 적힌 필드 이름과 형식 그대로 다시 호출하세요."}
 
 
+def is_handoff(tool: BaseTool | None) -> bool:
+    """A Tool that hands work to another agent (delegation): it reports itself as delegation_start / _end."""
+    return bool(tool is not None and (tool.metadata or {}).get("handoff"))
+
+
 def execute_tool_calls(agent: str, message: AIMessage, tools: dict[str, BaseTool]) -> list[ToolMessage]:
-    """Runs every tool call the model made, emitting tool_start / tool_end around each."""
+    """Runs every tool call the model made, emitting tool_start / tool_end around each
+    (a handoff Tool reports the delegation itself instead)."""
     out: list[ToolMessage] = []
     for call in message.tool_calls:
-        emit({"type": "tool_start", "agent": agent, "tool": call["name"], "args": dict(call["args"])})
         tool = tools.get(call["name"])
+        handoff = is_handoff(tool)
+        if not handoff:
+            emit({"type": "tool_start", "agent": agent, "tool": call["name"], "args": dict(call["args"])})
         if tool is None:
             content: Any = {"error": f"unknown tool: {call['name']}"}
         else:
@@ -114,7 +126,8 @@ def execute_tool_calls(agent: str, message: AIMessage, tools: dict[str, BaseTool
                 content = tool.invoke(call["args"])
             except ValidationError as e:  # the arguments did not fit the Tool's schema
                 content = argument_error(call["name"], e)
-        emit({"type": "tool_end", "agent": agent, "tool": call["name"], "result": content})
+        if not handoff:
+            emit({"type": "tool_end", "agent": agent, "tool": call["name"], "result": content})
         out.append(
             ToolMessage(
                 content=content if isinstance(content, str) else json.dumps(content, ensure_ascii=False),
@@ -188,6 +201,7 @@ class Specialist:
     display_name: str  # Korean name used in error messages
     system_prompt: str  # identity + Skills from the registry
     tools: tuple[BaseTool, ...]  # Tools from the registry
+    recursion_limit: int = RECURSION_LIMIT  # an agent that gathers evidence before it answers needs more model ⇄ tools turns
 
     @property
     def tools_by_name(self) -> dict[str, BaseTool]:
@@ -198,15 +212,46 @@ def _invocation(config: RunnableConfig, default: Invocation = "delegation") -> I
     return config.get("configurable", {}).get("invocation", default)
 
 
+def answer_checks(tools: Sequence[BaseTool]) -> list[Callable[[list[BaseMessage]], str | None]]:
+    """Checks a Tool declares on the answer (`metadata["answer_check"]`): given the run's messages when the model answers
+    without a tool call, a returned note goes back to the model once — e.g. a record the agent tried that was refused
+    and is about to be left unfixed. The Tool knows its own results; the core only asks."""
+    out = []
+    for t in tools:
+        check = (t.metadata or {}).get("answer_check")
+        if check is not None and check not in out:
+            out.append(check)
+    return out
+
+
 def build_specialist_graph(spec: Specialist) -> CompiledStateGraph:
     """model ⇄ tools loop over MessagesState; the model ends the run by answering without a tool call."""
     tools = list(spec.tools)
     tools_by_name = spec.tools_by_name
+    checks = answer_checks(tools)
 
     def call_model(state: MessagesState, config: RunnableConfig) -> dict:
         system = f"{spec.system_prompt}\n\n{INVOCATION_CONTEXT[_invocation(config)]}"
         model = get_chat_model().bind_tools(tools)
-        response = invoke_model(spec.agent_id, model, [SystemMessage(system), *state["messages"]])
+        messages = [SystemMessage(system), *state["messages"]]
+        response = invoke_model(spec.agent_id, model, messages)
+        if not response.tool_calls and not message_text(response):
+            # A reasoning model can spend the turn thinking out a long tool call and stop without emitting it.
+            # Ask again (up to EMPTY_TURN_RETRIES), without the reasoning phase and with a one-line nudge (not kept in the history).
+            retry = get_chat_model()
+            if "reasoning" in getattr(type(retry), "model_fields", {}):
+                retry = retry.model_copy(update={"reasoning": False})
+            for _ in range(EMPTY_TURN_RETRIES):
+                log.warning("%s: empty model turn, asking again", spec.agent_id)
+                response = invoke_model(spec.agent_id, retry.bind_tools(tools), [*messages, HumanMessage(EMPTY_TURN_NUDGE)])
+                if response.tool_calls or message_text(response):
+                    break
+        note = None if response.tool_calls else next((n for c in checks if (n := c([*state["messages"], response]))), None)
+        if note:
+            log.warning("%s: answer not accepted yet (%s), asking again", spec.agent_id, note[:60])
+            again = invoke_model(spec.agent_id, model, [*messages, response, HumanMessage(note)])
+            if again.tool_calls or message_text(again):
+                response = again
         return {"messages": [response]}
 
     def run_tools(state: MessagesState) -> dict:
@@ -232,10 +277,11 @@ def run_specialist(spec: Specialist, graph: CompiledStateGraph, task: str, *, in
     """
     emit({"type": "agent_start", "agent": spec.agent_id, "request": task})
     try:
-        state = graph.invoke(
-            {"messages": [HumanMessage(task)]},
-            config={"recursion_limit": RECURSION_LIMIT, "configurable": {"invocation": invocation}},
-        )
+        with evidence.collecting():  # what this run's Tools read, by id (runtime/evidence.py)
+            state = graph.invoke(
+                {"messages": [HumanMessage(task)]},
+                config={"recursion_limit": spec.recursion_limit, "configurable": {"invocation": invocation}},
+            )
     except AgentError:
         raise
     except Exception as e:

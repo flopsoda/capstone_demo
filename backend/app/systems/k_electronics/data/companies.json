@@ -6,32 +6,125 @@
       "aliases": ["뉴로엣지", "NeuroEdge"],
       "business": "AI NPU 설계",
       "description": "가상의 AI 반도체(NPU) 설계 스타트업",
-      "financials": {
-        "fiscal_year": 2025,
-        "revenue_label": "4,200억 원",
-        "revenue_cagr_3y": 0.31,
-        "operating_margin": -0.082
+      "data_room": {
+        "as_of": "2026-11-10",
+        "source": "가상 데이터룸 (합성 데이터 — 감사 · 외부 실사로 확인되지 않은 투자 검토용 가정)",
+        "unit": "억 원"
       },
-      "valuation": {
+      "deal": {
+        "acquirer": "K전자",
+        "stake": 1.0,
         "asking_trillion_krw": 2.8,
-        "fair_value_low_trillion_krw": 2.0,
-        "fair_value_high_trillion_krw": 2.3
+        "asking_note": "매도측 최초 인수 요구가 (지분 100%)",
+        "proposal_trillion_krw": 2.2,
+        "proposal_note": "K전자 가격 조정 제안가 (검토용, 매도측과 합의되지 않음)"
       },
-      "customers": {
-        "largest": { "name": "알파모바일", "revenue_share": 0.46 }
+      "financials": {
+        "years": [
+          { "year": 2024, "kind": "actual", "revenue": 2447, "operating_profit": -392, "fcf": -610 },
+          { "year": 2025, "kind": "actual", "revenue": 3206, "operating_profit": -385, "fcf": -590 },
+          { "year": 2026, "kind": "budget", "revenue": 4200, "operating_profit": -344, "fcf": -510 },
+          { "year": 2027, "kind": "forecast", "revenue": 5100, "operating_profit": -102, "fcf": -390 },
+          { "year": 2028, "kind": "forecast", "revenue": 6200, "operating_profit": 248, "fcf": -60 },
+          { "year": 2029, "kind": "forecast", "revenue": 7400, "operating_profit": 592, "fcf": 250 },
+          { "year": 2030, "kind": "forecast", "revenue": 11000, "operating_profit": 1800, "fcf": 1190 },
+          { "year": 2031, "kind": "forecast", "revenue": 16000, "operating_profit": 3520, "fcf": 2600 }
+        ],
+        "forecast_premise": "2030~2031년 전망은 신규 고객 양산, 판매단가 유지, 원가 개선을 전제로 한 사업계획",
+        "current_year": {
+          "year": 2026,
+          "cogs": 3116,
+          "sga_rnd": 1428,
+          "depreciation_amortization": 218,
+          "one_off_items": [
+            { "item": "시제품 재설계비 (일회성 여부 검증 필요)", "amount": 96 },
+            { "item": "비현금 주식보상", "amount": 45 }
+          ]
+        }
       },
+      "valuation_inputs": {
+        "method": "DCF (2027~2031년 자유현금흐름 + 영구성장 잔존가치)",
+        "valuation_date": "2026-12-31",
+        "wacc": 0.11,
+        "terminal_growth": 0.03,
+        "wacc_range": [0.10, 0.11, 0.12],
+        "terminal_growth_range": [0.02, 0.03, 0.04],
+        "contribution_margin": 0.25,
+        "contribution_margin_note": "매출 감소분이 영업이익 · 현금흐름에 미치는 영향을 계산할 때 쓰는 공헌이익률 가정"
+      },
+      "balance_sheet": {
+        "borrowings": 980,
+        "lease_liabilities": 242,
+        "cash": 740,
+        "receivables": 820,
+        "inventory": 560,
+        "payables": 480,
+        "working_capital_target": 900,
+        "working_capital_expected_at_close": 780,
+        "overdue_receivables_90d": 105,
+        "aged_inventory_180d": 92
+      },
+      "customers": [
+        {
+          "name": "알파모바일",
+          "aliases": ["AlphaMobile"],
+          "revenue_current_year": 1932,
+          "share_forecast": { "2027": 0.40, "2028": 0.34, "2029": 0.29, "2030": 0.24, "2031": 0.20 },
+          "contract": { "expires": "2028-12", "terms": "최소구매 보장 없음", "confirmed_po_next_year": 1120, "change_of_control": "고객 동의 필요 — 확인되지 않음" }
+        },
+        {
+          "name": "국내 제조사 A",
+          "revenue_current_year": 840,
+          "contract": { "expires": "2027-09", "terms": "연간 가격 재협상", "confirmed_po_next_year": 510 }
+        },
+        {
+          "name": "해외 모듈사 B",
+          "revenue_current_year": 630,
+          "contract": { "expires": "2029-03", "terms": "양산 승인 조건부", "confirmed_po_next_year": 360 }
+        },
+        {
+          "name": "기타 고객 (다수)",
+          "revenue_current_year": 798,
+          "contract": { "expires": null, "terms": "개별 발주 기반", "confirmed_po_next_year": 225 }
+        }
+      ],
+      "design_wins_current_year": { "total": 14, "mass_production": 7, "qualification": 4, "delayed": 3 },
       "technology": {
         "domain": "엣지 추론용 AI NPU 설계 IP",
         "acquirer_internal_development_months": [36, 48],
         "post_acquisition_integration_months": [12, 18],
         "time_to_market_gain_months": [24, 30],
+        "performance": {
+          "tops_per_watt": 8.0,
+          "benchmark_tops_per_watt": 7.0,
+          "independently_verified": false,
+          "note": "시험 시료 기준이며 시험 조건이 달라 독립 동등환경 검증 전에는 우위를 확정하지 않음"
+        },
+        "design_completion": 0.93,
+        "prototype_yield": 0.86,
+        "mass_production_target_yield": 0.92,
+        "patents": { "registered": 84, "domestic": 38, "overseas": 46, "pending": 19, "core_families": 6, "core_families_title_confirmed": 4 },
+        "ip_disputes": [
+          { "counterparty": "코어NPU", "subject": "NPU 메모리 구조 특허", "status": "소송 초기 단계, 손해액 미확정" },
+          { "counterparty": "공동개발 파트너사 (비공개)", "subject": "공동개발 IP의 사용권 범위", "status": "사용권 범위 쟁점, 협의 중" }
+        ],
+        "ip_exposure_range": [500, 2000],
+        "ip_exposure_note": "소송 · 합의 · 우회설계 대응 비용의 스트레스 범위 (확정 손실이나 발생 확률이 아님)"
+      },
+      "people": {
         "core_team": "창업자 CTO 중심의 핵심 설계팀",
-        "retention_target": "창업자 CTO 및 핵심 설계팀",
-        "ip_dispute": {
-          "counterparty": "코어NPU",
-          "subject": "NPU 메모리 구조 특허",
-          "status": "소송 초기 단계, 결과 미확정"
-        }
+        "rnd_headcount": 64,
+        "key_designers": 12,
+        "retention_draft_agreed": 9,
+        "retention_open": 3,
+        "retention_note": "미합의 3명은 인수 후 연구 자율성 보장을 요구"
+      },
+      "integration": {
+        "cost_24m": 420,
+        "cost_breakdown": { "인력 유지": 90, "개발 도구": 110, "인증 · 시험": 80, "조직 · 시스템": 60, "예비비": 80 },
+        "synergy_annual_from_2029": 180,
+        "synergy_in_dcf": false,
+        "synergy_note": "출시 기간 단축 · 기술 내재화에 따른 비용 절감 가정. DCF에 반영하지 않았고 계약 · 실적 확인 전에는 확정 시너지가 아님"
       },
       "strategic": {
         "acquirer": "K전자",

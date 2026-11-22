@@ -11,6 +11,7 @@ from langchain_core.tools import BaseTool, tool
 
 from ..workflows.action_items import track_action_items
 from ..workflows.meeting_store import MeetingStore
+from . import evidence_items
 from .meeting_access import current_viewer, store_call
 
 TOOL_NAME = "run_action_item_tracking"
@@ -46,9 +47,9 @@ def make_run_action_item_tracking(store: MeetingStore) -> BaseTool:
         mine: 요청자 본인(또는 본인 부서) 담당만.
     """
         viewer = current_viewer()
-        return store_call(lambda: track_action_items(
+        return evidence_items.recorded(store_call(lambda: track_action_items(
             store=store, viewer=viewer, query=query, owner=owner, status=list(status) if status else None,
             due_before=due_before, due_within_days=due_within_days, overdue_only=overdue_only, meeting_id=meeting_id, mine=mine,
-        ))
+        )), evidence_items.action_items)
 
     return run_action_item_tracking

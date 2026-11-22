@@ -27,6 +27,13 @@ class Identified(BaseModel):
     principal_token: str | None = Field(default=None, description="The principal signed by the gateway (required when PRINCIPAL_SIGNING_KEY is set)")
 
 
+class ReportRequest(Identified):
+    """Open a report a Tool result referred to (`artifacts`): which system keeps it and its id."""
+
+    id: str = Field(min_length=1, description="The report's id (a kept Advisory judgement, e.g. ADV-2026-11-22-01)")
+    system: str | None = Field(default=None, description="The agent system that keeps it; absent = this system")
+
+
 class RunRequest(Identified):
     request: str = Field(min_length=1, description="Natural-language request for the agent")
 

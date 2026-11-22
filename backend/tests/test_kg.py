@@ -291,11 +291,11 @@ def test_advisory_reads_the_graph_and_carries_it_into_its_review(kg, monkeypatch
     from app.systems.k_electronics.agents import advisory
 
     kg.sync(Extractor())
-    context = "KG: 알파모바일 공급계약 종료(2026-11-17, 반도체경제) · MTG-2026-09-15-D1 2.5조 원 초과 시 가격 재검토"
     model = _Model([
         AIMessage(content="", tool_calls=[{"name": "query_enterprise_kg", "args": {"query": "뉴로엣지 인수 검토", "entities": ["뉴로엣지"]}, "id": "k1"}]),
-        AIMessage(content="", tool_calls=[{"name": "run_mna_review", "args": {"query": "뉴로엣지 인수 검토", "company": "뉴로엣지",
-                                                                               "persona": "CFO", "context": context}, "id": "r1"}]),
+        AIMessage(content="", tool_calls=[{"name": "run_mna_review", "args": {
+            "query": "뉴로엣지 인수 검토", "company": "뉴로엣지", "criteria": {"price_ceiling_trillion_krw": 2.5},
+            "scenarios": [{"name": "알파모바일 공급 종료", "largest_customer_revenue_loss": 1.0}]}, "id": "r1"}]),
         "권고: 조건부 진행 (최대 고객 공급계약 종료 반영)",
     ])
     monkeypatch.setattr(agent_core, "get_chat_model", lambda: model)
@@ -306,7 +306,8 @@ def test_advisory_reads_the_graph_and_carries_it_into_its_review(kg, monkeypatch
     kg_result = next(e["result"] for e in events if e["type"] == "tool_end" and e["tool"] == "query_enterprise_kg")
     assert kg_result["found"] and any(f["predicate"] == "SUPPLIES_TO" and f["status"] == "ended" for f in kg_result["reported_facts"])
     review = next(e["result"] for e in events if e["type"] == "tool_end" and e["tool"] == "run_mna_review")
-    assert review["found"] and review["context_signals"]  # the KG's criterion reached the workflow's signals
+    # what the graph said reached the numbers: the meeting's ceiling as a criterion, the ended supply as a scenario
+    assert review["found"] and review["checks"][0]["met"] is False and review["scenarios"][0]["notes"][0].startswith("알파모바일 매출의 100%")
     # the KG result reached the model as a tool message before it wrote the review call
     assert any("SUPPLIES_TO" in getattr(m, "content", "") for m in model.seen[1])
 

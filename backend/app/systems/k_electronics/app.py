@@ -8,14 +8,17 @@ shapes. Started with `uvicorn app.main:app` (app/main.py re-exports this app).
 from __future__ import annotations
 
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from ...library.tools.correct_transcript import ask_model
+from ...library.workflows import meeting_report
+from ...library.workflows.advisory.delivery import report_pdf
 from ...library.workflows.jobs import start_meeting_jobs
+from ...library.workflows.meeting_store import viewer_for
 from ...runtime.api import ndjson_run, run_identity, shutdown_signal, sse_events
 from ...runtime.events import new_run
-from ...runtime.schemas import A2ARequest, RunRequest
-from . import KG_STORE, MEETING_STORE, SYSTEM
+from ...runtime.schemas import A2ARequest, ReportRequest, RunRequest
+from . import ADVISORY_STORE, KG_STORE, MEETING_STORE, SYSTEM
 from .agents.advisory import run_advisory_agent
 from .agents.k_super import run_k_super
 from .agents.meeting import run_meeting_agent
@@ -73,3 +76,24 @@ def news_run(body: RunRequest) -> StreamingResponse:
 def advisory_run(body: RunRequest) -> StreamingResponse:
     """Direct user → Advisory Agent (sidebar chat). Streams events."""
     return ndjson_run(lambda: run_advisory_agent(body.request, invocation="direct"), new_run(system=SYSTEM, root_agent="advisory", **run_identity(body)))
+
+
+def _report(body: ReportRequest, origin: str) -> Response:
+    out = report_pdf(ADVISORY_STORE, viewer_for(run_identity(body)["principal"], origin), body.id)
+    if "error" in out:
+        return JSONResponse({"error": out["error"]}, status_code=out["status"])
+    return Response(out["content"], media_type="application/pdf",
+                    headers={"Content-Disposition": meeting_report.content_disposition(out["filename"]), "Cache-Control": "no-store"})
+
+
+@app.post("/api/a2a/reports", response_model=None)
+def a2a_report(body: ReportRequest) -> Response:
+    """투자심의 보고서 PDF of a kept Advisory judgement, for another agent system that relays it to its user
+    (the A2A surface: the forwarded, signed user is checked against this system's access rule)."""
+    return _report(body, "a2a")
+
+
+@app.post("/api/reports", response_model=None)
+def advisory_report(body: ReportRequest) -> Response:
+    """The same PDF for this system's own users (K UI)."""
+    return _report(body, "direct")

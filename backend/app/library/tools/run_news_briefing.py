@@ -25,6 +25,7 @@ from ..workflows.news.feeds import DEFAULT_FEEDS, load_feeds
 from ..workflows.news.fetch import Fetcher
 from ..workflows.news.pipeline import lookback_days
 from ..workflows.news.store import NewsStore
+from . import evidence_items
 
 TOOL_NAME = "run_news_briefing"
 LLM_TIMEOUT = 90  # seconds one analysis call may take before the rules answer instead
@@ -72,9 +73,9 @@ def make_run_news_briefing(store: NewsStore | None, *, feeds: Path = DEFAULT_FEE
         if store is None:
             return {"query": query, "error": "이 system에는 뉴스 저장소가 연결되어 있지 않습니다.", "topics": []}
         try:
-            return workflow.run_news_briefing(  # the workflow, not this Tool (same name)
+            return evidence_items.recorded(workflow.run_news_briefing(  # the workflow, not this Tool (same name)
                 query, store=store, feeds=load_feeds(feeds), fetcher=fetcher, purpose=purpose, days=days, llm=_llm(),
-                embedder=default_embedder())
+                embedder=default_embedder()), evidence_items.news_briefing)
         except StoreUnavailable as e:
             return {"query": query, "error": str(e), "topics": []}
 

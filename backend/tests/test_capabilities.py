@@ -33,6 +33,11 @@ def test_registry_lists_capabilities_with_permissions():
         "run_mna_review": ("tool", {"advisory"}),
         "enterprise_knowledge": ("skill", {"advisory"}),
         "query_enterprise_kg": ("tool", {"advisory"}),
+        "record_advisory_opinion": ("tool", {"advisory"}),
+        "add_advisory_details": ("tool", {"advisory"}),
+        "lookup_advisory_reviews": ("tool", {"advisory"}),
+        "ask_meeting_agent": ("tool", {"advisory"}),
+        "ask_news_agent": ("tool", {"advisory"}),
     }
 
 
@@ -69,13 +74,10 @@ def test_tool_definition_is_the_source_of_truth():
 
     cap = get_capability("run_mna_review")
     assert isinstance(cap.impl, BaseTool)
-    assert cap.description == cap.impl.description and "persona" in cap.description
-    assert set(cap.impl.args) == {
-    "query", "company", "persona", "context",
-    "asking_trillion_krw", "operating_margin", "revenue_share"
-    }
-    out = cap.impl.invoke({"query": "인수 검토", "company": "뉴로엣지", "persona": "CFO"})
-    assert out["recommendation"] == "CONDITIONAL_PROCEED" and out["persona"] == "CFO"
+    assert cap.description == cap.impl.description and "권고는 돌려주지 않는다" in cap.description
+    assert set(cap.impl.args) == {"query", "company", "price_trillion_krw", "scenarios", "criteria"}
+    out = cap.impl.invoke({"query": "인수 검토", "company": "뉴로엣지"})
+    assert out["found"] and "recommendation" not in out and out["price"]["label"] == "최초 요구가"
 
 
 def test_news_tool_reads_this_systems_news_store(news_db):
@@ -102,7 +104,10 @@ def test_each_agent_gets_only_its_subset():
     assert [c.name for c in capabilities_for("news")] == [
         "external_risk_analysis", "news_briefing", "run_news_briefing", "run_company_risk_news_analysis",
     ]
-    assert [c.name for c in capabilities_for("advisory")] == ["mna_feasibility_review", "run_mna_review", "enterprise_knowledge", "query_enterprise_kg"]
+    assert [c.name for c in capabilities_for("advisory")] == [
+        "mna_feasibility_review", "run_mna_review", "enterprise_knowledge", "query_enterprise_kg",
+        "record_advisory_opinion", "add_advisory_details", "lookup_advisory_reviews", "ask_meeting_agent", "ask_news_agent",
+    ]
     assert capabilities_for("group_super") == []
     for agent in ("meeting", "news", "advisory"):
         assert all(isinstance(s, Skill) for s in skills_for(agent))
@@ -128,3 +133,32 @@ def test_delegation_tools_point_at_registered_agents():
     assert (dm.FROM_AGENT, dm.TO_AGENT) == ("k_super", "meeting")
     assert (dn.FROM_AGENT, dn.TO_AGENT) == ("k_super", "news")
     assert (da.FROM_AGENT, da.TO_AGENT) == ("k_super", "advisory")
+    from app.systems.k_electronics.tools import ask_meeting_agent as am, ask_news_agent as an
+
+    # the advisory agent consults the meeting / news agents itself, look-up only
+    assert (am.FROM_AGENT, am.TO_AGENT) == ("advisory", "meeting") and am.ask_meeting_agent.metadata["read_only"] is True
+    assert (an.FROM_AGENT, an.TO_AGENT) == ("advisory", "news") and an.ask_news_agent.metadata["read_only"] is True
+
+
+def test_delegation_graph_has_no_cycle():
+    """Who may hand work to whom, from the registries: the meeting and news agents delegate to no one, so a chain
+    is at most Super → advisory → meeting / news and can never come back."""
+    from app.systems.group import registry as group_registry
+
+    for registry in (CAPABILITIES, group_registry.CAPABILITIES):
+        edges = {}
+        for c in registry:
+            meta = getattr(c.impl, "metadata", None) or {}
+            if c.kind == "tool" and meta.get("handoff"):
+                for frm in c.allowed_agents:
+                    edges.setdefault(frm, set()).add(meta["to"])
+        assert edges.get("meeting") is None and edges.get("news") is None
+        assert edges["advisory"] == {"meeting", "news"}
+
+        def reach(a, seen=()):
+            for b in edges.get(a, ()):
+                assert b not in seen and b != a, (a, b)
+                reach(b, (*seen, a))
+
+        for agent in edges:
+            reach(agent)

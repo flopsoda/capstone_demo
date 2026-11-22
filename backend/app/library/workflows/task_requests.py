@@ -104,7 +104,7 @@ def task_requests(
     if action not in ACTIONS:
         return _fail(action, f"action은 {', '.join(ACTIONS)} 중 하나여야 합니다.")
     today = today or today_kst()
-    from_a2a = not viewer.can_write
+    from_a2a = viewer.via_a2a
 
     with store.connect() as conn:
         if action == "submit":

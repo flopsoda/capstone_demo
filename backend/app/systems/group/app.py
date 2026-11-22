@@ -9,23 +9,26 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from ...library.workflows import decision_watch, mail_actions, meeting_control, meeting_desk, meeting_report
 from ...library.tools.correct_transcript import ask_model
+from ...library.workflows.advisory.delivery import report_pdf
 from ...library.workflows.jobs import start_meeting_jobs
 from ...library.workflows.meeting_store import StoreUnavailable, Viewer, viewer_for
 from ...runtime.api import ndjson_run, run_identity, shutdown_signal, sse_events
 from ...runtime.events import new_run
-from ...runtime.schemas import Identified, RunRequest
-from . import KG_STORE, MEETING_STORE, SYSTEM
+from ...runtime.schemas import Identified, ReportRequest, RunRequest
+from . import ADVISORY_STORE, KG_STORE, MEETING_STORE, SYSTEM
 from .agents.advisory import run_advisory_agent
 from .agents.group_super import run_group_super
 from .agents.meeting import run_meeting_agent
 from .agents.news import run_news_agent
 from .tools.correct_transcript import TRANSCRIPT_CORRECTION
+from .tools import request_k_electronics_review as k_a2a
 from .tools.run_decision_review import DECISION_WATCH
 
 app = FastAPI(title="Group agent system", version="0.5.0")
@@ -227,3 +230,41 @@ def desk_report(body: DeskRequest) -> Response | dict[str, Any]:
         return out
     return Response(out["content"], media_type="application/pdf",
                     headers={"Content-Disposition": meeting_report.content_disposition(out["filename"])})
+
+
+def _pdf(content: bytes, disposition: str) -> Response:
+    return Response(content, media_type="application/pdf", headers={"Content-Disposition": disposition, "Cache-Control": "no-store"})
+
+
+@app.post("/api/reports", response_model=None)
+def advisory_report(body: ReportRequest) -> Response:
+    """투자심의 보고서 PDF of a kept Advisory judgement that an agent answer referred to (its `artifacts`).
+    This system's own judgements are drawn from its store; K전자's are fetched from K's A2A surface over HTTP with the
+    same signed user, so K applies its own access rule (the systems never read each other's stores)."""
+    identity = run_identity(body)
+    if body.system in (None, "", SYSTEM):
+        out = report_pdf(ADVISORY_STORE, viewer_for(identity["principal"], "direct"), body.id)
+        if "error" in out:
+            return JSONResponse({"error": out["error"]}, status_code=out["status"])
+        return _pdf(out["content"], meeting_report.content_disposition(out["filename"]))
+    if body.system != k_a2a.PEER_SYSTEM:
+        return JSONResponse({"error": f"알 수 없는 system: {body.system}"}, status_code=404)
+    url = k_a2a.k_electronics_a2a_url().rsplit("/run", 1)[0] + "/reports"
+    payload: dict[str, Any] = {"id": body.id}
+    if identity["principal"] is not None:
+        payload["principal"] = identity["principal"].model_dump()
+    if identity["principal_token"]:
+        payload["principal_token"] = identity["principal_token"]
+    try:
+        with k_a2a.make_client() as client:  # the same client as the A2A Tool (tests reach K in-process)
+            res = client.post(url, json=payload)
+    except httpx.HTTPError as e:
+        return JSONResponse({"error": f"K전자 Agent System에 연결할 수 없습니다: {type(e).__name__}"}, status_code=502)
+    if res.status_code == 200 and res.headers.get("content-type", "").startswith("application/pdf"):
+        return _pdf(res.content, res.headers.get("content-disposition", "attachment"))
+    try:
+        message = res.json().get("error") or res.json().get("detail")
+    except ValueError:
+        message = None
+    return JSONResponse({"error": message or f"K전자가 보고서를 주지 않았습니다 (HTTP {res.status_code})"},
+                        status_code=res.status_code if res.status_code in (401, 403, 404, 503) else 502)

@@ -12,6 +12,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 
 from ..workflows.kg.store import KGStore
+from . import evidence_items
 from .meeting_access import current_viewer, store_call
 
 TOOL_NAME = "query_enterprise_kg"
@@ -32,6 +33,6 @@ def make_query_enterprise_kg(kg: KGStore) -> BaseTool:
         entities: 조회할 기업 · 인물 이름 (예: ["뉴로엣지"]). 비우면 query에 나온 이름으로 찾는다.
     """
         viewer = current_viewer()
-        return store_call(lambda: kg.query(viewer, query, entities))
+        return evidence_items.recorded(store_call(lambda: kg.query(viewer, query, entities)), evidence_items.enterprise_kg)
 
     return query_enterprise_kg

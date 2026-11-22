@@ -35,6 +35,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
   - Specialist에게 Tool 호출을 모든 응답에 강제하지 않는다. Workflow Tool 근거 검사는 delegation 경로(`invocation="delegation"`)에만 있고, 직접 대화(`"direct"`)에서는 모델이 Skill 지침에 따라 결정한다.
   - Workflow Tool은 Agent가 아니다. 내부의 결정적 절차를 Agent-visible Tool 여러 개로 쪼개지 않는다.
   - K Super → Specialist는 **delegation**(`delegation_start/end`), Group Super ⇅ K Super는 **A2A**다. Specialist 호출을 A2A라고 부르지 않는다.
+  - Specialist가 다른 Specialist에게 위임하는 것은 경영자문 → 미팅 · 뉴스의 **조회 전용** 위임(`ask_*_agent`, `make_delegate_tool(read_only=True)`)뿐이다. 미팅 · 뉴스 Agent에는 위임 Tool을 주지 않는다 (순환 금지, `tests/test_capabilities.py`가 위임 그래프를 검사).
 - **Agent state는 message history 중심이다.** `MessagesState`를 쓰고, `meeting_result` 같은 Agent별 결과 field를 추가하지 않는다. 공유 구조가 꼭 필요하면 범용 구조를 제안하고 결정을 받는다.
 - **Agent 경계를 유지한다.** 하위 Agent의 내부 메시지 / tool call을 상위 Agent history에 병합하지 않는다. 최종 결과만 전달한다. A2A도 같다: 상대 system의 lifecycle은 관찰용으로 relay(`relayed: true`)만 하고 Agent에게는 최종 응답 텍스트만 준다.
 - **Workflow Tool이 데이터 경계다.** Agent가 fixture / DB를 직접 읽지 않는다. 사용자별 접근(등급 · 작성자)은 Tool이 run의 principal로 정하며, 모델 인자로 받지 않는다.

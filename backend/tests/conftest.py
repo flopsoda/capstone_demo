@@ -27,12 +27,12 @@ import pytest
 from psycopg import sql
 
 from app.library.workflows.news.store import NewsStore
-from app.systems.group import KG_STORE as GROUP_KG, MEETING_STORE as GROUP_STORE, MEMORY as GROUP_MEMORY, NEWS_STORE as GROUP_NEWS
-from app.systems.k_electronics import KG_STORE as K_KG, MEETING_STORE as K_STORE, MEMORY as K_MEMORY, NEWS_STORE as K_NEWS
+from app.systems.group import ADVISORY_STORE as GROUP_ADVISORY, KG_STORE as GROUP_KG, MEETING_STORE as GROUP_STORE, MEMORY as GROUP_MEMORY, NEWS_STORE as GROUP_NEWS
+from app.systems.k_electronics import ADVISORY_STORE as K_ADVISORY, KG_STORE as K_KG, MEETING_STORE as K_STORE, MEMORY as K_MEMORY, NEWS_STORE as K_NEWS
 
 STORES = (K_STORE, GROUP_STORE)
 NEWS_STORES = (K_NEWS, GROUP_NEWS)
-KG_STORES = (K_KG, GROUP_KG, K_MEMORY.store, GROUP_MEMORY.store)  # tables in the meeting schemas: dropped with them
+KG_STORES = (K_KG, GROUP_KG, K_MEMORY.store, GROUP_MEMORY.store, K_ADVISORY, GROUP_ADVISORY)  # tables in the meeting schemas: dropped with them
 TEST_NEWS_SCHEMA = "test_news"
 SYSTEMS_DIR = Path(__file__).resolve().parent.parent / "app" / "systems"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}

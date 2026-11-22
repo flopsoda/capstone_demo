@@ -300,7 +300,7 @@ def queue_nudge_mail(conn: psycopg.Connection, item_id: int, viewer: Viewer, tod
 def requester(viewer: Viewer) -> str:
     """Who asked, for a mail body: the user's name or email; a request without a user says where it came from."""
     who = viewer.name or viewer.email
-    if not viewer.can_write:  # another agent system's A2A request
+    if viewer.via_a2a:  # another agent system's A2A request
         return f"{who} (다른 Agent System을 통한 요청)" if who else "다른 Agent System(그룹 등)의 요청"
     return who or "회의지원 Agent 사용자"
 

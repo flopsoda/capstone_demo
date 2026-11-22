@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ...library.workflows.advisory.store import AdvisoryStore
 from ...library.workflows.kg.store import KGStore
 from ...library.workflows.meeting_store import MeetingStore
 from ...library.workflows.memory.memory import SuperAgentMemory
@@ -27,5 +28,7 @@ NEWS_STORE = NewsStore("kelec_news", seed=DATA_DIR / "news.json")
 # This system's Enterprise KG: built from its meeting records and its news (never another system's), in its own schema;
 # the companies of data/companies.json are its seed entities.
 KG_STORE = KGStore(MEETING_STORE, NEWS_STORE, aliases=DATA_DIR / "companies.json")
+# This system's verified Advisory judgements with a copy of their evidence (history, re-evaluation, reports), in its own schema.
+ADVISORY_STORE = AdvisoryStore(MEETING_STORE)
 # This system's Super Agent remembers its direct conversations, per user, in this system's schema (never another's).
 MEMORY = SuperAgentMemory(MemoryStore(MEETING_STORE))

@@ -27,6 +27,7 @@ from ..workflows.news.fetch import Fetcher
 from ..workflows.news.pipeline import gather, lookback_days
 from ..workflows.news.store import NewsStore
 from ..workflows.news.text import target as target_of
+from . import evidence_items
 from . import run_news_briefing as briefing_tool  # its _llm(): one place for the runtime model + timeout
 
 TOOL_NAME = "run_company_risk_news_analysis"
@@ -76,6 +77,6 @@ def make_run_company_risk_news_analysis(store: NewsStore | None, *, feeds: Path 
         except StoreUnavailable as e:
             return {"query": query, "company": company, "matched": 0, "risks": [], "error": str(e)}
         result = analyze_company_risk_news(query, company, topics, articles=risk_articles(rows, company, analyses))
-        return {**result, "freshness": found["freshness"], "coverage": found["coverage"]}
+        return evidence_items.recorded({**result, "freshness": found["freshness"], "coverage": found["coverage"]}, evidence_items.risk_news)
 
     return run_company_risk_news_analysis

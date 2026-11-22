@@ -42,7 +42,8 @@ Subsidiary Super Agent
        │
        ├── Meeting Agent ──▶ run_meeting_context_retrieval
        ├── News Agent ─────▶ run_news_briefing · run_company_risk_news_analysis
-       └── Management Advisory Agent ──▶ run_mna_review
+       └── Management Advisory Agent ──▶ query_enterprise_kg · run_mna_review · record_advisory_opinion
+                                         └─(조회 전용 위임)▶ Meeting / News Agent
                 │
                 ▼
        Enterprise / External Data
@@ -152,13 +153,15 @@ User        → Specialist Agent   (직접 대화)
   - Meeting: Skill `meeting_context_analysis`(조회·정리 · 브리핑 지침), `meeting_minutes_writing`(transcript → 초안 → 확정 지침), `meeting_follow_up`(진행 추적 · 갱신 · 일정 지침),
     Tool `run_meeting_context_retrieval`, `save_meeting_minutes`, `run_action_item_tracking`, `update_action_item`, `run_meeting_schedule` ([3.3](#33-workflow-tool)).
   - News: Skill `external_risk_analysis`(외부 리스크 조사·정리 지침, 응답 형식), `news_briefing`(일반 뉴스 브리핑 지침, 응답 형식), Tool `run_news_briefing`(기본 파이프라인: 주제 동향 브리핑), `run_company_risk_news_analysis`(특정 기업의 의사결정 리스크 조사). News Agent는 외부 뉴스만 다루며 회의 저장소 · 기업 검토 자료를 읽지 않는다 (둘을 잇는 일은 결과를 함께 가진 Super Agent의 몫).
-  - Advisory: Skill `mna_feasibility_review`(인수 검토 지침 — 관점 선택 · 종합 평가 · What-if 인자, 맥락 전달, 사실 정확성, mode별 응답 형식) · `enterprise_knowledge`(지식 그래프를 근거별로 읽고 검토 context에 싣는 지침), Tool `run_mna_review` · `query_enterprise_kg`.
-    K와 Group의 경영자문 Agent는 같은 Skill · Tool factory · workflow를 쓰고, Agent 파일에는 정체성만 다르다. 응답에 대한 별도 사후 검증 · 재작성 계층은 없다 (응답은 모델이 Tool 결과를 근거로 쓴다).
+  - Advisory (2026-11-22 재설계): Skill `mna_feasibility_review`(스스로 조사 → Tool로 계산 → 직접 판단 → 기록 · 보고서), `enterprise_knowledge`(지식 그래프를 근거별로 읽는 지침),
+    Tool `query_enterprise_kg` · `run_mna_review`(사실 · 수치만, 권고 없음) · `record_advisory_opinion` · `add_advisory_details`(판단 검증 · 저장 · 보고서 참조, 두 번에 나눠 기록) · `lookup_advisory_reviews`(저장된 이전 판단),
+    `ask_meeting_agent` · `ask_news_agent`(미팅 · 뉴스 Agent에 대한 **조회 전용 위임** — Specialist가 다른 Specialist를 부르는 유일한 경로, 3.4).
+    최종 권고는 Advisory LLM이 정한다. K와 Group의 경영자문 Agent는 같은 Skill · Tool factory · workflow를 쓰고, Agent 파일에는 정체성과 재귀 한도(40)만 다르다.
 - **호출 맥락(invocation)** 은 `"delegation" | "direct"` 두 가지다. 같은 그래프가 쓰이고, 호출 맥락은 LangGraph `config["configurable"]`로 실행마다 전달된다 (state에 넣지 않는다).
   - 모델에게는 system context 끝에 한 문단(`agent_core.INVOCATION_CONTEXT`)으로 알려 준다: delegation이면 "슈퍼에이전트에게 돌아가는 보고이므로 Tool 결과에 근거하라", direct면 "인사·개념 질문에는 Tool 없이 답하고 데이터가 필요한 업무면 Tool을 쓰라".
   - delegation(`delegate_to_*` Tool 안, 기본값)에서 Workflow Tool 없이 답하면 `AgentError(agent_id, ...)`. 데이터에 근거하지 않은 보고서가 K Super에 올라가면 안 되기 때문이다.
   - direct(`POST /api/agents/{meeting,news,advisory}/run`)에서는 이 검사를 하지 않는다. Tool 호출 여부는 모델이 Skill 지침에 따라 결정한다.
-    예: 경영자문 탭에서 "earn-out이 뭐야?"는 Tool 없이, "뉴로엣지 인수를 CTO 관점에서 검토해줘"는 `run_mna_review`로 답한다 (`tests/test_agents.py`).
+    예: 경영자문 탭에서 "earn-out이 뭐야?"는 Tool 없이, "뉴로엣지 인수를 CTO 관점에서 검토해줘"는 `run_mna_review`로 계산한 뒤 답한다 (`tests/test_agents.py`).
 - 전문 Agent는 Tool 호출이 항상 강제되는 함수형 Agent가 아니라 독립적으로 대화 가능한 conversational Agent다. 위 검사는 delegation 경로의 보고 품질 보호 장치일 뿐이다.
 
 ### 3.3 Workflow Tool
@@ -170,12 +173,12 @@ Workflow Tool은 **Agent가 아니다**.
 Meeting Agent   → run_meeting_context_retrieval · save_meeting_minutes · run_action_item_tracking · update_action_item · run_meeting_schedule
                   · manage_mail_outbox · run_task_requests (K만) · correct_transcript · run_decision_review (Group만)
 News Agent      → run_news_briefing · run_company_risk_news_analysis
-Advisory Agent  → run_mna_review · query_enterprise_kg
+Advisory Agent  → query_enterprise_kg · run_mna_review · record_advisory_opinion · add_advisory_details · lookup_advisory_reviews (+ ask_meeting_agent · ask_news_agent: 조회 전용 위임)
 ```
 
 - Agent는 **어떤** capability를 쓸지 판단한다. 선택된 Tool **내부**의 반복적·결정적 절차는 LLM 자유 추론에 맡기지 않는다.
-- `run_mna_review` 내부에는 `입력 정보 정리 → persona별 평가 기준 적용 → 항목별 평가 → 긍정/우려 요인 → 권고 → 조건` workflow가 캡슐화되어 있다.
-  이 내부 단계를 Agent-visible Tool 여러 개로 쪼개지 않는다.
+- `run_mna_review` 내부에는 `기업 데이터 → 현금흐름 전망 DCF · 민감도 → 가격 대비 가치 → 고객 · 계약 · 기술 · 인력 지표 → 시나리오 재계산 → 회의 기준 대조` 계산이 캡슐화되어 있다.
+  권고는 계산하지 않는다 (판단은 Agent). 이 내부 단계를 Agent-visible Tool 여러 개로 쪼개지 않는다.
 - Workflow Tool은 데이터 경계이기도 하다. Agent는 fixture / DB를 직접 만지지 않는다.
 
 **Current implementation** — Agent-visible Tool과 내부 workflow를 분리한다.
@@ -290,24 +293,27 @@ Advisory Agent  → run_mna_review · query_enterprise_kg
   정렬은 HIGH → MEDIUM → LOW, 같은 수준이면 대표 보도 최신순. `"risk": null`인 기사는 리스크가 아닌 우호적 보도로 `positive_signals`에 따로 담는다.
   반환은 dict (`matched` = 리스크 수, `risks[]`에 `category, label, level, headline, summary, key_facts, source{id,date,name,url?}` + `report_count, outlet_count, first_reported, last_reported, trend`(단일 보도 / 확대 / 완화 / 지속; 분류된 기사는 매체마다 표현이 달라 완화로 보지 않는다), 규칙으로 분류한 기사가 3곳 이상 매체에 실리면 수준을 한 단계 올리고 `escalated_by_coverage`로 표시, `timeline[]`(오래된 순), `check_points[]`(리스크 종류별 확인 사항), `positive_signals[]`: 같은 이야기는 하나로 묶고 `outlet_count`가 큰 순, `outlet_tone[]`: 매체별 부정·긍정·중립 기사 수와 논조 — 우호/비우호/중립, 기사 2건 미만은 판단 보류).
   뉴스는 공개 자료라 호출 사용자(principal)에 따라 결과가 달라지지 않는다.
-- `backend/app/library/tools/run_mna_review.py`: `make_run_mna_review(path)` → `@tool("run_mna_review")`, 인자 `query: str, company: str, persona: str = "CEO", context: str | None`,
-  What-if 변경 조건 `asking_trillion_krw` · `operating_margin` · `revenue_share: float | None`. Tool은 인자로 workflow를 고르기만 한다:
-  `persona="ALL"` → `mna_executive_summary.review_executive_summary`(변경 조건과 함께면 `error`), 변경 조건이 있으면 → `mna_scenario.review_what_if`, 그 외 → `mna_review.review_acquisition`.
-- `backend/app/library/workflows/mna_review.py`: 순수 함수 `review_acquisition(..., path=...)`이 주어진 기업 store(K: `data/companies.json`, 가상 기업 1건: 재무·가치·고객·기술·전략)를 읽는다.
-  - **persona는 Agent가 아니라 평가 관점 parameter**다. `PERSONAS` 표가 CEO(전략 적합성 · Time-to-Market · 리스크/기회 균형 · 사업 추진 가치),
-    CFO(요구가격 vs 적정가치 · 수익성 · 고객 집중도 · 재무적 downside · 거래 조건), CTO(기술 적합성 · Time-to-Market · 핵심 기술인력 · IP 리스크 · 기술 통합)의 평가 기준을 **순서 있는 목록으로 명시**한다.
-  - 13개 평가 항목은 모두 결정적 규칙(가격 프리미엄 임계값, 고객 비중 임계값 등)으로 평가된다. 모든 persona에 대해 전부 평가하되, 보고 순서 · 우려 목록 · 조건 순서는 persona 목록을 따르고 나머지는 `other_considerations`로 압축한다.
-    권고(`PROCEED / CONDITIONAL_PROCEED / DO_NOT_PROCEED`)는 전체 항목으로 계산하므로 **같은 데이터면 persona가 달라도 권고와 조건 집합은 같고 근거·우선순위만 다르다**.
-  - `context`는 호출자가 자연어로 넘기는 자유 텍스트다(고정 형식 없음). `extract_context_signals()`가 내부 가격 기준("2.5조 원 초과"), Time-to-Market 요구("2년 이상"), 외부 확인된 리스크 주제(고객 · 소송 · 핵심인력)를 찾아 해당 항목의 근거 문장에 반영한다. 판정 자체는 바꾸지 않는다.
-  - 반환은 dict (`found, persona, persona_label, persona_focus, inputs, context_signals, assessments[], other_considerations[], positives[], concerns[], recommendation, recommendation_label, conditions[]`). 모르는 기업 · persona는 예외 대신 `found: false` / `error`로 돌려주어 모델이 정정할 수 있게 한다.
-  - evaluator는 기업 데이터에 따라 판정한다 (흑자 · 손익분기 · 적자, 특허 분쟁 유무, 핵심 인력 `core_team` 문구). Group 데이터처럼 분쟁이 없는 기업에는 IP 조건이 생기지 않는다.
-  - 실제 재무 모델 / 밸류에이션 서비스로 바꿀 때는 evaluator 함수들만 교체하면 Tool · Agent · K Super 계약은 그대로다.
-- `backend/app/library/workflows/mna_executive_summary.py`: `review_executive_summary(..., path=...)`가 CEO · CFO · CTO `review_acquisition`을 모아
-  `mode: "executive_summary"`, `executive_reviews{CEO,CFO,CTO}`, `key_risks`, `key_opportunities`, `decision_rationale`, 공통 `inputs` · `recommendation` · `conditions`, 참고용 `verified_report`(마크다운 요약)를 돌려준다.
-- `backend/app/library/workflows/mna_scenario.py`: `review_what_if(..., path=..., asking_trillion_krw?, operating_margin?, revenue_share?)`가 변경 조건을 적용한 복사본으로 전체 항목을 다시 평가해
-  변경 전후 권고 · 조건(`before_*` / `after_*`, `added_conditions` / `removed_conditions`), 바뀐 항목(`changes`, persona 우선순위 순)을 돌려준다. `context` 신호는 전후 평가에 똑같이 반영된다.
-  개별 평가와 같은 이름의 필드(`persona_label`, `inputs`(변경 후), `assessments`, `recommendation`(변경 후), `conditions`(변경 후))도 함께 담고 `mode: "what_if"`로 구분한다.
-  잘못된 변경 값은 예외 대신 `error_type: "INVALID_SCENARIO"`로 돌려준다.
+- **경영자문 (2026-11-22 재설계, `library/workflows/advisory/`).** 정보 수집 · 판단은 Advisory LLM이, 사실 확인 · 계산은 Tool이, 일관성 확인은 검증기가 맡는다.
+  예전 규칙 기반 workflow(`mna_review` · `mna_scenario` · `mna_executive_summary`, 임계값으로 권고를 확정)는 지웠다.
+  - `run_mna_review(query, company, price_trillion_krw?, scenarios?, criteria?)` → `analysis.analyze`: 기업 데이터(system의 `data/companies.json`, **합성 데이터** — `data_room.source`)에서
+    연도별 계획(매출 · 영업이익 · FCF)으로 DCF(명시 기간 FCF + Gordon 잔존가치, WACC · 영구성장률은 데이터) · 순차입금 · 주주가치 · 민감도 표를 계산하고, 평가 가격(기본 최초 요구가, 제안가 · 임의 가격)의
+    DCF 대비 프리미엄, 운전자본 부족 · 조정 가격, 고객 비중 · 확정 발주 비율, 기술 · 특허 분쟁 · 핵심인력 · 통합비용, 데이터가 밝힌 미확인 사항(`open_items`)을 돌려준다. 수치마다 id(`A1.dcf.equity_value`)와 표시값이 있다.
+    `scenarios`(최대 4)는 같은 모델에 재무 동인을 바꿔 다시 계산한다: 최대 고객 매출 손실률(연도별 비중 전망 × 손실률, 매출 변화 × 공헌이익률로 이익 · FCF 반영), 매출 · 이익률 변화, WACC, 영구성장률, 특허 손실(주주가치 차감), 가격.
+    새 사건 · What-if를 동인으로 옮기는 것은 모델의 일이다 (사건 유형별 코드 없음). `criteria`(회의에서 확인한 가격 상한 · 최소 Time-to-Market)는 대조만 한다(`checks[].met`).
+    `persona_lenses`는 같은 근거에서 관점별로 먼저 볼 수치 id다. 모르는 인자 이름은 오류로 돌려준다(흔한 다른 이름은 받아 준다).
+  - **근거 장부** (`runtime/evidence.py`): Specialist 실행마다 하나. 기록을 읽는 Tool(회의 조회 · 할 일 · 뉴스 두 Tool · KG · `run_mna_review`)이 읽은 것을 그 id로 넣고(`library/tools/evidence_items.py`),
+    다른 Agent에게 위임한 실행의 장부는 끝날 때 호출자 장부에 합쳐진다. message state가 아니다 (어느 Agent의 history에도 들어가지 않는다).
+  - `record_advisory_opinion` → `opinion.check` → `store.save`: 모델의 판단 핵심(권고 · 평가 가격 · 한 줄 결론 · 종합 · 근거 · 조건 · 이전 판단 대비 변경)을 기록하고,
+    이어서 `add_advisory_details`(→ `opinion.check_details` → `store.add_details`)가 같은 실행에서 기록한 판단에 CEO/CFO/CTO 관점 · 위험 · 불확실성 · 보고서 장별 문단을 더한다.
+    두 번으로 나눈 이유: 설정된 모델(Ollama Cloud `deepseek-v4.1-flash`)은 약 1,500토큰짜리 Tool 호출 하나를 내보내지 못하고 빈 응답을 돌려주지만, 700~900토큰짜리 둘은 통과한다(같은 입력으로 3/3 대 0/3 확인).
+    검증은 판단을 바꾸지 않고 일관성만 본다: 인용 id가 이번 실행 장부에 있는가, 적은 금액(조 · 억) · %가 장부의 수치(또는 인용한 근거끼리의 차이 · 합 · 비율)와 맞는가,
+    충족하지 못한 회의 기준을 다뤘는가, 평가 가격을 계산했는가, 관점마다 그 관점의 수치를 인용했는가, 조건부 진행에 조건이 있는가, 재평가가 이전 판단 id와 변경 설명을 갖는가.
+    실패하면 `accepted: false` + problems를 모델에게 돌려주고 모델이 고쳐 다시 기록한다. 통과하면 판단과 근거 사본(인용한 기록 + 계산 전체)을 저장하고, 판단에 `report: true`가 있으면 두 번째 기록이 보고서 참조(`artifacts`)를 돌려준다.
+  - **판단 저장소** (`advisory/store.py`, system의 회의 schema 안 `adv_reviews` · `adv_schema_version`, `advisory/sql/NNN`): 판단 id `ADV-YYYY-MM-DD-NN`, 등급 = 인용한 회의의 최고 등급,
+    읽기 = 등급이 덮이고 인용한 회의를 모두 볼 수 있는 사용자만. `lookup_advisory_reviews`가 이전 판단을 조회하고 그 근거를 `판단id:근거id`로 장부에 넣는다 (재평가의 비교 근거).
+  - **투자심의 보고서** (`advisory/report.py`, fpdf2 · 나눔고딕): 저장된 판단과 근거 사본만으로 그리고(모델 호출 없음, 수치는 저장된 표시값), 데이터가 없는 장은 뺀다.
+    표지 · 경영진 결론(권고 · KPI · 관점별 판단 · 근거) · 이전 판단 대비 변경(재평가) · 재무 · 기업가치와 가격 · 고객과 계약 · 기술 · 특허 · 인력 · 위험과 조건 · 부록(근거 목록 · 가정).
+    파일은 Agent 간에 오가지 않는다: 참조만 오가고, PDF는 열 때 `advisory/delivery.report_pdf`가 저장소의 접근 규칙으로 만든다 (엔드포인트는 6장).
 - **Enterprise KG (2026-11-21, `library/workflows/kg/`, Tool `query_enterprise_kg` · Skill `enterprise_knowledge`, 경영자문 Agent만).**
   system마다 자기 회의 저장소와 뉴스 저장소로 만든 지식 그래프 하나 (`systems/<system>/__init__.py`의 `KG_STORE = KGStore(MEETING_STORE, NEWS_STORE, aliases=data/companies.json)`).
   테이블은 그 system의 회의 schema(`kelec` / `grp`) 안의 `kg_*`이고 자기 migration 기록(`kg_schema_version`, `kg/sql/NNN_*.sql`)을 가진다 —
@@ -339,7 +345,8 @@ Advisory Agent  → run_mna_review · query_enterprise_kg
   - **조회.** `query_enterprise_kg(query, entities?)` → 엔티티(별칭), 그 기업을 다룬 회의의 결정(상태 · 대체 · 전제) · 후속 업무, 보도된 관계(사건별 · 상태 변화 · 근거 기사),
     보도된 관계의 현재 상태 문장(`state`: 유효 · 만료 예정 · 종료 검토 중 · 종료됨 · 보도 엇갈림, 만료 예정일이 지났는데 종료 보도가 없으면 확인 필요), 판정된 영향(`assessed_impacts`), 단순 연관(`associations`: 같은 기업을 다루는 뉴스 사건과 결정, "영향 판정 아님"), 뉴스 사건, 회의 목록(gateway 감사로그의 `meetings[].id`).
     회의에서 나온 노드와 진술은 `meeting_store.VISIBLE`(등급 · allowed_groups)을 SQL 안에서 먼저 적용하고(그 회의의 지금 값으로), 뉴스는 공개다.
-    경영자문 Agent는 그 결과를 근거별로 구분해 답하고, 인수 검토면 `run_mna_review`의 `context`에 출처와 함께 넣는다 (workflow는 바꾸지 않음).
+    경영자문 Agent는 그 결과를 근거별로 구분해 읽고, 회의 기준은 `run_mna_review`의 `criteria`로, 보도된 관계 변화는 `scenarios`로 옮기며 판단 기록에 결정 ref · 기사 id를 인용한다.
+    KG는 미팅 · 뉴스 Agent 호출을 대신하지 않는다: 상세 기록 · 최신 뉴스 · 판단을 좌우하는 불확실한 관계는 경영자문 Agent가 `ask_meeting_agent` · `ask_news_agent`로 확인한다 (필요할 때만, 고정 순서 없음).
     Super Agent에는 이 Tool이 없다: 기업 지식 분석이 필요하면 경영자문 Agent에게 위임한다 (위임 Tool 설명에 적음).
 
 ### 3.4 Agent Delegation과 A2A의 차이
@@ -356,6 +363,7 @@ Advisory Agent  → run_mna_review · query_enterprise_kg
 
 **Current implementation**
 - Delegation: K Super에 허용된 Tool `delegate_to_meeting_agent` / `delegate_to_news_agent` / `delegate_to_advisory_agent`(`systems/k_electronics/tools/`, 라이브러리 factory `library/tools/delegation.make_delegate_tool`로 생성)가 같은 프로세스 안에서 `run_meeting_agent(task)` / `run_news_agent(task)` / `run_advisory_agent(task)`를 호출한다.
+  경영자문 Agent도 같은 factory로 만든 `ask_meeting_agent` / `ask_news_agent`(`read_only=True`)로 미팅 · 뉴스 Agent에게 **조회 전용** 위임을 한다 (2026-11-22). 위임 Tool은 `metadata.handoff`로 표시되어 Specialist core가 `tool_start/end` 대신 위임 이벤트만 낸다.
 - A2A (Phase 5a): Group system의 Tool `request_k_electronics_review`(`systems/group/tools/`)가 `runtime/a2a.request_review()`로 K의 `POST /api/a2a/run`을 HTTP 호출한다.
   `a2a_start(group_super → k_super, request)` emit → K의 NDJSON 스트림을 읽으며 K의 lifecycle 이벤트를 `relayed: true`로 자기 run에 다시 emit(관찰용) → 마지막 `agent_end`의 `response`를 꺼내 `a2a_end` emit 후 반환.
   Group Super의 `ToolMessage`에는 그 최종 텍스트만 들어간다. K의 `error`는 `AgentError("k_super", ...)`로 전파되어 Group run이 중단된다. 연결 실패도 같다.
@@ -426,13 +434,15 @@ systems/k_electronics/
 | `run_news_briefing` | tool | `news` | `systems/k_electronics/tools/run_news_briefing.py` = `make_run_news_briefing(NEWS_STORE)` → `library/workflows/news_briefing.run_news_briefing` |
 | `run_company_risk_news_analysis` | tool | `news` | `systems/k_electronics/tools/run_company_risk_news_analysis.py` = `make_run_company_risk_news_analysis(NEWS_STORE)` → `library/workflows/company_risk_news_analysis.analyze_company_risk_news` |
 | `mna_feasibility_review` | skill | `advisory` | `library/skills/mna_feasibility_review.py` |
-| `run_mna_review` | tool | `advisory` | `systems/k_electronics/tools/run_mna_review.py` = `make_run_mna_review(data/companies.json)` → `library/workflows/mna_review.review_acquisition` · `mna_executive_summary.review_executive_summary` · `mna_scenario.review_what_if` |
+| `run_mna_review` | tool | `advisory` | `systems/k_electronics/tools/run_mna_review.py` = `make_run_mna_review(data/companies.json)` → `library/workflows/advisory/analysis.analyze` |
 | `enterprise_knowledge` | skill | `advisory` | `library/skills/enterprise_knowledge.py` |
 | `query_enterprise_kg` | tool | `advisory` | `systems/k_electronics/tools/query_enterprise_kg.py` = `make_query_enterprise_kg(KG_STORE)` → `library/workflows/kg/query.query_graph` |
+| `record_advisory_opinion` · `add_advisory_details` · `lookup_advisory_reviews` | tool | `advisory` | `systems/k_electronics/tools/advisory_reviews.py` = `make_advisory_review_tools(ADVISORY_STORE)` → `library/workflows/advisory/{opinion,store}` |
+| `ask_meeting_agent` · `ask_news_agent` | tool | `advisory` | `systems/k_electronics/tools/ask_*_agent.py` = `make_delegate_tool(..., read_only=True)` (미팅 · 뉴스 Agent는 위임 Tool이 없어 사슬은 Super → advisory → meeting/news에서 끝난다) |
 
 Group system의 Registry(`systems/group/registry.py`)는 같은 메커니즘으로 자기 내용을 가진다 (Phase 5a·5b):
 `group_super` ← Skill `subsidiary_review`(Group 전용) · `specialist_delegation`(라이브러리), Tool `request_k_electronics_review`(A2A client) · `delegate_to_{meeting,news,advisory}_agent`(Group 전용 설명, 라이브러리 factory `library/tools/delegation.make_delegate_tool`);
-`meeting` / `news` / `advisory` ← 라이브러리 Skill 6개 + 라이브러리 Tool factory를 `systems/group/data/` · Group 회의 저장소(schema `grp`)에 바인딩한 instance 8개 (모두 21개).
+`meeting` / `news` / `advisory` ← 라이브러리 Skill + 라이브러리 Tool factory를 `systems/group/data/` · Group 회의 저장소(schema `grp`)에 바인딩한 instance (경영자문은 K와 같은 Tool 6개).
 어느 Tool을 쓸지(자기 Specialist 위임 vs K전자 A2A)는 Registry 제한 없이 요청과 Tool 설명에 따른 모델 판단이다.
 
 설계 규칙:
@@ -490,7 +500,7 @@ Meeting Agent MessagesState   ← 별도 그래프, 별도 history (News / Advis
 
 **Current implementation**: 위 그대로다. `delegate_to_*` Tool은 `run_*_agent()`의 반환 문자열만 돌려주고, K Super는 그것을 `ToolMessage`로 받는다.
 Tool 결과의 구조화 데이터(dict)는 이벤트(`tool_end.result`)로 UI에 전달될 뿐, 상위 Agent state에는 들어가지 않는다.
-Advisory가 필요로 하는 Meeting / News 결과도 별도 공유 구조 없이 K Super가 쓴 위임 `task` 문장으로만 전달되고, Advisory Agent는 그 문장을 `run_mna_review`의 `context` 인자로 넘긴다.
+Advisory는 필요한 Meeting / News 결과를 스스로 조회한다(조회 전용 위임, 최종 답변만 받음). 근거 id의 확인은 run 단위 근거 장부(`runtime/evidence.py`)가 맡고, 이것도 message state가 아니다.
 
 ---
 
@@ -530,9 +540,9 @@ Transport(NDJSON, SSE, WebSocket 등)는 implementation detail이다. 핵심은 
 | `agent_start` | `agent, request` | `agent_core.run_super`(K Super / Group Super), `agent_core.run_specialist`(Meeting / News / Advisory) 시작 |
 | `agent_token` | `agent, text` | `agent_core.invoke_model`: 모델이 텍스트를 쓰는 동안 조각마다 (tool call 인자는 텍스트가 아니므로 흐르지 않음). 조각을 합친 메시지가 그래프에 들어가므로 판단 로직은 `invoke`와 같다 |
 | `a2a_start` | `from, to, request` | Group의 A2A client Tool 진입 (Phase 5a) |
-| `a2a_end` | `from, to, response` | 위 Tool 반환 직전. 그 사이의 K 이벤트는 `relayed: true`로 relay된다 |
+| `a2a_end` | `from, to, response, artifacts?` | 위 Tool 반환 직전. 그 사이의 K 이벤트는 `relayed: true`로 relay된다. `artifacts`: relay된 K Tool 결과에 있던 보고서 참조(`kind: report, id, system, title, filename, recommendation(_label), classification`), 있을 때만 |
 | `delegation_start` | `from, to, task` | `delegate_to_*` 진입 |
-| `delegation_skipped` | `from, to, reason` | `delegate_to_*` 진입 시 `principal.agents`에 `to`가 없으면 (`reason: permission`). 전문 Agent는 실행되지 않고 Super Agent는 나머지로 답한다 |
+| `delegation_skipped` | `from, to, reason` | 위임 Tool 진입 시 `principal.agents`에 `to`가 없으면 (`reason: permission`), `to`가 이미 위임 사슬 안에 있으면 (`reason: cycle`). 전문 Agent는 실행되지 않고 위임한 Agent는 나머지로 답한다 |
 | `tool_start` | `agent, tool, args` | `agent_core.execute_tool_calls` (Specialist의 Workflow Tool). Super Agent의 직접 대화에서는 `run_super`의 기억 조회(`recall_conversation_memory`, `args.auto`) |
 | `tool_end` | `agent, tool, result` | 위 Tool 실행 직후 |
 | `agent_end` | `agent, response` | 각 Agent 정상 종료 |
@@ -562,6 +572,8 @@ Step 번호는 backend에 없다. 이벤트 종류도 Step 3과 같다 (새 이�
 | `GET /api/health` | 상태 확인 (`system` 포함) |
 | `GET /api/events` | 관찰 채널. 이 프로세스의 모든 run 이벤트를 SSE로 스트리밍 (Demo Monitor · 플랫폼 UI의 외부 실행 표시용) |
 | `POST /api/a2a/run` `{request, trace_id?, caller?, principal?}` | **A2A 수신 표면.** 다른 system의 Super Agent가 보낸 요청으로 K Super 실행(`invocation="a2a"`, 필요한 전문 Agent에게 순차 위임 후 최종 검토 결과 작성). lifecycle을 NDJSON으로 스트리밍하고 `agent_end(k_super).response`가 A2A 응답이다. `trace_id` · `caller`는 이벤트 stamp로만 쓰인다 (업무 payload 아님). `principal`은 상대 system이 대신 요청하는 사용자다: K는 자기 자료에 그 사용자의 등급을 적용하고, 이 run에서는 회의 기록을 바꾸지 않는다 (예외: 업무 요청 접수, 기존 할 일의 리마인더 메일 — 11장 18번 · 21번) |
+| `POST /api/a2a/reports` `{id, principal?, principal_token?}` (K) · `POST /api/reports` `{id, principal?}` (K 자체 사용자) | 저장된 경영자문 판단의 투자심의 보고서 PDF. 그 사용자가 판단을 볼 수 있어야 한다(인용한 회의의 등급 · 그룹). 없거나 못 보면 404, 글꼴 · 저장소 없음 503 |
+| `POST /api/reports` `{system?, id, principal?, principal_token?}` (Group) | Group 사용자의 보고서 열람 · 내려받기. Group 판단은 자기 저장소에서, K전자 판단(`system: k_electronics`)은 K의 `/api/a2a/reports`에서 같은 서명 사용자로 가져와 그대로 돌려준다 (gateway가 이 엔드포인트를 중계해야 Open WebUI에서 열 수 있음) |
 | `POST /api/agents/k-super/run` `{request}` | 사용자 → K Super 직접 대화 (`invocation="direct"`, 위임 없이 답해도 된다). 같은 Agent core |
 
 `backend/app/systems/group/app.py` (FastAPI, `uvicorn app.systems.group.app:app --port 8001`)
@@ -598,8 +610,8 @@ Group의 A2A Tool은 자기 run의 principal과 토큰을 K의 `/api/a2a/run`에
 - `src/live/agentEvents.ts` — backend 이벤트 → 기존 `ScenarioEvent`로 변환. 예약·추측 없이 도착한 이벤트만 상태로 바꾼다.
   Workflow 결과 렌더링(`toolResultBlocks`)은 Tool 이름별 `switch`(meeting, news, advisory)이고, 모르는 Tool은 JSON으로 표시한다.
   렌더러가 예상하지 못한 결과 형태(필드 누락, 새 mode, 예외)는 그 결과만 JSON으로 표시한다: 렌더 문제로 run 전체가 중단되지 않는다.
-  `run_mna_review`는 persona 배지 · 입력 정보 · persona 우선순위대로의 평가 항목 · 권고 배지 · 조건 목록으로 그린다 (What-if도 같은 필드로, 변경 후 값).
-  `mode: "executive_summary"`(persona ALL)는 입력 정보 · 관점별(CEO / CFO / CTO) 평가 항목 · 핵심 위험 · 권고 · 조건으로 그린다. 값은 전부 backend 결과이며 frontend가 만들지 않는다.
+  `run_mna_review`는 평가 가격 배지 · 주요 수치 · 회의 기준 대조 · 시나리오로(권고 없음), `record_advisory_opinion`은 모델의 권고 배지 · 판단 id · 보고서 참조(또는 고칠 점)로 그린다. 값은 전부 backend 결과다.
+  보고서 열람 · 내려받기 화면은 배포 UI(Open WebUI, navitech)의 몫이다 (Vite UI에는 두지 않음).
   한 K Super 실행에 위임이 여러 번 있어도 같은 변환이 반복된다. `delegation_end`의 `session_close`에는 UI 전용 `delay`가 있어 다음 세션 창이 열리기 전에 이전 창이 접힌다.
 - `src/state/runState.ts` — reducer가 `nodes / edges / messages / sessions` 상태를 만들고, `createEventQueue`가 도착하는 이벤트를 **도착 순서대로 즉시 적용**한다. 이벤트의 `delay`는 상태 변경을 늦추지 않고 다음 이벤트만 보류한다. 제품 UI(탭마다 하나)와 Demo Monitor가 같은 것을 쓴다.
 - 실패 시 backend가 지목한 Agent를 error로 표시하고 실행을 **중단**하며 열린 세션을 닫는다. mock으로 대체하지 않는다.
@@ -668,7 +680,7 @@ Group의 A2A Tool은 자기 run의 principal과 토큰을 K의 `/api/a2a/run`에
 | 2 | Group Super → K Super. A2A 인수안 검토 요청 | **REAL** | Group Super의 Tool `request_k_electronics_review` → K `POST /api/a2a/run` (HTTP). 요청문은 Group Super가 쓴다. `a2a_start` → A2A 세션 |
 | 3 | K Super → Meeting Agent → `run_meeting_context_retrieval` | **REAL** | K backend :8000. K 이벤트는 Group 스트림에 relay되어 A2A 세션 안에 위임 세션으로 보인다 |
 | 4 | K Super → News Agent → `run_company_risk_news_analysis` | **REAL** | 같은 K Super 실행 안에서 Meeting 결과 수신 후 순차 위임 |
-| 5 | K Super → Advisory Agent → `run_mna_review` | **REAL** | 같은 K Super 실행 안에서 Meeting · News 결과를 보고 맥락을 담아 순차 위임 |
+| 5 | K Super → Advisory Agent → (KG · 미팅 · 뉴스 조회) → `run_mna_review` → `record_advisory_opinion` | **REAL** | Advisory가 필요한 근거를 직접 조사(조회 전용 위임은 Step 3·4로 표시) · 계산 · 판단 · 기록, 보고서 참조 |
 | 6 | K Super가 전문 Agent 결과 종합 → K전자 차원의 최종 검토 결과 | **REAL** | 같은 K Super 실행의 마지막 `model` 턴. Tool 호출 없이 응답 → `agent_end(k_super)` |
 | 7 | K Super → Group Super. A2A 응답 | **REAL** | K의 최종 응답 텍스트만 Group Tool이 반환 → `a2a_end` → A2A 세션 닫힘(result = 실제 응답) |
 | 8 | Group Super → 회장. 그룹 투자심의 최종 판단 | **REAL** | Group Super의 마지막 `model` 턴 → `agent_end(group_super)`. Group Super가 자기 Specialist에게도 위임할 수 있다(모델 판단) |
@@ -720,14 +732,12 @@ K Super
 delegate_to_advisory_agent(task)
     ↓
 Advisory Agent
-    ↓ LLM 판단 (먼저 기업 지식 그래프 조회 — 2026-11-21)
-query_enterprise_kg(query, entities)
-    ↓
-그 기업을 다룬 회의 결정 · 보도된 관계 · 판정된 영향 (system의 KG)
-    ↓ LLM 판단 (persona 선택, task의 맥락 + 그래프에서 확인한 것을 context로 전달)
-run_mna_review(query, company, persona, context)
-    ↓
-companies.json + persona 평가 기준 + context 신호
+    ↓ LLM 판단 (필요한 근거만, 순서 고정 없음 — 2026-11-22)
+query_enterprise_kg · lookup_advisory_reviews · ask_meeting_agent / ask_news_agent (조회 전용)
+    ↓ LLM 판단 (회의 기준 → criteria, 새 사건 · What-if → scenarios)
+run_mna_review(query, company, price_trillion_krw, scenarios, criteria)  — 수치만, 권고 없음
+    ↓ LLM 판단 (CEO · CFO · CTO 관점, 최종 권고)
+record_advisory_opinion(...)  — 검증 → 저장 → (report) 보고서 참조
     ↓
 Advisory Agent 최종 응답 (한국어)
     ↓ ToolMessage
@@ -765,10 +775,10 @@ LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`http
 | `backend/tests/test_news_briefing.py` | 아니오 | 브리핑 view (단계 순서, 다른 매체의 같은 이야기 = 한 topic, 기사 · 사건 LLM 분석과 실패 시 규칙(stance는 추측하지 않음), 근거 기사 id 검증, 같은 사건을 매체마다 다르게 보도하면 기사별 stance · 매체별 논조가 갈림(topic 값 복사 회귀 방지), risk와 stance 독립, risk purpose, 시나리오 기사가 같은 파이프라인 · 등록된 분석으로 브리핑됨, `days` 기본값 = 조회 기간 · 상한) |
 | `backend/tests/test_news_pipeline.py` | 아니오 (가짜 웹, 저장소 테스트는 테스트 DB) | 피드 파싱(RSS · Atom · sitemap · EUC-KR · 깨진 XML), URL identity, 본문 추출 · 정제 · fallback · `usage_notice`, robots · 차단 · 봇 확인 페이지 · 연결 오류, schema 버전 적용, 발견 · 본문 예산 · TTL · 중복 저장 방지 · 실패 기록 · 본문 검색 |
 | `backend/tests/test_news_live.py` | 아니오 (가짜 웹 + 테스트 DB) | 요청 한 번으로 전체 파이프라인, 두 번째 요청은 저장소 재사용(요청 0건) · 사건 id 유지, 다른 매체 후속 보도가 기존 사건에 합류, live 브리핑의 출처 · freshness · coverage, 두 Tool의 live 계약(`risks[].source.id`), live 리스크 view가 기사별 risk · stance를 씀, 기사 분석 저장 · 재사용(두 번째 요청은 사건 분석만), 통신사 기사 독립 보도 1회 집계, DB 중단 시 오류 결과, 초기 데이터 반복 등록 시 중복 없음 · id · 날짜 · 사건 유지 · KG 조회, 등록 기사와 RSS 기사가 한 저장소에서 함께 검색 · 분석(모델에는 분석이 없는 새 기사만), 하이브리드 검색(가짜 임베더: 키워드가 놓친 기사를 의미로 찾음 · 벡터 저장과 재사용 · 양쪽에서 찾은 기사 우선 · 모델 장애 시 키워드 fallback · 의미 검색이 다른 기업 기사를 리스크에 넣지 않음), 실제 `embeddinggemma`로 개념형 질의(로컬 Ollama 없으면 skip) |
-| `backend/tests/test_mna_review_workflow.py` | 아니오 | M&A 검토 workflow (persona별 항목 순서 · 우려 · 조건 순서, 같은 권고와 조건 집합, context 신호, 모르는 기업/persona, 흑자 · 적자 · 분쟁 유무 · core_team에 따른 evaluator 판정) |
-| `backend/tests/test_mna_scenario.py` | 아니오 | What-if workflow (변경 값 검증, 원본 보존, 변경 전후 권고 · 조건 · 바뀐 항목, persona 순서, context 반영, Tool의 What-if 경로와 개별 평가 호환 필드) |
-| `backend/tests/test_mna_executive_summary.py` | 아니오 | 종합 평가 workflow (세 관점 포함, 개별 평가와 같은 권고, 핵심 위험 · 기회 · 판단 근거, 잘못된 변경 값 → `INVALID_SCENARIO`) |
-| `backend/tests/test_advisory.py` | 아니오 | K · Group 경영자문 Agent를 scripted model로: lifecycle 이벤트가 답변 생성 전에 스트림에 도착, Tool 후 실패 시 이미 보낸 이벤트 보존, Tool `error` → 모델의 자체 정정, ALL · What-if 결과 전달과 모델 응답 그대로, K Super → 경영자문 위임(A2A 수신 경로) |
+| `backend/tests/test_advisory_judgement.py` | 아니오 | 경영자문 계산(DCF가 데이터의 현금흐름에서 계산 · 데이터를 바꾸면 값이 바뀜, 고객 손실 시나리오가 매출 · FCF · 가치 · 발주 비율로 이어짐, 가격 · 할인율 · 특허 손실, 권고 없음), 판단 검증(모르는 id · 근거 없는 수치 · 미충족 회의 기준 · 관점별 수치 · 조건 · 평가 가격 · 재평가), 근거 장부 합치기, 조회 전용 위임(A2A run에서도 쓰기 없음), 순환 위임 거부, 위임 Tool은 tool 이벤트 대신 위임 이벤트 |
+| `backend/tests/test_advisory_reviews.py` | 아니오 (테스트 DB) | scripted model로 경영자문이 미팅 Agent에 직접 조회 → 계산 → 근거 없는 수치 거부 후 고쳐 기록 → 저장(등급 3 · 회의 코드) → 낮은 등급은 못 봄, 재평가가 이전 판단을 조회 · 인용, 조회 위임 중 리마인더 거부, 보고서 참조가 K → Group A2A로(코드로 수집, a2a_end · 답변 첨부 줄) · Group `/api/reports`가 K에서 PDF를 가져옴, K `/api/a2a/reports`의 등급 확인 |
+| `backend/tests/test_advisory_report.py` | 아니오 (나눔 글꼴 없으면 렌더 테스트 skip) | 투자심의 보고서 PDF (최초 · 재평가 + 이전 판단 · 데이터가 적은 기업 · 근거 없는 판단에서도 생성, 파일명, 주 분석 선택) |
+| `backend/tests/test_advisory.py` | 아니오 | K · Group 경영자문 Agent를 scripted model로: lifecycle 이벤트가 답변 생성 전에 스트림에 도착, Tool 후 실패 시 이미 보낸 이벤트 보존, Tool `error` → 모델의 자체 정정, 가격 · 시나리오가 같은 모델로 계산(권고 없음, 분석 id 구분), K Super → 경영자문 위임(A2A 수신 경로) |
 | `backend/tests/test_capabilities.py` | 아니오 | Registry 내용(kind, allowed_agents), Tool 정의가 source of truth, Agent가 Registry subset을 쓰는지, Skill이 system prompt에 들어가는지 |
 | `backend/tests/test_k_super.py` | 아니오 | `route_on_tool_calls`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model(`agent_core.get_chat_model` patch) + stub 위임 Tool로 만든 그래프(`k_super.build_k_super` patch)로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
 | `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속(root_agent) / run 식별자 stamp(relay된 stamp 유지) / HUB publish·subscribe·keep-alive / SSE 형식 / `.env` 경로 |
@@ -923,22 +933,20 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
    Phase 5b에서 위임 Tool이 6개(K 3 + Group 3)가 되면서 `library/tools/delegation.make_delegate_tool(name, description, from_agent, to_agent, run)` factory를 두었다. 각 system의 `delegate_to_*.py`는 Agent-visible 설명(`DESCRIPTION`)과 `FROM_AGENT` / `TO_AGENT`, runner 조회만 갖는다.
    `tests/test_agents.py`의 `_NoToolGraph`처럼 `build_*_agent`를 monkeypatch하는 테스트가 있으므로 `run_*_agent`는 그래프를 모듈 전역 이름으로 조회한다.
 4. **Workflow 결과의 frontend 렌더링.** Tool별 `switch`를 계속 늘릴지, backend가 표시 힌트를 함께 보낼지, 범용 렌더로 갈지.
-5. **상위 Agent로 전달할 구조화 결과 (Step 5에서 내린 결정과 남은 부분).** Step 5에서는 공유 구조를 만들지 않았다. Advisory가 필요로 하는 Meeting / News 결과는 K Super가 자기 history를 보고 **자연어 위임 문장에 직접 담는다** (Skill `specialist_delegation`의 지침, 코드 template 없음).
-   Advisory Agent는 그 문장을 `run_mna_review`의 `context`(자유 텍스트)로 넘기고 workflow가 신호를 추출한다
-   (가격 상한은 금액 뒤의 "초과 · 이하 · 상한 …"으로 찾되, "2조 원 초과 건은 본회의 상정"처럼 심의 경로를 정하는 문장은 가격 단어가 없으면 상한으로 보지 않는다 — 2026-10-30 수정). 따라서 K Super가 무엇을 옮겨 적는지, Advisory가 무엇을 `context`에 넣는지는 모델 판단이며 실행마다 다를 수 있다 (`tests/test_agents.py`가 가격 기준 · 리스크 주제가 전달됐는지만 검증).
-   Step 6 종합은 **텍스트만으로 구현했다**: K Super는 history의 `ToolMessage` 텍스트를 보고 최종 응답을 쓰고, frontend는 그 문자열을 그대로 표시한다.
-   A2A도 텍스트만이다: Group Super는 K의 최종 응답 문자열을 `ToolMessage`로 받아 그룹 판단을 쓴다. 구조화된 결과(권고 코드, 조건 목록 등)가 필요해지면 `artifacts` / `context` 같은 공유 구조와 A2A payload 확장을 함께 본다.
+5. **상위 Agent로 전달할 구조화 결과 (2026-11-22 일부 결정 · 구현됨).** Advisory는 필요한 Meeting / News 결과를 K Super에게서 받지 않고 직접 조회한다(조회 전용 위임, 최종 답변만).
+   근거 확인을 위한 구조화 데이터는 message state가 아니라 run 단위 **근거 장부**(`runtime/evidence.py`)에 모인다 — 하위 Agent의 장부는 끝날 때 호출자 장부에 합쳐지고, 어느 Agent의 history에도 들어가지 않는다.
+   A2A는 여전히 텍스트 응답이 계약이고, 하나만 더했다: K Advisory의 보고서 **참조**(Tool 결과의 `artifacts`)를 Group의 A2A Tool이 relay된 이벤트에서 코드로 골라 `a2a_end.artifacts`와 답변 끝 첨부 줄로 전한다(파일은 오가지 않음).
+   남은 것: 권고 코드 · 조건 목록 같은 구조화 결과를 A2A payload로 넘기는 일반 구조는 없다 (Group Super는 K의 답변 텍스트로 판단한다).
 6. **Group Super와 A2A (결정 · 구현됨).** 별도 프로세스(Group backend)의 Group Super가 Capability Tool로 K backend의 A2A 수신 표면을 HTTP 호출한다 ([3.4](#34-agent-delegation과-a2a의-차이), [11장](#11-목표-구조와-전환-계획-2026-10-12-결정)).
    남은 것: A2A 프로토콜 자체는 이 레포 안의 약속(NDJSON lifecycle + 최종 응답)이며 표준 A2A 프로토콜은 아니다. K의 주소는 환경변수(`K_ELECTRONICS_A2A_URL`) 하나이고 peer 목록 · 인증 · 재시도는 없다.
 7. **오류 귀속.** `stream_run`이 `AgentError` 외 예외를 run의 `root_agent`로 귀속한다 (Phase 1). 실행 중인 하위 Agent까지 정확히 지목하려면 실행 중 Agent 추적이 필요하다 (미해결). A2A 경계를 넘는 실패는 Group 쪽에서 `k_super`로 귀속되고, K의 원래 오류는 relay된 이벤트로 함께 보인다.
 8. **Agent 식별자 동기화.** backend `AGENT_ID` 문자열과 frontend `AgentId`가 수동으로 일치해야 한다. frontend는 모르는 id의 이벤트를 조용히 버린다. `monitor/steps.ts`와 `platform/config.ts`도 같은 id를 쓴다.
    backend 안에서도 `systems/k_electronics/registry.py`(`allowed_agents`)와 `systems/k_electronics/tools/delegate_to_*.py`(`from` / `to`)가 같은 문자열을 리터럴로 가진다. Registry가 Agent 모듈을 import할 수 없기 때문이며, `tests/test_capabilities.py`가 일치를 검증한다.
    **2026-10-12 결정 · 구현됨**: 두 system이 같은 Specialist id를 쓰므로 id는 system 내부 이름으로 두고 runtime이 이벤트에 `system` 태그를 붙인다. frontend는 `resolveAgent(system, agent)`로 화면용 id를 정한다 (Group의 Specialist는 `group_*`).
-9. **Advisory persona 선택과 다중 관점.** persona는 `run_mna_review`의 인자이고 어떤 관점을 쓸지는 Advisory Agent의 모델 판단이다 (Skill: 한 번의 검토에 관점 하나, 지정 없으면 CEO).
-   초기 실행에서 K Super가 "CEO/CFO/CTO 관점"을 모두 요구해 Advisory가 Tool을 세 번 호출한 사례가 있어 Skill과 위임 Tool 설명을 "관점 하나"로 조였다.
-   **다중 관점 (결정 · 구현됨)**: 세 관점 종합은 workflow가 한 번에 돌려준다 (`persona="ALL"` → `review_executive_summary`, Tool 호출 한 번). 개별 검토는 여전히 관점 하나다.
-   관점 간 비교 · 토론(CFO vs CTO)과 ALL에서의 What-if는 범위 밖이다.
-10. **Advisory 호출 맥락의 2중 전달.** K Super → Advisory는 `task` 문장, Advisory → Tool은 `context` 인자로 같은 맥락이 두 번 LLM을 거친다. Advisory가 `context`를 요약하거나 빠뜨리면 workflow의 신호 추출이 약해진다 (Skill이 "그대로 넣으라"고 지시). 공유 구조(5번)를 도입하면 함께 해소된다.
+9. **Advisory의 관점과 판단 (2026-11-22 결정 · 구현됨).** CEO · CFO · CTO는 Agent도 Tool 인자도 아니고, 경영자문 LLM이 한 번의 판단 기록(`record_advisory_opinion.personas`) 안에서 구분해 쓰는 관점이다.
+   같은 근거를 공유하되 관점마다 먼저 볼 수치(`persona_lenses`)가 다르고, 검증기는 각 관점이 그 관점의 수치를 인용했는지 본다. 최종 권고는 LLM이 정한다 (Tool에 권고 없음).
+   남은 것: 관점별 독립 LLM 호출 · 관점 간 토론은 하지 않았다 (한 번의 구조화된 기록).
+10. **Advisory 호출 맥락의 2중 전달 (2026-11-22 해소).** `context` 자유 텍스트와 키워드 신호 추출을 없앴다. 회의 기준은 `run_mna_review.criteria`(숫자), 새 사건 · What-if는 `scenarios`(재무 동인)로 모델이 옮긴다.
 11. **K UI에서 외부 A2A 실행의 표시 (결정 · 구현됨).** `src/platform/useInboundRuns.ts`가 K의 `/api/events`를 구독해 `origin: a2a` run을 K Super 탭 상태에 같은 mapper · reducer로 흘려 넣는다(세션 카드 + 위임 창 + 응답 반환), Sidebar에는 배지. 배지는 전사 재생이 따라잡은 뒤 꺼진다. 남은 제약: 사용자가 K Super 탭에서 직접 대화하는 동시에 외부 요청이 오면 한 전사에 섞인다.
 12. **Demo Monitor의 소스.** Monitor는 Group 관찰 채널 하나만 구독한다(relay 덕분에 K lifecycle 포함). K UI에서 직접 시작한 K 실행은 Monitor에 보이지 않는다. 필요해지면 K 채널도 구독하고 relay된 복사본을 걸러낸다.
 
@@ -990,6 +998,18 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
     그대로 배포하면 기억이 낱말 검색으로만 동작한다(`MEMORY_EMBED_PROVIDER` · `MEMORY_EMBED_API_KEY`(또는 `MEMORY_EMBED_URL`) 전달 필요, navitech 수정).
     (g) gateway(`agents/remote.py` `_translate`)는 모든 Tool을 "Tool 이름 실행 {args JSON}" · "완료"로 생각 블록에 보이므로 기억 조회도
     `recall_conversation_memory 실행 {"auto": true}`로 보이고 찾은 기록 수는 보이지 않는다 — 자동 기억 조회에 한국어 표시(예: "이전 대화 기억 확인 · 관련 기록 N건")를 두려면 navitech 수정이 필요하다.
+31. **경영자문 재설계의 남은 점 (2026-11-22).** (a) DCF는 단순 모델(명시 기간 FCF + Gordon)이고 시나리오의 매출 변화 영향은 공헌이익률로 근사한다(법인세 · 운전자본 효과 없음). 기업 데이터는 합성이다.
+    (b) 판단 검증의 수치 검사는 조 · 억 · %만 보고, 인용한 근거끼리의 차이 · 합 · 비율까지 허용한다(그 밖의 계산은 Tool로 하게 함). 날짜 · 개월 · 명 같은 수치와 문장의 논리는 검사하지 않는다.
+    (c) Specialist → Specialist 위임은 경영자문 → 미팅 · 뉴스(조회 전용)만 있다. 미팅 · 뉴스 Agent에는 위임 Tool이 없어 사슬은 최대 Super → advisory → meeting/news이고, `make_delegate_tool`이 위임 사슬로 되돌아가는 위임도 막는다.
+        조회 전용은 `Viewer.peer=False · can_write=False`로 강제된다(A2A 예외인 리마인더 · 업무 요청 접수도 막힘). Demo Monitor는 경영자문의 조회 위임도 Step 3 · 4로 표시한다(제목만 다름).
+    (d) 실제 모델(Ollama Cloud `deepseek-v4.1-flash`)은 긴 Tool 호출을 내보내지 못하고 빈 턴을 낸다(약 1,500토큰 이상에서 체계적으로). 그래서 판단 기록을 두 Tool로 나눴고,
+        그래도 생기는 빈 턴은 Specialist core가 reasoning 끄기 + 한 줄 재촉으로 최대 4번 다시 묻는다(재촉 문장은 history에 남지 않음). 다른 모델로 바꾸면 이 제약을 다시 확인한다.
+        또 모델이 거부된 판단 기록을 고치지 않고 답하려 하면, 기록 Tool이 `metadata.answer_check`로 선언한 확인을 Specialist core(`agent_core.answer_checks`)가 실행해 한 번 되돌려 보낸다
+        (Tool 순서를 강제하지 않음: 기록을 시도했다가 거부된 경우에만). 그래도 기록하지 못하면 모델은 그 사실을 밝히고, 보고서 참조는 나오지 않는다.
+        모델이 인자 이름을 흔히 다르게 쓰는 경우(시나리오 이름 · 중첩, 회의 기준 · 관점 필드 이름, 조건 문자열)는 받아 주고, 모르는 이름은 오류로 돌려준다.
+    (e) Open WebUI에 보고서 카드 · 내려받기를 띄우려면 navitech gateway · loader.js 변경이 필요하다(`a2a_end.artifacts` → 카드, `POST /api/reports` 중계). Vite UI에는 보고서 열람 화면을 두지 않았다.
+    (f) 보고서 PDF는 나눔고딕이 있어야 만든다(`REPORT_FONT_DIR`, agent-backend 이미지에는 `fonts-nanum`). 저장된 판단은 지우지 않는다(보존 기간 없음).
+
 
 ---
 

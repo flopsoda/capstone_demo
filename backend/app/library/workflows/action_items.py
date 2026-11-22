@@ -148,7 +148,9 @@ def update_action_item(
     today = today or today_kst()
     # 다른 Agent System(A2A)의 요청은 기록을 바꾸지 못한다. 예외는 리마인더(remind)뿐: 상태 · 기한 · 담당은 그대로 두고
     # 담당자에게 확인 요청 메일만 보낸다 (그 요청을 전달한 사용자에게 확정 권한이 있을 때, 하루 한 번 규칙 그대로).
-    a2a_remind = not viewer.can_write and remind and status is None and due is None and not owner
+    a2a_remind = viewer.via_a2a and not viewer.can_write and remind and status is None and due is None and not owner
+    if not viewer.can_write and not viewer.via_a2a:
+        return {"updated": False, "error": "조회만 맡은 위임 요청이라 Action Item을 바꾸거나 리마인더 메일을 보낼 수 없습니다."}
     if not viewer.can_write and not a2a_remind:
         return {"updated": False, "error": "다른 Agent System이 보낸 요청으로는 Action Item을 바꿀 수 없습니다 "
                                            "(담당자에게 리마인더 메일을 보내는 것만 할 수 있습니다)."}

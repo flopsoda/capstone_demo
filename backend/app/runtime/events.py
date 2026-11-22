@@ -8,7 +8,7 @@ Event shapes (all have "type"):
   agent_start      {agent, request}
   agent_token      {agent, text}        a piece of the agent's answer as the model writes it
   delegation_start {from, to, task}
-  delegation_skipped {from, to, reason}  the user may not use `to` (principal.agents); nothing ran
+  delegation_skipped {from, to, reason}  nothing ran: the user may not use `to` (reason permission) or `to` is up the chain (cycle)
   tool_start       {agent, tool, args}
   tool_end         {agent, tool, result}
   agent_end        {agent, response}

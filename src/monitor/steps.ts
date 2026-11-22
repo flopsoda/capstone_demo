@@ -33,8 +33,10 @@ export function stepFor(ev: AgentEvent): ScenarioEvent | null {
     case "a2a_start":
       return { type: "step", step: 2, title: "그룹 → K전자 A2A 요청" };
     case "delegation_start": {
+      // The advisory agent consults the meeting / news agents itself (look-up only): same step, its own title.
       const s = fromK ? K_DELEGATION_STEPS[ev.to] : undefined;
-      return s ? { type: "step", ...s } : null;
+      if (!s) return null;
+      return ev.from === "advisory" ? { type: "step", step: s.step, title: s.title.replace("K전자 →", "경영자문 →").replace("위임", "조회") } : { type: "step", ...s };
     }
     case "agent_end":
       if (fromK && ev.agent === "k_super") return { type: "step", step: 6, title: "K전자 종합 결과" };
