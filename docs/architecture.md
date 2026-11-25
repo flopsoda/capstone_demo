@@ -1004,6 +1004,8 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
         조회 전용은 `Viewer.peer=False · can_write=False`로 강제된다(A2A 예외인 리마인더 · 업무 요청 접수도 막힘). Demo Monitor는 경영자문의 조회 위임도 Step 3 · 4로 표시한다(제목만 다름).
     (d) 실제 모델(Ollama Cloud `deepseek-v4.1-flash`)은 긴 Tool 호출을 내보내지 못하고 빈 턴을 낸다(약 1,500토큰 이상에서 체계적으로). 그래서 판단 기록을 두 Tool로 나눴고,
         그래도 생기는 빈 턴은 Specialist core가 reasoning 끄기 + 한 줄 재촉으로 최대 4번 다시 묻는다(재촉 문장은 history에 남지 않음). 다른 모델로 바꾸면 이 제약을 다시 확인한다.
+        제공자가 끝내지 않는 호출도 있어(2026-11-25 운영 측정, `gemma4:31b-cloud`: 경영자문 21회 중 5회에서 다시 묻는 한 번이 약 8분) LLM 호출에 `LLM_TIMEOUT_SECONDS`(기본 120초)를 두고,
+        Specialist core는 시간이 다 된 턴을 빈 턴과 같이 다시 묻는다. Super Agent 턴은 다시 묻지 않고 오류로 끝난다.
         또 모델이 거부된 판단 기록을 고치지 않고 답하려 하면, 기록 Tool이 `metadata.answer_check`로 선언한 확인을 Specialist core(`agent_core.answer_checks`)가 실행해 한 번 되돌려 보낸다
         (Tool 순서를 강제하지 않음: 기록을 시도했다가 거부된 경우에만). 그래도 기록하지 못하면 모델은 그 사실을 밝히고, 보고서 참조는 나오지 않는다.
         모델이 인자 이름을 흔히 다르게 쓰는 경우(시나리오 이름 · 중첩, 회의 기준 · 관점 필드 이름, 조건 문자열)는 받아 주고, 모르는 이름은 오류로 돌려준다.

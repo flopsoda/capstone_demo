@@ -28,12 +28,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+import httpx
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.messages.utils import message_chunk_to_message
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from openai import APITimeoutError
 from pydantic import ValidationError
 
 from . import evidence
@@ -57,6 +59,8 @@ HISTORY_CONTEXT = (
 
 EMPTY_TURN_NUDGE = "직전 응답이 비어 있었다. 지금까지 생각한 내용대로 바로 Tool을 호출하거나 최종 응답을 써라. 길면 핵심만 간결하게."
 EMPTY_TURN_RETRIES = 4  # the provider sometimes returns a tool call as nothing (systematically when it is very long)
+# A provider call cut off by its timeout (runtime/llm.py LLM_TIMEOUT_SECONDS): a Specialist asks again as for an empty turn.
+MODEL_TIMEOUTS: tuple[type[BaseException], ...] = (httpx.TimeoutException, APITimeoutError)
 
 # Specialist agents: "delegation" (a Super Agent handed over a task) or "direct".
 INVOCATION_CONTEXT: dict[Invocation, str] = {
@@ -230,11 +234,19 @@ def build_specialist_graph(spec: Specialist) -> CompiledStateGraph:
     tools_by_name = spec.tools_by_name
     checks = answer_checks(tools)
 
+    def turn(model: Any, messages: Sequence[BaseMessage]) -> AIMessage:
+        """One model turn; a call the provider did not finish within LLM_TIMEOUT_SECONDS counts as an empty turn."""
+        try:
+            return invoke_model(spec.agent_id, model, messages)
+        except MODEL_TIMEOUTS:
+            log.warning("%s: model turn timed out, treating it as empty", spec.agent_id)
+            return AIMessage(content="")
+
     def call_model(state: MessagesState, config: RunnableConfig) -> dict:
         system = f"{spec.system_prompt}\n\n{INVOCATION_CONTEXT[_invocation(config)]}"
         model = get_chat_model().bind_tools(tools)
         messages = [SystemMessage(system), *state["messages"]]
-        response = invoke_model(spec.agent_id, model, messages)
+        response = turn(model, messages)
         if not response.tool_calls and not message_text(response):
             # A reasoning model can spend the turn thinking out a long tool call and stop without emitting it.
             # Ask again (up to EMPTY_TURN_RETRIES), without the reasoning phase and with a one-line nudge (not kept in the history).
@@ -243,13 +255,13 @@ def build_specialist_graph(spec: Specialist) -> CompiledStateGraph:
                 retry = retry.model_copy(update={"reasoning": False})
             for _ in range(EMPTY_TURN_RETRIES):
                 log.warning("%s: empty model turn, asking again", spec.agent_id)
-                response = invoke_model(spec.agent_id, retry.bind_tools(tools), [*messages, HumanMessage(EMPTY_TURN_NUDGE)])
+                response = turn(retry.bind_tools(tools), [*messages, HumanMessage(EMPTY_TURN_NUDGE)])
                 if response.tool_calls or message_text(response):
                     break
         note = None if response.tool_calls else next((n for c in checks if (n := c([*state["messages"], response]))), None)
         if note:
             log.warning("%s: answer not accepted yet (%s), asking again", spec.agent_id, note[:60])
-            again = invoke_model(spec.agent_id, model, [*messages, response, HumanMessage(note)])
+            again = turn(model, [*messages, response, HumanMessage(note)])
             if again.tool_calls or message_text(again):
                 response = again
         return {"messages": [response]}
