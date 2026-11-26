@@ -9,6 +9,7 @@ error goes back to the model to correct, and the agent's answer is the model's o
 import json
 import threading
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk
@@ -94,6 +95,21 @@ def test_failure_after_the_tool_keeps_the_events_already_streamed(monkeypatch, s
 
     assert [e["type"] for e in events] == ["agent_start", "tool_start", "tool_end", "error"]
     assert events[-1]["agent"] == "advisory" and "LLM down" in events[-1]["message"]
+
+
+@pytest.mark.parametrize("system,agent,company", SYSTEMS)
+def test_a_timed_out_model_turn_is_asked_again_like_an_empty_one(monkeypatch, system, agent, company):
+    # The provider did not finish the turn within LLM_TIMEOUT_SECONDS: the run goes on as after an empty turn.
+    model = _Model([_call(1, query="인수 검토", company=company), httpx.ReadTimeout("timed out"), ["권고: ", "조건부 진행"]])
+    monkeypatch.setattr(agent_core, "get_chat_model", lambda: model)
+
+    events = _stream(system, lambda: agent.run_advisory_agent("인수 검토", invocation="direct"))
+
+    assert [e["type"] for e in events] == [
+        "agent_start", "tool_start", "tool_end", "agent_token", "agent_token", "agent_end", "done",
+    ], events
+    assert events[-2]["response"] == "권고: 조건부 진행"
+    assert model.seen[-1][-1].content == agent_core.EMPTY_TURN_NUDGE  # asked again with the empty-turn nudge
 
 
 @pytest.mark.parametrize("system,agent,company", SYSTEMS)
