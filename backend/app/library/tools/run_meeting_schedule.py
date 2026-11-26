@@ -21,7 +21,7 @@ def make_run_meeting_schedule(store: MeetingStore) -> BaseTool:
 
     @tool(TOOL_NAME)
     def run_meeting_schedule(
-        action: Literal["list", "create", "update", "cancel"] = "list",
+        action: Literal["list", "draft", "create", "update", "cancel"] = "list",
         meeting_id: str | None = None,
         title: str | None = None,
         starts_at: str | None = None,
@@ -37,17 +37,21 @@ def make_run_meeting_schedule(store: MeetingStore) -> BaseTool:
     ) -> dict[str, Any]:
         """사내 회의 일정을 조회 · 예약 · 변경 · 취소한다 (외부 캘린더와 동기화하지 않는다).
     list는 다가오는 회의(기본 오늘부터 30일)와 안건 · 참석 대상을, create는 새 회의를 예약한다.
+    draft는 저장 · 메일 없이 예약 요청을 점검한다: 기록으로 채울 수 있는 것(같은 주제의 지난 회의 · 그 참석자 · 장소 ·
+    이어지는 안건)과 가정한 것(assumed), 빠진 것(missing: title · date · start · attendees), 여러 사람에 맞거나 기록에 없는
+    이름(unclear), 겹치는 회의(conflicts)를 돌려주고, 화면에 예약 양식으로 보인다. complete가 true면 그대로 create해도 된다.
     create에 carry_over_from을 주면 그 회의에서 보류된 안건과 해결되지 않은 쟁점을 새 회의 안건으로 이월한다.
     시각은 한국 시간이다.
 
     Args:
-        action: list 조회 · create 예약 · update 변경 · cancel 취소.
+        action: list 조회 · draft 예약 전 점검(양식) · create 예약 · update 변경 · cancel 취소.
         meeting_id: update · cancel할 회의 id.
         title: 회의명 (create 필수).
-        starts_at: 시작 시각 "YYYY-MM-DD HH:MM" (create 필수).
+        starts_at: 시작 시각 "YYYY-MM-DD HH:MM" (create 필수). draft에서 시각을 모르면 날짜만 "YYYY-MM-DD".
         ends_at: 종료 시각 "YYYY-MM-DD HH:MM".
         location: 장소 또는 화상회의 링크.
-        attendees: 참석 대상 이름 목록 (update에서는 추가만 한다).
+        attendees: 참석 대상 목록. 직책과 의장 · 간사는 이름 뒤 괄호에 쓴다 (예: "김회장 (의장)", "박지훈 (CFO)",
+            "정전략 (그룹 전략실장, 간사)"). update에서는 추가만 한다.
         agenda: 안건 목록 (update에서는 뒤에 추가한다).
         classification: 회의 등급 1 공개 · 2 사내 · 3 대외비 · 4 극비 (create).
         carry_over_from: 안건 · 미결 쟁점을 이월해 올 이전 회의 id (create).

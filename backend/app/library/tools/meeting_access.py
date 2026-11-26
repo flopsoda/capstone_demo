@@ -9,17 +9,22 @@ broke) comes back as {"error": ...} instead of ending the run.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import psycopg
 
 from ...runtime.events import current_run
 from ..workflows.meeting_store import StoreUnavailable, Viewer, viewer_for
+from .delegation import read_only
 
 
 def current_viewer() -> Viewer:
+    """The run's user; under a read-only delegation (another specialist asked only to look records up) nothing is
+    written — not even what an A2A request may do."""
     run = current_run()
-    return viewer_for(run.principal if run else None, run.origin if run else None)
+    viewer = viewer_for(run.principal if run else None, run.origin if run else None)
+    return replace(viewer, can_write=False, peer=False) if read_only() else viewer
 
 
 def plain(value: Any) -> Any:

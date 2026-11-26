@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool, tool
 
 from ..workflows.meeting_context_retrieval import retrieve_meeting_context
 from ..workflows.meeting_store import MeetingStore
+from . import evidence_items
 from .meeting_access import current_viewer, store_call
 
 TOOL_NAME = "run_meeting_context_retrieval"
@@ -41,8 +42,8 @@ def make_run_meeting_context_retrieval(store: MeetingStore) -> BaseTool:
         date_to: 이 날짜 이전 회의만 (YYYY-MM-DD).
     """
         viewer = current_viewer()
-        return store_call(lambda: retrieve_meeting_context(
+        return evidence_items.recorded(store_call(lambda: retrieve_meeting_context(
             query, topics, store=store, viewer=viewer, meeting_id=meeting_id, date_from=date_from, date_to=date_to,
-        ))
+        )), evidence_items.meeting_context)
 
     return run_meeting_context_retrieval

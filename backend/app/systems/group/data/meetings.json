@@ -112,5 +112,56 @@
         }
       ]
     }
+  ],
+  "directory": [
+    {
+      "name": "김회장",
+      "title": "회장",
+      "department": "그룹 회장실",
+      "organization": "그룹",
+      "email": "chairman@example.com"
+    },
+    {
+      "name": "최재무",
+      "title": "그룹 CFO",
+      "department": "그룹 재무실",
+      "organization": "그룹",
+      "email": "cfo@group.example.com"
+    },
+    {
+      "name": "정전략",
+      "title": "그룹 전략실장",
+      "department": "그룹 전략실",
+      "organization": "그룹",
+      "email": "strategy@group.example.com"
+    },
+    {
+      "name": "김민수",
+      "title": "CEO",
+      "department": "경영진",
+      "organization": "K전자",
+      "email": "ceo@example.com"
+    },
+    {
+      "name": "박지훈",
+      "title": "CFO",
+      "department": "재무본부",
+      "organization": "K전자",
+      "email": "jihoon.park@kelec.example.com"
+    },
+    {
+      "name": "이서연",
+      "title": "CTO",
+      "department": "기술연구소",
+      "organization": "K전자",
+      "email": "seoyeon.lee@kelec.example.com"
+    },
+    {
+      "name": "한상우",
+      "title": "자문위원",
+      "organization": "OO회계법인",
+      "email": "advisor@oo-cpa.example.com",
+      "external": true
+    }
   ]
 }

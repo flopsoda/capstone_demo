@@ -10,6 +10,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool, tool
 
 from ..workflows.action_items import update_action_item as update_item
+from ...runtime.events import current_run
 from ..workflows.meeting_store import MeetingStore
 from .meeting_access import current_viewer, store_call
 
@@ -26,6 +27,7 @@ def make_update_action_item(store: MeetingStore) -> BaseTool:
         note: str | None = None,
         due: str | None = None,
         owner: str | None = None,
+        remind: bool = False,
     ) -> dict[str, Any]:
         """Action Item 하나의 진행 상황을 갱신한다. 변경은 누가 언제 보고했는지와 함께 이력으로 남는다.
     사용자가 명시적으로 말한 변경만 반영한다. id를 모르면 결과의 candidates에서 고르도록 사용자에게 묻는다.
@@ -36,10 +38,18 @@ def make_update_action_item(store: MeetingStore) -> BaseTool:
         note: 진행 메모 (예: "DCF 1차 산정 완료, 민감도 분석 중").
         due: 새 기한 YYYY-MM-DD.
         owner: 새 담당 부서 또는 사람.
+        remind: true면 담당자에게 지금 리마인더(진행 상황 확인) 메일을 보낸다. 사용자가 담당자 확인을 시켰거나 이전 대화로 대상이 분명한
+            확인 의사를 밝혔을 때, 또는 위임 · 다른 Agent System의 요청이 리마인더를 명시할 때 쓴다.
+            확정된 회의록의 열린 할 일, 담당이 사람일 때만 보내며 같은 할 일은 하루 한 번. 사용자가 덧붙인 말은 note로 넘긴다.
+            다른 Agent System(그룹 등)이 보낸 요청으로는 remind만 할 수 있다 (status · due · owner는 바꿀 수 없다).
     """
         viewer = current_viewer()
+        run = current_run()
+        # Another system's reminder must name what it is about: its request as received, not the model's reading of it.
+        asked = run.request if run is not None and run.origin == "a2a" else None
         return store_call(lambda: update_item(
-            store=store, viewer=viewer, item_id=item_id, status=status, note=note, due=due, owner=owner,
+            store=store, viewer=viewer, item_id=item_id, status=status, note=note, due=due, owner=owner, remind=remind,
+            asked=asked,
         ))
 
     return update_action_item

@@ -1,0 +1,594 @@
+{
+ "risk": [
+  {
+   "system": "K",
+   "query": "뉴로엣지 인수 판단에 영향을 줄 수 있는 최근 외부 리스크를 조사해줘.",
+   "company": "뉴로엣지",
+   "topics": [
+    "주요 고객",
+    "법적 분쟁",
+    "핵심인력"
+   ],
+   "matched": 3,
+   "risks": [
+    {
+     "category": "customer_concentration",
+     "level": "HIGH",
+     "report_count": 2,
+     "outlet_count": 2,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-2026-11-17-01",
+     "timeline": [
+      "NEWS-2026-10-02-01",
+      "NEWS-2026-11-17-01"
+     ]
+    },
+    {
+     "category": "key_personnel",
+     "level": "HIGH",
+     "report_count": 2,
+     "outlet_count": 1,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-2026-09-30-01",
+     "timeline": [
+      "NEWS-2026-09-27-01",
+      "NEWS-2026-09-30-01"
+     ]
+    },
+    {
+     "category": "legal_dispute",
+     "level": "MEDIUM",
+     "report_count": 2,
+     "outlet_count": 1,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-2026-10-08-01",
+     "timeline": [
+      "NEWS-2026-09-24-01",
+      "NEWS-2026-10-08-01"
+     ]
+    }
+   ],
+   "positive": [
+    "NEWS-2026-10-06-01"
+   ],
+   "tone": [
+    [
+     "반도체경제 (가상)",
+     3,
+     0,
+     0,
+     "비우호"
+    ],
+    [
+     "AI비즈 (가상)",
+     2,
+     1,
+     0,
+     "중립"
+    ],
+    [
+     "테크데일리 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "K",
+   "query": "최근 악재",
+   "company": "뉴로엣지",
+   "topics": [],
+   "matched": 3,
+   "risks": [
+    {
+     "category": "customer_concentration",
+     "level": "HIGH",
+     "report_count": 2,
+     "outlet_count": 2,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-2026-11-17-01",
+     "timeline": [
+      "NEWS-2026-10-02-01",
+      "NEWS-2026-11-17-01"
+     ]
+    },
+    {
+     "category": "key_personnel",
+     "level": "HIGH",
+     "report_count": 2,
+     "outlet_count": 1,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-2026-09-30-01",
+     "timeline": [
+      "NEWS-2026-09-27-01",
+      "NEWS-2026-09-30-01"
+     ]
+    },
+    {
+     "category": "legal_dispute",
+     "level": "MEDIUM",
+     "report_count": 2,
+     "outlet_count": 1,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-2026-10-08-01",
+     "timeline": [
+      "NEWS-2026-09-24-01",
+      "NEWS-2026-10-08-01"
+     ]
+    }
+   ],
+   "positive": [
+    "NEWS-2026-10-06-01"
+   ],
+   "tone": [
+    [
+     "반도체경제 (가상)",
+     3,
+     0,
+     0,
+     "비우호"
+    ],
+    [
+     "AI비즈 (가상)",
+     2,
+     1,
+     0,
+     "중립"
+    ],
+    [
+     "테크데일리 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "K",
+   "query": "가동률",
+   "company": "오메가파운드리",
+   "topics": [],
+   "matched": 1,
+   "risks": [
+    {
+     "category": "customer_concentration",
+     "level": "MEDIUM",
+     "report_count": 1,
+     "outlet_count": 1,
+     "trend": "단일 보도",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-2026-09-18-01",
+     "timeline": [
+      "NEWS-2026-09-18-01"
+     ]
+    }
+   ],
+   "positive": [],
+   "tone": [
+    [
+     "반도체경제 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "K",
+   "query": "리스크",
+   "company": "알파모바일",
+   "topics": [],
+   "matched": 1,
+   "risks": [
+    {
+     "category": "customer_concentration",
+     "level": "HIGH",
+     "report_count": 2,
+     "outlet_count": 2,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-2026-11-17-01",
+     "timeline": [
+      "NEWS-2026-10-02-01",
+      "NEWS-2026-11-17-01"
+     ]
+    }
+   ],
+   "positive": [],
+   "tone": [
+    [
+     "반도체경제 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ],
+    [
+     "테크데일리 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "K",
+   "query": "리스크",
+   "company": "델타센서",
+   "topics": [],
+   "matched": 1,
+   "risks": [
+    {
+     "category": "labor_dispute",
+     "level": "MEDIUM",
+     "report_count": 1,
+     "outlet_count": 1,
+     "trend": "단일 보도",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-2026-09-10-01",
+     "timeline": [
+      "NEWS-2026-09-10-01"
+     ]
+    }
+   ],
+   "positive": [],
+   "tone": [
+    [
+     "테크데일리 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "G",
+   "query": "리스크",
+   "company": "K바이오",
+   "topics": [],
+   "matched": 1,
+   "risks": [
+    {
+     "category": "key_personnel",
+     "level": "HIGH",
+     "report_count": 2,
+     "outlet_count": 2,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-10-05-01",
+     "timeline": [
+      "NEWS-G-2026-10-05-01",
+      "NEWS-G-2026-10-14-01"
+     ]
+    }
+   ],
+   "positive": [],
+   "tone": [
+    [
+     "경제투데이 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ],
+    [
+     "바이오포커스 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "G",
+   "query": "핵심인력 이탈",
+   "company": "K바이오",
+   "topics": [],
+   "matched": 1,
+   "risks": [
+    {
+     "category": "key_personnel",
+     "level": "HIGH",
+     "report_count": 2,
+     "outlet_count": 2,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-10-05-01",
+     "timeline": [
+      "NEWS-G-2026-10-05-01",
+      "NEWS-G-2026-10-14-01"
+     ]
+    }
+   ],
+   "positive": [],
+   "tone": [
+    [
+     "경제투데이 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ],
+    [
+     "바이오포커스 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "G",
+   "query": "리스크",
+   "company": "K디스플레이",
+   "topics": [],
+   "matched": 1,
+   "risks": [
+    {
+     "category": "legal_dispute",
+     "level": "MEDIUM",
+     "report_count": 1,
+     "outlet_count": 1,
+     "trend": "단일 보도",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-09-26-01",
+     "timeline": [
+      "NEWS-G-2026-09-26-01"
+     ]
+    }
+   ],
+   "positive": [],
+   "tone": [
+    [
+     "테크데일리 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "G",
+   "query": "리스크",
+   "company": "브라이트셀",
+   "topics": [],
+   "matched": 1,
+   "risks": [
+    {
+     "category": "customer_concentration",
+     "level": "HIGH",
+     "report_count": 2,
+     "outlet_count": 1,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-09-22-01",
+     "timeline": [
+      "NEWS-G-2026-09-18-01",
+      "NEWS-G-2026-09-22-01"
+     ]
+    }
+   ],
+   "positive": [],
+   "tone": [
+    [
+     "배터리저널 (가상)",
+     2,
+     0,
+     0,
+     "비우호"
+    ]
+   ]
+  },
+  {
+   "system": "G",
+   "query": "리스크",
+   "company": "K그룹",
+   "topics": [],
+   "matched": 4,
+   "risks": [
+    {
+     "category": "key_personnel",
+     "level": "HIGH",
+     "report_count": 2,
+     "outlet_count": 2,
+     "trend": "지속 (후속 보도 1건)",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-10-05-01",
+     "timeline": [
+      "NEWS-G-2026-10-05-01",
+      "NEWS-G-2026-10-14-01"
+     ]
+    },
+    {
+     "category": "labor_dispute",
+     "level": "MEDIUM",
+     "report_count": 1,
+     "outlet_count": 1,
+     "trend": "단일 보도",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-10-01-01",
+     "timeline": [
+      "NEWS-G-2026-10-01-01"
+     ]
+    },
+    {
+     "category": "legal_dispute",
+     "level": "MEDIUM",
+     "report_count": 1,
+     "outlet_count": 1,
+     "trend": "단일 보도",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-09-26-01",
+     "timeline": [
+      "NEWS-G-2026-09-26-01"
+     ]
+    },
+    {
+     "category": "legal_dispute",
+     "level": "LOW",
+     "report_count": 1,
+     "outlet_count": 1,
+     "trend": "단일 보도",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-09-12-01",
+     "timeline": [
+      "NEWS-G-2026-09-12-01"
+     ]
+    }
+   ],
+   "positive": [
+    "NEWS-G-2026-10-09-01"
+   ],
+   "tone": [
+    [
+     "경제투데이 (가상)",
+     2,
+     1,
+     0,
+     "중립"
+    ],
+    [
+     "바이오포커스 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ],
+    [
+     "산업신문 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ],
+    [
+     "테크데일리 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "G",
+   "query": "리스크",
+   "company": "K홀딩스",
+   "topics": [],
+   "matched": 1,
+   "risks": [
+    {
+     "category": "legal_dispute",
+     "level": "LOW",
+     "report_count": 1,
+     "outlet_count": 1,
+     "trend": "단일 보도",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-09-12-01",
+     "timeline": [
+      "NEWS-G-2026-09-12-01"
+     ]
+    }
+   ],
+   "positive": [],
+   "tone": [
+    [
+     "경제투데이 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  },
+  {
+   "system": "G",
+   "query": "리스크",
+   "company": "K물산",
+   "topics": [],
+   "matched": 1,
+   "risks": [
+    {
+     "category": "labor_dispute",
+     "level": "MEDIUM",
+     "report_count": 1,
+     "outlet_count": 1,
+     "trend": "단일 보도",
+     "escalated_by_coverage": false,
+     "source_id": "NEWS-G-2026-10-01-01",
+     "timeline": [
+      "NEWS-G-2026-10-01-01"
+     ]
+    }
+   ],
+   "positive": [],
+   "tone": [
+    [
+     "산업신문 (가상)",
+     1,
+     0,
+     0,
+     "판단 보류"
+    ]
+   ]
+  }
+ ],
+ "briefing_topics": {
+  "K-뉴로엣지": [
+   [
+    "NEWS-2026-09-24-01",
+    "NEWS-2026-10-08-01"
+   ],
+   [
+    "NEWS-2026-09-27-01",
+    "NEWS-2026-09-30-01"
+   ],
+   [
+    "NEWS-2026-10-02-01",
+    "NEWS-2026-11-17-01"
+   ],
+   [
+    "NEWS-2026-10-06-01"
+   ]
+  ],
+  "G-K바이오": [
+   [
+    "NEWS-G-2026-10-05-01",
+    "NEWS-G-2026-10-14-01"
+   ]
+  ],
+  "G-K그룹": [
+   [
+    "NEWS-G-2026-09-12-01"
+   ],
+   [
+    "NEWS-G-2026-09-26-01"
+   ],
+   [
+    "NEWS-G-2026-10-01-01"
+   ],
+   [
+    "NEWS-G-2026-10-05-01",
+    "NEWS-G-2026-10-14-01"
+   ],
+   [
+    "NEWS-G-2026-10-09-01"
+   ]
+  ]
+ }
+}

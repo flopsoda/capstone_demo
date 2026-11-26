@@ -10,8 +10,10 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 _KEY = "OPENAI_API_KEY" if os.environ.get("LLM_PROVIDER", "").strip().lower() == "openai" else "OLLAMA_API_KEY"
-# The meeting tools read the test meeting database (tests/conftest.py); the other agents' data is fixture files.
-pytestmark = [pytest.mark.skipif(not os.environ.get(_KEY), reason=f"{_KEY} not set"), pytest.mark.usefixtures("meeting_db")]
+# The meeting and news tools read the test database (tests/conftest.py: meeting and news schemas seeded
+# from each system's data/; no publisher feeds); the advisory data is fixture files.
+pytestmark = [pytest.mark.skipif(not os.environ.get(_KEY), reason=f"{_KEY} not set"), pytest.mark.usefixtures("meeting_db", "news_db"),
+              pytest.mark.network]
 
 A2A_REQUEST = (
     "뉴로엣지 인수안에 대해 계열사 차원의 예비 검토를 수행해주세요.\n"
@@ -21,6 +23,14 @@ A2A_REQUEST = (
 MEETING_WORKFLOW = "run_meeting_context_retrieval"
 NEWS_WORKFLOW = "run_company_risk_news_analysis"
 ADVISORY_WORKFLOW = "run_mna_review"
+KG_TOOL = "query_enterprise_kg"
+RECORD_TOOL = "record_advisory_opinion"
+RECOMMENDATIONS = {"PROCEED", "CONDITIONAL_PROCEED", "DO_NOT_PROCEED"}
+
+
+def _kept_judgements(events: list[dict]) -> list[dict]:
+    """The advisory agent's judgements that passed the checks and were kept (its own recommendation, never a Tool's)."""
+    return [e["result"] for e in events if e["type"] == "tool_end" and e["tool"] == RECORD_TOOL and e["result"].get("accepted")]
 
 
 def test_meeting_agent_emits_tool_lifecycle():
@@ -63,7 +73,7 @@ def test_news_agent_emits_tool_lifecycle():
     assert "코어NPU" in response and "CTO" in response
 
 
-def test_advisory_agent_emits_tool_lifecycle():
+def test_advisory_agent_computes_then_judges_and_records():
     from app.systems.k_electronics.agents.advisory import run_advisory_agent
     from app.runtime.events import collect_events
 
@@ -76,12 +86,11 @@ def test_advisory_agent_emits_tool_lifecycle():
     )
     types = [e["type"] for e in events]
     assert types[0] == "agent_start" and types[-1] == "agent_end"
-    tool_end = next(e for e in events if e["type"] == "tool_end")
-    assert tool_end["tool"] == ADVISORY_WORKFLOW
-    assert tool_end["result"]["persona"] == "CFO"
-    assert tool_end["result"]["recommendation"] == "CONDITIONAL_PROCEED"
-    assert tool_end["result"]["context_signals"]["price_ceiling_trillion_krw"] == 2.5
-    assert "조건부" in response and "2.3조" in response
+    reviews = [e["result"] for e in events if e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW]
+    assert reviews and all("recommendation" not in r for r in reviews)  # the numbers Tool does not recommend
+    kept = _kept_judgements(events)
+    assert kept and kept[-1]["recommendation"] in RECOMMENDATIONS, [e for e in events if e["type"] == "tool_end"]
+    assert response
 
 
 def _delegation_blocks(events: list[dict]) -> list[tuple[str, list[str]]]:
@@ -97,7 +106,7 @@ def _delegation_blocks(events: list[dict]) -> list[tuple[str, list[str]]]:
     return blocks
 
 
-def test_k_super_delegates_to_each_specialist_in_sequence_then_answers():
+def test_k_super_hands_the_acquisition_judgement_to_the_advisory_agent():
     from app.systems.k_electronics.agents.k_super import run_k_super
     from app.runtime.events import collect_events
 
@@ -105,25 +114,15 @@ def test_k_super_delegates_to_each_specialist_in_sequence_then_answers():
     types = [e["type"] for e in events]
     assert types[0] == "agent_start" and events[0]["agent"] == "k_super"
     assert types[-1] == "agent_end" and events[-1]["agent"] == "k_super"
-    # Step 6: K Super's own final review, written from its message history — no
-    # synthesis tool, no template. It answers the request's last item (본실사 진입 여부).
-    assert events[-1]["response"] == response and response
-    assert "본실사" in response, response
-
-    blocks = _delegation_blocks(events)
-    # Real nesting, one specialist at a time: K Super delegates → specialist runs its tool → returns.
-    assert [to for to, _ in blocks] == ["meeting", "news", "advisory"], blocks
-    for to, inner in blocks:
-        assert inner == ["agent_start", "tool_start", "tool_end", "agent_end"], (to, inner)
-    tool_names = [e["tool"] for e in events if e["type"] == "tool_start"]
-    assert tool_names == [MEETING_WORKFLOW, NEWS_WORKFLOW, ADVISORY_WORKFLOW]
-    tasks = {e["to"]: e["task"] for e in events if e["type"] == "delegation_start"}
-    assert all(tasks.values())
-    # K Super decided on its own to carry earlier results into the Advisory task
-    # (no code builds this text): the meeting's price criterion and the news risks.
-    review = next(e for e in events if e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW)["result"]
-    assert review["context_signals"]["price_ceiling_trillion_krw"] == 2.5, tasks["advisory"]
-    assert set(review["context_signals"]["confirmed_risks"]) >= {"customer_concentration", "key_personnel"}, tasks["advisory"]
+    assert events[-1]["response"] == response and "본실사" in response, response
+    handoffs = [(e["from"], e["to"]) for e in events if e["type"] == "delegation_start"]
+    assert ("k_super", "advisory") in handoffs, handoffs
+    # whoever looks up meetings / news does it as a specialist handoff: K Super for items the request names,
+    # the advisory agent (look-up only) for evidence it decides it needs
+    assert all(frm in ("k_super", "advisory") for frm, to in handoffs if to in ("meeting", "news")), handoffs
+    kept = _kept_judgements(events)
+    assert kept and kept[-1]["recommendation"] in RECOMMENDATIONS
+    assert any(e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW for e in events)
 
 
 def test_k_super_decides_each_delegation_in_its_own_model_turn():
@@ -137,8 +136,8 @@ def test_k_super_decides_each_delegation_in_its_own_model_turn():
         lambda: build_k_super().invoke({"messages": [HumanMessage(A2A_REQUEST)]}, config={"recursion_limit": RECURSION_LIMIT})
     )
     turns = [[c["name"] for c in m.tool_calls] for m in state["messages"] if isinstance(m, AIMessage) and m.tool_calls]
-    # Meeting result arrives, the model decides again, then News — not both in one turn.
-    assert turns == [["delegate_to_meeting_agent"], ["delegate_to_news_agent"], ["delegate_to_advisory_agent"]], turns
+    # One handoff per model turn: each result arrives before the model decides again. The acquisition judgement goes to advisory.
+    assert all(len(t) == 1 for t in turns) and ["delegate_to_advisory_agent"] in turns, turns
     # The run ends because the model answered without a tool call, not because
     # of a termination rule: the last message is a plain AI message.
     last = state["messages"][-1]
@@ -171,7 +170,7 @@ def test_api_streams_ndjson_events():
         events = [json.loads(line) for line in res.iter_lines() if line.strip()]
     types = [e["type"] for e in events]
     assert types[-1] == "done"
-    assert [e["to"] for e in events if e["type"] == "delegation_start"] == ["meeting", "news", "advisory"]
+    assert "advisory" in [e["to"] for e in events if e["type"] == "delegation_start" and e["from"] == "k_super"]
     assert "tool_start" in types
 
 
@@ -232,8 +231,9 @@ def test_advisory_direct_chat_uses_tool_for_real_review():
     with client.stream("POST", "/api/agents/advisory/run", json={"request": "뉴로엣지 인수를 CTO 관점에서 검토해줘."}) as res:
         assert res.status_code == 200, res.text
         events = [json.loads(line) for line in res.iter_lines() if line.strip()]
-    tool_end = next(e for e in events if e["type"] == "tool_end")
-    assert tool_end["tool"] == ADVISORY_WORKFLOW and tool_end["result"]["persona"] == "CTO"
+    tool_end = next(e for e in events if e["type"] == "tool_end" and e["tool"] == ADVISORY_WORKFLOW)
+    assert tool_end["result"]["found"] is True
+    assert events[-1]["type"] == "done"
 
 
 def test_delegation_path_still_requires_tool(monkeypatch):
@@ -307,13 +307,87 @@ def test_group_super_asks_k_electronics_over_a2a_and_writes_the_group_judgment(m
     # K's own delegations are visible as relayed observation events, in K's order. Group Super may also
     # have delegated to its own specialists first (its call); those are not relayed.
     k_delegations = [e["to"] for e in events if e["type"] == "delegation_start" and e.get("relayed")]
-    assert k_delegations == ["meeting", "news", "advisory"], events
+    assert "advisory" in k_delegations, events
     assert all(e.get("relayed") for e in events if e["system"] == "k_electronics")
     assert all(not e.get("relayed") for e in events if e["system"] == "group")
     a2a_end = next(e for e in events if e["type"] == "a2a_end")
     final = next(e for e in events if e["type"] == "agent_end" and e["agent"] == "group_super")
     assert a2a_end["response"] and final["response"]
     assert "본실사" in final["response"] or "승인" in final["response"], final["response"]
+
+
+def _group_super_first_handoff(request: str) -> str:
+    """The Group Super's first handoff for `request` (one model turn; nothing is run)."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.runtime.agent_core import SUPER_INVOCATION_CONTEXT
+    from app.runtime.llm import get_chat_model
+    from app.systems.group.agents import group_super
+
+    model = get_chat_model().bind_tools(group_super.TOOLS)
+    message = model.invoke([SystemMessage(f"{group_super.SYSTEM_PROMPT}\n\n{SUPER_INVOCATION_CONTEXT['direct']}"), HumanMessage(request)])
+    return message.tool_calls[0]["name"] if message.tool_calls else ""
+
+
+@pytest.mark.parametrize("request_text, handoff", [
+    # A meeting held at the subsidiary is the subsidiary's record, even when the group also discussed the deal.
+    ("거, 저번에 K전자에서 인수한다고 회의했던 거 있잖아. 그거 뭐였지?", "request_k_electronics_review"),
+    ("K전자 쪽 회의에서 나온 후속 업무들 지금 어떻게 되고 있어?", "request_k_electronics_review"),
+    ("그룹 투자심의 사전회의에서 뉴로엣지 건 뭐라고 정했지?", "delegate_to_meeting_agent"),
+])
+def test_group_super_routes_by_who_owns_the_record(request_text, handoff):
+    assert _group_super_first_handoff(request_text) == handoff
+
+
+_STATUS_REPORTED = (  # the gateway's history format (navitech agents/remote.py build_request)
+    "[이전 대화]\n사용자: K전자 뉴로엣지 인수 건 후속 업무는 지금 어떻게 되고 있어?\n"
+    "AI: K전자에 확인한 결과 9/15 AI 반도체 전략회의의 후속 업무 중 적정 기업가치 산정(박지훈 CFO, 기한 10/10)은 39일 지연 · 미착수, "
+    "핵심인력 Retention 확인(이서연 CTO)은 협의가 막혀 18일 지연, 고객사 의존도 확인은 진행 중입니다.\n\n[현재 요청]\n"
+)
+
+
+@pytest.mark.parametrize("utterance, mails", [
+    ("담당자한테 어떻게 된 건지 물어봐.", True),   # an indirect ask to check with the owners: the reminder goes out
+    ("이건 담당자들한테 직접 들어 봐야겠다.", True),
+    ("왜 이렇게 늦어지는 거지? 한번 확인해 봐야겠다.", True),  # a question with a wish to check: ask the owners why
+    ("왜 아직 안 끝났어?", False),              # a question alone: look it up, no mail
+    ("생각보다 많이 늦네.", False),             # a remark: answer only
+])
+def test_group_super_reads_a_reminder_intent_from_the_conversation(utterance, mails):
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from app.runtime.agent_core import SUPER_INVOCATION_CONTEXT
+    from app.runtime.llm import get_chat_model
+    from app.systems.group.agents import group_super
+
+    model = get_chat_model().bind_tools(group_super.TOOLS)
+    message = model.invoke([SystemMessage(f"{group_super.SYSTEM_PROMPT}\n\n{SUPER_INVOCATION_CONTEXT['direct']}"),
+                            HumanMessage(_STATUS_REPORTED + utterance)])
+    asks = [c["args"].get("request", "") for c in message.tool_calls if c["name"] == "request_k_electronics_review"]
+    assert any("메일" in a for a in asks) is mails, (utterance, message.tool_calls or message.content)
+    if mails:  # a self-contained order: the items and owners, not "그거"
+        assert "박지훈" in asks[0] or "기업가치" in asks[0]
+
+
+def test_no_reminder_goes_out_for_owners_nobody_named(monkeypatch):
+    """Group app → K app over A2A with the real LLM: only the deal was discussed, then "the owners need checking".
+    Whatever the Group Super writes, K mails only items its request names — here none, so no mail is queued."""
+    from fastapi.testclient import TestClient
+
+    from app.systems.group.app import app as group_app
+    from app.systems.group.tools import request_k_electronics_review as a2a_tool
+    from app.systems.k_electronics import MEETING_STORE
+    from app.systems.k_electronics.app import app as k_app
+
+    monkeypatch.setenv("MEETINGS_CONFIRM_GROUPS", "*")
+    monkeypatch.setattr(a2a_tool, "make_client", lambda: TestClient(k_app))
+    request = ("[이전 대화]\n사용자: K전자가 검토 중인 뉴로엣지 인수안에 대해 알려 줘.\n"
+               "AI: 요구가 2.8조 원으로 적정가치(2.0~2.3조 원)를 웃돌아 조건부 진행 의견입니다.\n\n[현재 요청]\n담당자한테 확인이 필요하겠는데.")
+    with TestClient(group_app).stream("POST", "/api/agents/group-super/run", json={"request": request}) as res:
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    assert events[-1]["type"] == "done", events[-1]
+    with MEETING_STORE.connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM outbox WHERE dedupe_key LIKE 'nudge:%%'").fetchone()["n"] == 0
 
 
 def test_group_super_direct_small_talk_does_not_call_a2a():

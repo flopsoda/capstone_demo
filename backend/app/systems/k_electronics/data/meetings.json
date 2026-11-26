@@ -12,10 +12,11 @@
         { "speaker": "CEO", "statement": "자체 개발 대비 최소 2년 이상 Time-to-Market 단축 필요" }
       ],
       "action_items": [
-        { "text": "적정 기업가치 산정", "owner": "재무기획팀", "status": "open", "due": "2026-10-10" },
-        { "text": "최대 고객사 의존도 확인", "owner": "전략기획팀", "status": "open", "due": "2026-11-30" },
-        { "text": "핵심인력 Retention 확인", "owner": "인사팀", "status": "open", "due": "2026-10-31" },
-        { "text": "NeuroEdge 기술 실사 자료 요청", "owner": "CTO 직속", "status": "done", "due": "2026-09-30" }
+        { "text": "적정 기업가치 산정", "owner": "박지훈 (CFO)", "status": "open", "due": "2026-10-10" },
+        { "text": "최대 고객사 의존도 확인", "owner": "전략기획팀", "status": "in_progress", "due": "2026-11-30" },
+        { "text": "핵심인력 Retention 확인", "owner": "이서연 (CTO)", "status": "blocked", "due": "2026-10-31",
+          "note": "NeuroEdge 핵심 설계인력이 연구 자율성 보장을 요구해 유지 방안 협의가 지연되고 있음" },
+        { "text": "NeuroEdge 기술 실사 자료 요청", "owner": "이서연 (CTO)", "status": "done", "due": "2026-09-30" }
       ]
     },
     {
@@ -48,5 +49,10 @@
         { "text": "현지 노무 리스크 검토", "owner": "법무팀", "status": "open", "due": "2026-10-20" }
       ]
     }
+  ],
+  "directory": [
+    { "name": "김민수", "title": "CEO", "department": "경영진", "organization": "K전자", "email": "ceo@example.com", "email_env": "DEMO_MAIL_KELEC_CEO" },
+    { "name": "박지훈", "title": "CFO", "department": "재무본부", "organization": "K전자", "email": "jihoon.park@kelec.example.com", "email_env": "DEMO_MAIL_KELEC_CFO" },
+    { "name": "이서연", "title": "CTO", "department": "기술연구소", "organization": "K전자", "email": "seoyeon.lee@kelec.example.com", "email_env": "DEMO_MAIL_KELEC_CTO" }
   ]
 }

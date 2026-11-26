@@ -16,11 +16,23 @@ Step 1  REAL   회장 요청 접수                         Group UI → Group b
 Step 2  REAL   A2A 요청 (Group Super → K Super)       Group Super의 Tool이 K backend(:8000) /api/a2a/run 호출, 요청문은 LLM이 작성
 Step 3  REAL   K Super → Meeting Agent → run_meeting_context_retrieval
 Step 4  REAL   K Super → News Agent → run_company_risk_news_analysis     (같은 K Super 실행 안에서 순차 위임)
-Step 5  REAL   K Super → Advisory Agent → run_mna_review                 (Meeting · News 결과를 맥락으로 담아 위임)
+Step 5  REAL   K Super → Advisory Agent → (KG · 미팅 · 뉴스 직접 조회) → run_mna_review → record_advisory_opinion (판단 · 보고서 참조)
 Step 6  REAL   K Super 종합                                              (Tool 호출 없이 최종 검토 결과 → agent_end)
 Step 7  REAL   A2A 응답                                                  K의 최종 응답 텍스트만 Group Super에게 전달
 Step 8  REAL   그룹 최종 판단                                            Group Super의 마지막 model 턴
 ```
+
+### 경영자문 Agent 주요 기능
+
+경영자문 Agent(K전자 · 그룹 모두 같은 Skill · Tool · Workflow, 각자의 기업 데이터)는 인수안을 스스로 조사하고 수치를 계산한 뒤 최종 권고를 직접 내립니다.
+
+- **자율 조사:** 기업 지식 그래프(`query_enterprise_kg`)로 축적된 회의 · 뉴스 지식을 보고, 더 자세한 기록이나 최신 뉴스가 필요하면 미팅 · 뉴스 에이전트에게 직접 묻습니다(조회 전용).
+- **계산 Tool:** `run_mna_review`가 사업계획 현금흐름으로 DCF · 민감도 · 가격 프리미엄, 고객 · 계약 · 기술 · 인력 지표, 시나리오(최대 고객 매출 손실 · 매출/이익률 변화 · 할인율 · 특허 손실 · 가격)를 계산합니다. 권고는 내지 않습니다.
+- **LLM의 판단:** CEO · CFO · CTO 관점(같은 근거, 다른 기준)과 최종 권고를 Advisory LLM이 정합니다. 최초 평가 · 재평가 · What-if가 같은 파이프라인입니다.
+- **검증 · 이력:** `record_advisory_opinion`이 근거 id · 수치 · 회의 기준 · 관점별 근거를 확인한 뒤 판단과 근거 사본을 저장합니다. 재평가는 저장된 이전 판단과 비교합니다.
+- **투자심의 보고서:** 종합 평가 · 재평가는 PDF 보고서 참조를 함께 돌려주고, 보고서는 저장된 판단으로 열 때 생성됩니다 (K → Group으로는 참조만 전달).
+
+기업 데이터는 합성(가상) 데이터이며(`data/companies.json`의 `data_room`), 실제 기업정보 자동 수집은 포함하지 않습니다.
 
 두 플랫폼 UI(`/group`, `/k`) 모두 **슈퍼에이전트 · 경영자문 · 뉴스 · 미팅** 탭의 직접 채팅을 제공하며, 협업형 요청에서는 A2A / 위임 세션이 채팅 옆 창으로 펼쳐집니다.
 직접 채팅에서는 Tool 사용이 강제되지 않아, 일반 개념 질문에는 Tool 없이 답하고 실제 검토 요청에는 Workflow Tool · 위임 · A2A를 사용합니다.
@@ -28,14 +40,39 @@ Step 8  REAL   그룹 최종 판단                                            G
 ## 실행
 
 요구 버전: **Node `^20.19 || >=22.12`** (Vite 8 · oxlint), **Python `>=3.12`** (3.13으로 검증). 외부 의존은 LLM API key(기본 Ollama Cloud, `LLM_PROVIDER=openai`면 OpenAI 호환 API)와
-미팅 에이전트의 회의 저장소 **Postgres 15+**(`MEETINGS_DATABASE_URL`, `pg_trgm` 사용)입니다 — `backend/.env.example`.
-각 system은 처음 쓸 때 자기 schema(K `kelec`, Group `grp`)를 만들고 `data/meetings.json`으로 채웁니다. 저장소가 없으면 미팅 Tool은 오류 결과를 돌려줍니다.
+회의 · 뉴스 저장소 **Postgres 15+ + pgvector**(`MEETINGS_DATABASE_URL`, `pg_trgm` · `vector` 확장 사용), 뉴스 의미 검색용 **로컬 Ollama의 `embeddinggemma`**입니다 — `backend/.env.example`.
+(임베딩 모델이 없거나 꺼져 있으면 뉴스 검색은 키워드만으로 동작합니다. pgvector는 필수입니다.)
+각 system은 처음 쓸 때 자기 schema(K `kelec`, Group `grp`)를 만들고(이후 `meeting_migrations/`의 번호 migration 적용) `data/meetings.json`으로 채웁니다. 저장소가 없으면 미팅 Tool은 오류 결과를 돌려줍니다.
+뉴스도 같은 Postgres에 system별 schema(K `kelec_news`, Group `grp_news`)로 저장합니다. 각 system은 처음 쓸 때 `data/news.json`의 기사 · 사건 · 분석을 초기 데이터로 등록하고
+(다시 시작해도 같은 행을 갱신할 뿐 중복 없음), 이후 언론사 RSS로 모은 기사와 **같은 저장소 · 같은 파이프라인**으로 검색 · 분석합니다. 별도 데모 모드는 없습니다.
+기본 조회 기간은 120일입니다(`NEWS_LOOKBACK_DAYS`로 변경). 검색은 키워드(본문 · 연결된 기업명)와 의미(임베딩 유사도)를 합쳐 순위를 매깁니다(하이브리드, RRF).
+선택: 녹음 transcript 연결(`SPEECH_SERVICE_URL`), 메일 받는 사람 조회(`DIRECTORY_URL`), 메일 발송(`SMTP_*`, `MEETINGS_BACKGROUND_JOBS=1`), 서명된 요청자(`PRINCIPAL_SIGNING_KEY`) — 배포(gateway 레포)가 채웁니다.
+로컬 데모에서 회의록을 확정하려면 `MEETINGS_CONFIRM_GROUPS=*` (principal 없는 요청은 그룹이 없으므로). 이 값과 `MEETINGS_ANONYMOUS_CLEARANCE=4`가 없는 예전 `.env`는
+`.env.example`의 `MEETINGS_*` 줄을 옮겨 넣으세요 — 없으면 회의록이 초안으로만 저장되어 다른 Agent가 읽지 못하고, 리마인더 메일도 거부됩니다. 배포는 자기 값(`secretary,executive` 등)을 씁니다.
+
+**시연 메일 (최종 시나리오 02).** 그룹이 A2A로 요청하면 K전자 미팅 에이전트가 9/15 회의의 할 일 담당자(박지훈 CFO · 이서연 CTO)에게 리마인더(진행 상황 확인) 메일을 보냅니다.
+fixture 주소는 배달되지 않는 `example.com`이므로, 받을 주소를 `DEMO_MAIL_KELEC_CFO` · `DEMO_MAIL_KELEC_CTO`(팀이 관리하는 메일함만)로 넣고 K 저장소가 **처음 채워질 때** 반영됩니다.
+메일은 K 프로세스에서만 보내고 자동 기한 알림은 끕니다 (`.env`보다 셸 변수가 우선):
+
+```bash
+MEETINGS_BACKGROUND_JOBS=1 MEETINGS_DELIVERY_INTERVAL=15 MEETINGS_DAILY_HOUR=23 \
+  .venv/bin/uvicorn app.main:app --port 8000      # SMTP_* 는 .env에. Group(:8001)은 그대로 (발송 작업 없음)
+```
+
+`MEETINGS_DAILY_HOUR=23`이면 매일 아침 작업(기한 알림 · 주소 재조회 · transcript 정리)이 밤 11시 전에는 돌지 않습니다 (최댓값 23). 같은 할 일의 리마인더는 하루 한 번이므로 리허설 뒤 본 시연에서 다시 보내려면 날짜가 바뀌거나 저장소를 다시 채워야 합니다.
+SMTP를 켜기 전에 `outbox`에 남은 `approved` 메일(리허설분)이 없는지 확인하세요 — 켜는 순간 3일 이내 것은 모두 나갑니다.
+시나리오 뉴스(`data/news.json`, 11/17 알파모바일 공급계약 중단 포함)는 처음 쓸 때 등록되지만, 요청 시 임베딩은 최근 7일 기사부터 예산만큼만 하므로
+RSS 기사가 많이 쌓인 저장소에서는 등록 기사가 의미 검색에 잡히지 않을 수 있습니다. 시연 전에 한 번 `python -m app.library.workflows.news.collect --schema kelec_news --embed-only`로
+모두 임베딩해 두세요 (키워드 · 기업 리스크 조회는 이것 없이도 됩니다).
+이미 채워진 K 저장소에 바뀐 시나리오 데이터(담당자 · 상태 · 진행 메모 · 연락처)를 넣으려면 schema를 백업한 뒤 다시 채웁니다 (뉴스 `kelec_news`는 그대로):
+`pg_dump -n kelec "$MEETINGS_DATABASE_URL" > kelec_backup.sql` → `psql "$MEETINGS_DATABASE_URL" -c 'DROP SCHEMA kelec CASCADE'` → backend 재시작.
 
 ```bash
 # 1) Python backend — K Electronics system (별도 터미널)
 cd backend
 python3.13 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env            # OLLAMA_API_KEY 입력 (https://ollama.com/settings/keys), MEETINGS_DATABASE_URL 입력
+ollama pull embeddinggemma      # 뉴스 의미 검색 (로컬 Ollama; Ollama Cloud는 임베딩을 제공하지 않음)
 .venv/bin/uvicorn app.main:app --port 8000 --reload
 
 # 1b) Python backend — Group system (별도 터미널, 같은 venv/.env). Group Super가 K에 A2A로 요청한다
@@ -52,6 +89,39 @@ npm run build    # tsc + vite build
 #    http://localhost:5173/monitor  Demo Monitor (테스트 · 발표용 관찰 창, 제품 UI 아님):
 #                                   Group backend의 /api/events(SSE)를 구독해 전체 Agent Graph · Step 1~8 · 협업 세션을 실제 이벤트로만 보여준다
 ```
+
+뉴스 파이프라인: 뉴스 탭에 `HBM 시장 최근 동향 알려줘.`처럼 어떤 주제든 요청하면, 저장된 뉴스를 찾고 필요하면 언론사 RSS(29곳, `news/feeds.json`)에서
+새 기사를 모아 본문을 추출 · 정제(trafilatura) → 임베딩(embeddinggemma, 제목 + 본문 앞 500자) → 키워드 + 의미 검색 → 중복 제거 → 사건 묶기 → 분석(LLM, 키 없으면 규칙) → system별 Postgres 뉴스 저장소(`NEWS_DATABASE_URL`, 없으면
+`MEETINGS_DATABASE_URL`; K `kelec_news`, Group `grp_news`)에 저장 · 재사용 → 사건별 브리핑으로 답합니다. 검색 API는 쓰지 않으므로 RSS에 실린 기사(와 저장소에 쌓인 기사)만 찾습니다.
+robots.txt를 지키고 차단 · 로그인 · 봇 확인 페이지는 우회하지 않으며, 본문을 못 얻은 기사는 요약 · 제목 수준(`content_level`)으로 표시합니다.
+
+주기 수집 (선택, backend/에서; 요청 시 수집과 같은 파이프라인). cron · 작업 스케줄러로 돌리거나 `--watch`로 반복합니다:
+
+```bash
+.venv/bin/python -m app.library.workflows.news.collect --schema kelec_news               # K전자 저장소에 한 번
+.venv/bin/python -m app.library.workflows.news.collect --schema grp_news --watch 30      # 그룹 저장소에 30분마다
+.venv/bin/python -m app.library.workflows.news.collect --schema kelec_news --embed-only   # 수집 없이 임베딩이 없는 기사만 (처음 한 번 권장)
+```
+Enterprise KG (경영자문 Agent의 `query_enterprise_kg`): system마다 회의 저장소 · 뉴스 저장소로 기업 · 인물 · 회의 · 결정 · 전제 · 할 일 · 뉴스 사건과
+그 관계를 만든다 (같은 Postgres, 그 system의 schema `kelec` / `grp` 안의 `kg_*` 테이블). 회의 기록은 LLM 없이 그대로 옮기고, 뉴스 사건은 사건마다 한 번
+chat model로 관계를 뽑는다(결과 저장 · 재사용). 배경 작업(`MEETINGS_BACKGROUND_JOBS=1`)이 `KG_SYNC_INTERVAL`(600초)마다 바뀐 원본만 반영하고,
+처음 만들거나 바로 맞출 때는 CLI를 쓴다 (backend/에서):
+
+```bash
+.venv/bin/python -m app.library.workflows.kg.build --meeting-schema kelec --news-schema kelec_news --data app/systems/k_electronics/data
+.venv/bin/python -m app.library.workflows.kg.build --meeting-schema grp --news-schema grp_news --data app/systems/group/data
+.venv/bin/python -m app.library.workflows.kg.build --meeting-schema kelec --news-schema kelec_news --data app/systems/k_electronics/data --rebuild-only   # 모델 호출 없이 다시 해석
+```
+
+Super Agent 대화 기억: 직접 대화(Group · K Super 탭, 배포에서는 Open WebUI의 Super Agent)를 사용자별로 저장해 다음 요청에서 관련된 과거 대화를 자동으로 찾아 붙입니다
+(OpenAI `text-embedding-3-small` → pgvector, `backend/.env`의 `MEMORY_EMBED_API_KEY`). 로컬 UI는 로그인 사용자가 없으므로 `MEMORY_ANONYMOUS_USER=local-demo`처럼 이름을 주어야 기억합니다.
+임베딩 모델을 바꾸면(예: `MEMORY_EMBED_PROVIDER=ollama`) 저장된 대화의 새 벡터를 채웁니다:
+
+```bash
+.venv/bin/python -m app.library.workflows.memory.reembed --schema grp
+```
+
+요청 한 번은 새 기사를 최대 64건(3초)까지만 임베딩하므로, 저장소를 처음 만들었거나 기사가 많이 쌓였을 때는 `--embed-only`(약 25건/초, M2 Pro 기준)로 한 번 채워 둡니다.
 
 backend 테스트:
 
@@ -77,15 +147,29 @@ backend가 꺼져 있거나 Agent가 실패하면(LLM 오류, 전문 Agent가 Wo
 창 세 개를 띄웁니다: `/group`, `/k`, `/monitor`.
 
 1. **Group UI**의 **그룹 슈퍼에이전트** 탭에서 요청을 보냅니다 (빈 채팅의 **예시 요청 불러오기**로 대표 문장 입력).
-2. Group Super가 요청을 판단해 K전자에 A2A로 검토를 요청합니다. 채팅 옆에 **A2A 대화** 창이 열리고, 그 안에 K전자 슈퍼에이전트가 미팅 → 뉴스 → 경영자문에게
-   위임하는 **위임 대화** 창이 차례로 열렸다 닫힙니다 (K 내부 lifecycle이 관찰용으로 relay됨). K의 최종 응답이 돌아오면 A2A 창이 요청 카드로 접히고,
+2. Group Super가 요청을 판단해 K전자에 A2A로 검토를 요청합니다. 채팅 옆에 **A2A 대화** 창이 열리고, 그 안에 K전자 슈퍼에이전트가 경영자문에게
+   위임하고 경영자문이 필요하면 미팅 · 뉴스에 조회를 맡기는 **위임 대화** 창이 열렸다 닫힙니다 (K 내부 lifecycle이 관찰용으로 relay됨). K의 최종 응답이 돌아오면 A2A 창이 요청 카드로 접히고,
    Group Super가 그룹 최종 판단을 씁니다. 필요하다고 판단하면 그룹 자체 전문 Agent에게도 위임합니다.
 3. **Demo Monitor**는 같은 실행을 전체 그래프(두 시스템 9노드)와 Step 1~8로 보여줍니다. 제품 UI에는 그래프와 Step이 없습니다.
 4. **K UI**는 그룹의 A2A 요청이 처리되는 동안 Sidebar에 "외부 요청 처리 중 · 그룹" 배지가 켜지고, **K전자 슈퍼에이전트** 탭에 "외부 A2A 요청 · 그룹" 카드와 K 내부 위임 창이 나타났다가 "응답 반환"으로 접힙니다 (K UI를 K Super 탭에 둔 채 Group UI 옆에 띄우면 양쪽 관점이 동시에 보입니다). 그 밖에 K전자 측 직접 채팅: **뉴스** 탭에 `뉴로엣지 관련 악재만 다시 보여줘.`, **경영자문** 탭에 `뉴로엣지 인수를 CFO 관점에서 검토해줘.`
    (`earn-out이 뭐야?` 같은 개념 질문에는 Tool 없이 답함), **K전자 슈퍼에이전트** 탭에 `지난 회의에서 정한 기준만 정리해줘.`(미팅 위임 창이 열림).
    Group UI의 **미팅** 탭은 그룹 투자심의 회의 기록(Group 데이터)으로 답합니다. 미팅 탭에서는 회의 transcript로 회의록 초안을 저장 · 확정하고
-   (`save_meeting_minutes`), Action Item 진행을 조회 · 갱신하며(`run_action_item_tracking` · `update_action_item`), 회의 일정을 예약할 수 있습니다(`run_meeting_schedule`).
+   (`save_meeting_minutes`: transcript id 연결 · Compliance 검토 · 확정 권한), Action Item 진행을 조회 · 갱신하며(`run_action_item_tracking` · `update_action_item`), 회의 일정을 예약하고(`run_meeting_schedule`),
+   회의록 · 업무 배정 · 회의 안내 · 기한 알림 메일은 Agent가 받는 사람의 주소를 찾아 바로 보내고, 보낸 메일을 조회합니다(`manage_mail_outbox`). 밀린 일의 담당자에게 리마인더(진행 상황 확인) 메일도 보냅니다 — 대화에서 담당자 확인을 원하는 뜻이 분명하면 직접 시키지 않아도 보냅니다(`update_action_item(remind=true)`).
+   회의에서 정한 결정의 전제 · 조건을 남기고, 새 기사가 그 전제를 흔들면 참석자에게 알리며 재검토를 제안합니다(`run_decision_review`, 배경 작업의 결정 감시).
+   회의록 메일에는 회의록 PDF가, 의장 · 간사에게는 회의 결과 보고서 PDF도 첨부됩니다(`meeting_report`, 글꼴: `fonts-nanum` 또는 `REPORT_FONT_DIR`). K 미팅 탭은 그룹이 A2A로 보낸 업무 요청을 접수 · 등록합니다(`run_task_requests`).
+
+   **경영자문 Agent 시연 예시**
+
+   - **개별 평가:** `뉴로엣지 인수를 CFO 관점에서 검토해줘.`
+   - **종합 평가:** `뉴로엣지 인수 타당성을 CEO, CFO, CTO 관점에서 종합적으로 평가해줘.`
+   - **What-if 분석:** `뉴로엣지 인수가격을 2.8조 원에서 2.1조 원으로 낮추면 인수 위험과 권고가 어떻게 달라지는지 CFO 관점에서 분석해줘.`
+   - **회의 맥락 반영:** `회의에서 정한 인수가격 상한이 2.5조 원일 때, 인수가격을 2.7조 원으로 변경하면 어떻게 평가되는지 검토해줘.`
+
+   What-if 분석은 CEO·CFO·CTO 중 개별 평가 관점을 선택해 수행하며, 세 관점을 동시에 적용하는 종합 What-if는 현재 지원하지 않습니다.
+
 5. Monitor의 **초기화**로 관찰 화면을 비우고 다시 시연할 수 있습니다. 채팅 전사는 탭마다 유지됩니다.
+
 
 ## 아키텍처 개념 (UI 표현)
 
@@ -139,52 +223,91 @@ backend/
       capabilities.py                Skill / Capability 타입 + Registry 조회·검증 메커니즘
       events.py                      emit() / RunContext(run_id · system · origin · trace_id · caller stamp, principal은 stamp 안 함) / stream_run() / EventHub(HUB: 프로세스 전역 관찰 fan-out), AgentError
       llm.py                         ChatOllama (Ollama Cloud, OLLAMA_*) 또는 LLM_PROVIDER=openai면 ChatOpenAI (OpenAI 호환 API, OPENAI_*)
-      schemas.py                     요청 스키마 · Principal(요청한 사용자: email · name · groups · clearance — gateway가 보내고 Tool이 run에서 읽음)
-      api.py                         NDJSON 스트리밍 helper · SSE 관찰 채널 helper
-      a2a.py                         A2A client 메커니즘: 상대 system의 A2A 표면에 요청(+ principal)을 보내고 최종 응답을 받음 (lifecycle은 observe 콜백으로)
+      schemas.py                     요청 스키마 · Principal(요청한 사용자: email · name · groups · clearance · 쓸 수 있는 전문 Agent — gateway가 보내고 Tool이 run에서 읽음) · principal_token
+      principal.py                   gateway가 서명한 principal_token(HS256) 검증 — PRINCIPAL_SIGNING_KEY가 있으면 서명된 사용자만 믿음
+      api.py                         NDJSON 스트리밍 helper · run_identity(요청 → principal, 거부면 401) · SSE 관찰 채널 helper · lifespan(on_start: system의 배경 작업)
+      memory.py                      Super Agent 대화 기억의 계약(ConversationMemory: applies · recall · remember, Recall) — 저장소는 라이브러리, run_super가 direct 호출 앞뒤로 부름
+      a2a.py                         A2A client 메커니즘: 상대 system의 A2A 표면에 요청(+ principal · 토큰)을 보내고 최종 응답을 받음 (lifecycle은 observe 콜백으로)
     library/                         공용 Capability 라이브러리 (system을 import하지 않음)
-      skills/                        specialist_delegation, meeting_context_analysis, meeting_minutes_writing, meeting_follow_up, external_risk_analysis, mna_feasibility_review (Skill 본문)
-      tools/                         run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory;
-                                     run_meeting_context_retrieval, save_meeting_minutes, run_action_item_tracking, update_action_item, run_meeting_schedule — make_<tool>(store) factory
+      skills/                        specialist_delegation, meeting_context_analysis, meeting_minutes_writing, meeting_follow_up, inbound_task_requests, external_risk_analysis, mna_feasibility_review, enterprise_knowledge (Skill 본문)
+      tools/                         run_company_risk_news_analysis, run_mna_review — make_<tool>(path) factory; query_enterprise_kg — make_query_enterprise_kg(KG_STORE);
+                                     run_meeting_context_retrieval, save_meeting_minutes, run_action_item_tracking, update_action_item, run_meeting_schedule,
+                                     manage_mail_outbox, run_task_requests — make_<tool>(store) factory;
+                                     correct_transcript — make_transcript_correction(store, glossary, agent): 회의 Agent 앞의 녹음 변환본 교정 + 다시 교정하는 Tool;
+                                     run_decision_review — make_decision_watch(store, articles): 결정 · 전제 검토 Tool + 배경 작업의 기사 대조(scan)
                                      (Tool 이름 · 설명 · schema의 source of truth); meeting_access.py — 요청자(viewer)를 run에서 읽음; delegation.py — make_delegate_tool(name, description, from, to, run)
       workflows/
-        meeting_store.py             회의 저장소: MeetingStore(schema, seed) — Postgres 연결 · schema 생성(meeting_schema.sql) · fixture seed · 등급 필터(VISIBLE) · 사람/조직 디렉터리
-        meeting_schema.sql           회의 · 참석 · 안건 · 회의록 · 결정 · Action Item · 진행 이력 · transcript 테이블 (15개)
+        meeting_store.py             회의 저장소: MeetingStore(schema, seed) — Postgres 연결 · schema 생성(meeting_schema.sql) · migration · fixture seed · 등급 필터(VISIBLE)
+                                     · 확정 권한(can_confirm) · 사람/조직 디렉터리
+        meeting_schema.sql           회의 · 참석 · 안건 · 회의록 · 결정 · Action Item · 진행 이력 · transcript 테이블 (15개, version 1)
+        meeting_migrations/          002_delivery_and_review.sql: transcript id · compliance_flags · outbox · task_requests; 003: 주소 없는 메일 반려 허용
         meeting_context_retrieval.py Tool 내부 구현: 열람 가능한 확정 회의록을 키워드 점수로 조회 (LangChain 의존 없음)
-        meeting_minutes.py           회의록 초안 저장 · 확정(담당 · 기한 검사) · 확정본 정정(사유 + 이전 버전 snapshot)
+        meeting_minutes.py           회의록 초안 저장 · 확정(담당 · 기한 · Compliance · 권한 검사) · 확정본 정정(사유 + 이전 버전 snapshot) · transcript 연결 · 메일 생성
+        compliance.py                위험 발언 규칙(자본시장법 · 공정거래법 · 청탁금지법 · 외부감사법 · 노동조합법 · 개인정보) → compliance_flags, 검토(cleared | acknowledged)
+        transcripts.py               speech-service에서 transcript id로 가져와 복사 · [mm:ss] 근거 발언 연결 · 만료 삭제
+        meeting_report.py            회의록(양식) · 회의 결과 보고서(개조식) PDF — 회의 업무 화면 내려받기 · 회의록 메일 첨부
+        outbox.py                    메일 발송함: 회의록 · 업무 배정 · 회의 안내 · 기한 알림 생성, 주소 자동 탐색(로그인 이메일 → 임직원 연락처), 자동 SMTP 발송, 재발송 · 취소 · 주소 정정
+        mail_actions.py              메일로 진행 보고: 업무 배정 · 기한 알림 메일의 완료 · 진행 중 · 막힘 버튼(서명된 30일 링크, 로그인 없음) → /api/mail-action
+        directory.py                 메일 받는 사람의 등록 이메일 조회 (gateway 내부 API)
+        jobs.py                      배경 작업: 메일 발송(매분) · 기한 알림 · 주소 재조회 · 만료 transcript 삭제(매일) · 결정 감시(10분마다 새 기사) · KG 동기화(10분마다)
+        decision_watch.py            결정의 전제 · 조건 감시: 새 기사 × 전제 → broken | at_risk 판정(chat model) · 알림 메일, 결정 검토(금액 비교 · 재검토 회의안)
+        subjects.py                  회의 주제: Agent가 준 이름 · 이어지는 회의 · 회의명 단어로 정함, 주제 없는 이전 회의 채우기
+        meeting_control.py           회의 관제: 주제별 상태 · 회의 목록(진행 중 · 예정 · 완료) · 담당자별 할 일 · 날짜별 활동 (desk `control`)
+        task_requests.py             다른 system의 A2A 업무 요청: submit(A2A) → accept | reject(확정 권한자) → Action Item
         action_items.py              Action Item 진행 조회(지연 순, 상태별 건수) · 갱신(이력 기록)
-        meeting_schedule.py          회의 일정 조회 · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소
-        company_risk_news_analysis.py 기업 alias + 리스크 category 키워드로 기사 store(path) 조회
-        mna_review.py                기업 store(path) + persona(CEO/CFO/CTO)별 평가 기준 + context 신호 → 항목별 평가 · 권고 · 조건
+        meeting_schedule.py          회의 일정 조회 · 예약 전 점검(draft: 빠진 것 · 애매한 이름 · 겹침, 지난 회의로 채우기) · 예약(이전 회의의 보류 안건 · 미결 쟁점 이월) · 변경 · 취소 (참석자 안내 메일 생성)
+        company_risk_news_analysis.py 리스크 view: 저장소에서 찾은 기업 기사의 리스크(category 필터)를 영속 사건 단위 사안으로 묶음
+        news_briefing.py             브리핑 view: gather → 사건별 중요도 · 기사별/사건별 분석 → 결과
+        news/                        뉴스 파이프라인(Tool · 주기 수집 공용): feeds.py(언론사 RSS/Atom/뉴스 sitemap, feeds.json)
+                                     · fetch.py(robots.txt · 시간 제한 · 차단 감지) · extract.py(trafilatura 본문 + 정제 + content_level)
+                                     · store.py(NewsStore: system별 schema, sql/NNN_*.sql 버전 관리, KG용 조회) · pipeline.py(ingest · gather)
+                                     · cluster.py(중복 · 전재 · 영속 사건 배정) · analysis.py(기사별 보도 관점 · 리스크, 사건 영향 · 근거 · 시사점, 매체별 논조)
+                                     · labels.py(리스크 분류 · 확인 사항 · 규칙) · text.py · collect.py(주기 수집 CLI)
+                                     · seed.py(system의 data/news.json → 기사 · 사건 · 분석 · 언급 초기 등록, 고정 키 upsert)
+                                     · embed.py(로컬 Ollama 임베딩, 실패 시 키워드 검색으로 fallback) · sql/003(pgvector 임베딩 테이블)
+        memory/                      Super Agent 대화 기억: memory.py(SuperAgentMemory: 요청 분리 · 청크 · 의미+낱말 검색 · 주입 문단) · store.py(mem_* 테이블, pgvector · pg_trgm)
+                                     · embedding.py(OpenAI · Ollama 제공자, MEMORY_EMBED_*) · reembed.py(모델 변경 뒤 벡터 채우기 CLI)
+        kg/                          Enterprise KG: store.py(KGStore: system schema 안 kg_* 테이블, sync · rebuild · query) · project.py(회의 → 구조 claim,
+                                     뉴스 사건 → 구조 claim + 추출) · extract.py(사건 단위 LLM 관계 추출 · 검증) · resolve.py(엔티티 · 관계 · 사실 식별, 상태 — 규칙 v1, 교체 지점)
+                                     · query.py(권한 필터 · 근거별 결과) · build.py(CLI) · sql/001(원시층 · 해석층 테이블)
+        advisory/                    경영자문: analysis.py(DCF · 시나리오 · 지표, 권고 없음) · opinion.py(판단 검증) · store.py(판단 · 근거 사본, adv_* 테이블)
+                                     · report.py(투자심의 보고서 PDF) · delivery.py(보고서 엔드포인트용) · sql/001
+
     systems/
       group/                         Group agent system (SYSTEM = "group") — `uvicorn app.systems.group.app:app --port 8001`
         app.py                       FastAPI: /api/health, /api/agents/{group-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE)
-        registry.py                  Group의 CAPABILITIES (19개): group_super ← subsidiary_review · specialist_delegation · request_k_electronics_review · delegate_to_*;
+        registry.py                  Group의 CAPABILITIES (24개): group_super ← subsidiary_review · specialist_delegation · request_k_electronics_review · delegate_to_*;
                                      meeting / news / advisory ← 라이브러리 Skill + Group 데이터 · 회의 저장소(schema grp)에 바인딩한 Tool
         agents/group_super.py        그룹 슈퍼에이전트: AGENT_ID · IDENTITY + Registry (Super core). 자기 Specialist 위임과 K전자 A2A 중 선택은 모델 판단
         agents/{meeting,news,advisory}.py  그룹 전문 Agent: 같은 Specialist core · 같은 Skill, Group 데이터
         skills/subsidiary_review.py  계열사 검토 요청(A2A)과 그룹 판단 지침
         tools/delegate_to_*.py       Group Super → 그룹 전문 Agent 위임 Tool (라이브러리 factory + Group 전용 설명)
-        tools/run_*.py 등            라이브러리 Tool factory를 Group data/ · MEETING_STORE에 바인딩한 instance
+        tools/run_*.py 등            라이브러리 Tool factory를 Group data/ · MEETING_STORE · NEWS_STORE에 바인딩한 instance
         tools/request_k_electronics_review.py  A2A client Tool: a2a_start → K /api/a2a/run (HTTP) → K lifecycle relay(관찰용) → 최종 응답만 반환 → a2a_end
-        data/                        그룹 fixture: 그룹 투자심의·경영전략 회의(회의 저장소 seed), 계열사·그룹 투자 대상 뉴스, 그룹 차원 인수 후보(브라이트셀)
+                                     (검토 요청 · 업무 전달 · 전달한 업무의 진행 조회)
+        data/                        그룹 fixture: 그룹 투자심의·경영전략 회의(회의 저장소 seed), 계열사·그룹 투자 대상 뉴스(뉴스 저장소 seed), 그룹 차원 인수 후보(브라이트셀)
       k_electronics/                 K Electronics agent system (SYSTEM = "k_electronics", DATA_DIR)
         app.py                       FastAPI: /api/health, /api/a2a/run (A2A 수신), /api/agents/{k-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE 관찰 채널)
         registry.py                  이 system의 CAPABILITIES와 allowed_agents (권한의 source of truth), skills_for / tools_for
         agents/
           k_super.py                 K전자 슈퍼에이전트: AGENT_ID · IDENTITY + Registry 위임 Tool (Super core)
-          meeting.py                 미팅 에이전트: AGENT_ID · IDENTITY + Registry Skill 3개 / Tool 5개(회의 조회 · 회의록 저장 · 진행 조회 · 진행 갱신 · 일정)
+          meeting.py                 미팅 에이전트: AGENT_ID · IDENTITY + Registry Skill 4개 / Tool 7개(회의 조회 · 회의록 저장 · 진행 조회 · 진행 갱신 · 일정 · 메일 발송함 · 업무 요청)
           news.py                    뉴스 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_company_risk_news_analysis)
-          advisory.py                경영자문 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(run_mna_review)
+          advisory.py                경영자문 에이전트: AGENT_ID · IDENTITY + Registry Skill/Tool(KG · run_mna_review · 판단 기록 · 이전 판단 조회 · 미팅/뉴스 조회 위임)
         tools/
-          delegate_to_*.py           K Super → 미팅 / 뉴스 / 경영자문 위임 Tool (라이브러리 factory + K 설명; delegation_start/end 발행, 최종 응답만 반환)
-          run_*.py 등                라이브러리 Tool factory를 이 system의 data/ · MEETING_STORE(schema kelec)에 바인딩한 instance
+          delegate_to_*.py           K Super → 미팅 / 뉴스 / 경영자문 위임 Tool (라이브러리 factory + K 설명; delegation_start/end 발행, 최종 응답만 반환, 사용자가 쓸 수 없는 Agent면 delegation_skipped)
+          run_*.py 등                라이브러리 Tool factory를 이 system의 data/ · MEETING_STORE(schema kelec) · NEWS_STORE(schema kelec_news)에 바인딩한 instance
         data/meetings.json           회의 저장소 seed (NeuroEdge 전략회의(대외비) + 무관한 회의 2건, Action Item 기한 포함)
-        data/news.json               뉴스 fixture (NeuroEdge 리스크 기사 3건 + 무관한 기업 기사 2건)
-        data/companies.json          인수 대상 기업 fixture (NeuroEdge 재무 · 가치 · 고객 · 기술 · 전략)
-  tests/                             test_workflow.py · test_meeting_records.py (회의 저장소 필요: conftest.py의 meeting_db) · test_news_workflow.py · test_mna_review_workflow.py
+        data/news.json               뉴스 저장소 초기 데이터 (가상 기사 8건: 매체 도메인, 기사별 사건 키, 리스크 · 핵심 사실 분석 포함)
+        data/companies.json          인수 대상 기업 합성 데이터룸 (NeuroEdge 사업계획 · DCF 가정 · 재무상태 · 고객 · 계약 · 특허 · 인력 · 통합비용, 기준일 2026-11-10)
+  tests/                             test_workflow.py · test_meeting_records.py · test_meeting_delivery.py (회의 저장소 필요: conftest.py의 meeting_db) · test_news_workflow.py
+                                     · test_news_briefing.py · test_news_pipeline.py · test_news_live.py (뉴스 저장소: conftest.py의 news_db, 가짜 웹)
                                      · test_capabilities.py · test_k_super.py · test_k_app.py · test_events.py · test_group.py · test_group_workflows.py
-                                     · test_boundaries.py(runtime/library/system import 경계) (LLM 불필요), test_agents.py (Ollama Cloud 필요)
+                                     · test_boundaries.py(runtime/library/system import 경계)
+                                     · test_advisory_judgement.py (계산 · 판단 검증 · 근거 장부 · 조회 전용 위임) · test_advisory_reviews.py (판단 저장 · 재평가 · 보고서 참조 A2A 전달 · 권한)
+                                     · test_advisory_report.py (보고서 PDF) · test_advisory.py (K · Group 경영자문 Agent: lifecycle, Tool 오류 자체 정정, A2A 위임)
+                                     (LLM 불필요), test_agents.py (Ollama Cloud 필요)
+
 ```
 
 ### Agent 구조 (backend)
@@ -209,12 +332,13 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
                          model ──▶ 최종 응답 (한국어)
                               │
                        ToolMessage(최종 응답만) ──▶ K전자 슈퍼에이전트
-  model ──tool call──▶ delegate_to_advisory_agent(task)  ← 미팅·뉴스 결과를 보고, 필요한 맥락(회의 기준·외부 리스크)을 task에 직접 써서 위임
+  model ──tool call──▶ delegate_to_advisory_agent(task)  ← 인수 판단은 경영자문에게 바로 (회의 · 뉴스를 미리 모아 넘기지 않음)
                               │ invoke
                               ▼
                        경영자문 에이전트 (LangGraph, MessagesState)
-                         model ──tool call──▶ run_mna_review(query, company, persona, context)
-                               ◀── tool result ──┘        (companies.json + persona별 평가 기준 + context 신호)
+                         model ──▶ query_enterprise_kg · lookup_advisory_reviews · ask_meeting_agent / ask_news_agent (필요할 때만, 조회 전용)
+                         model ──▶ run_mna_review(query, company, price_trillion_krw?, scenarios?, criteria?)   ← 수치만, 권고 없음
+                         model ──▶ record_advisory_opinion(권고 · 근거 id · 조건 …, report?) → add_advisory_details(관점 · 위험 · 문단)  ← 검증 → 저장 → 보고서 참조
                          model ──▶ 최종 응답 (한국어)
                               │
                        ToolMessage(최종 응답만) ──▶ K전자 슈퍼에이전트
@@ -245,8 +369,9 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 - K Super 위임 경로에서 전문 Agent가 Workflow Tool을 호출하지 않고 답하면 backend가 `error`(agent=meeting | news | advisory)로 처리하므로,
   UI에 Workflow 이름이 표시되는 것은 실제 `tool_start`가 발생한 경우뿐입니다.
   Sidebar 직접 대화(`/api/agents/*/run`)는 호출 맥락이 `direct`라 이 검사를 하지 않고, Tool 사용 여부는 Agent가 Skill 지침에 따라 정합니다.
-- `run_mna_review`의 persona(CEO / CFO / CTO)는 별도 Agent가 아니라 평가 관점 인자입니다. 같은 데이터면 권고와 조건 집합은 같고,
-  어떤 항목을 먼저 보고 어떤 우려와 조건을 앞세우는지가 달라집니다.
+- CEO · CFO · CTO는 별도 Agent가 아니라 경영자문 LLM이 한 번의 판단 기록 안에서 구분해 쓰는 관점입니다. 같은 근거를 공유하되 관점마다 먼저 보는 수치(`persona_lenses`)와 기준이 다릅니다.
+- 인수가격·영업이익률·고객 매출 비중을 변경하는 What-if 분석은 개별 Persona 기준으로 수행합니다. `ALL`과 What-if 변경 조건의 동시 적용은 지원하지 않습니다.
+
 - 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 자기 system의 `registry.py`에서
   `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
 - Group Super(:8001)는 요청을 보고 자기 전문 Agent 위임과 K전자 A2A 요청(`request_k_electronics_review` → K `/api/a2a/run`) 중에서 스스로 고릅니다. K의 lifecycle은 관찰용으로 Group 스트림에 relay되고, Group Super Agent 자체는 K의 최종 응답 텍스트만 받습니다.
@@ -277,9 +402,39 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 | `session_close`     | 가장 안쪽 세션 종료, 결과(result)를 요청 카드에 부착        |
 | `scenario_complete` | 사용된 노드 전체 completed, 완료 배지 표시 (Demo Monitor)  |
 
+
+## 경영자문 Agent — 조사 · 계산 · 판단 · 보고서 (2026-11-22 재설계)
+
+경영자문 Agent는 공통 Specialist core 위에서 필요한 정보를 스스로 조사하고, 수치는 Tool로 계산하며, 최종 인수 권고는 LLM이 직접 내립니다.
+예전의 규칙 기반 평가(임계값으로 권고를 확정하던 `mna_review` · `mna_scenario` · `mna_executive_summary`)는 지웠습니다. 상세는 `docs/architecture.md` 3.3장.
+
+| Tool | 하는 일 |
+|---|---|
+| `query_enterprise_kg` | 회의 · 뉴스를 잇는 지식 그래프에서 대상 기업의 결정 · 관계 변화 · 후속 업무를 출처와 함께 조회 |
+| `ask_meeting_agent` · `ask_news_agent` | 미팅 · 뉴스 에이전트에게 조회 전용으로 위임 (상세 기록 · 최신 뉴스 · 원문 확인). 그 위임 중에는 기록 변경 · 메일 발송이 막힘 |
+| `run_mna_review` | 합성 기업 데이터로 DCF · 민감도 · 가격 프리미엄 · 운전자본 · 고객/계약 · 기술/특허/인력 · 시나리오 계산, 회의 기준 대조. 권고 없음 |
+| `record_advisory_opinion` → `add_advisory_details` | LLM의 판단을 두 번에 나눠 기록: 핵심(권고 · 결론 · 근거 · 조건)을 검증(근거 id · 수치 · 회의 기준) 후 저장, 이어서 CEO · CFO · CTO 관점 · 위험 · 보고서 문단을 검증 후 합치고 보고서 참조 반환 |
+| `lookup_advisory_reviews` | 저장된 이전 판단 조회 (재평가 비교, 지난 평가 · 보고서 요청) |
+
+보고서는 Agent 사이에 파일로 오가지 않습니다. 참조(`artifacts`: 판단 id · 제목 · 권고)가 K전자 → Group으로 전달되고(Group의 A2A Tool이 코드로 수집해 `a2a_end.artifacts`와 답변 끝 첨부 줄에 넣음),
+PDF는 열 때 `POST /api/reports {system, id}`(Group; K전자 보고서는 K의 `POST /api/a2a/reports`에서 같은 사용자로 가져옴)가 저장소의 접근 규칙(인용한 회의의 등급)으로 생성합니다.
+Open WebUI에 보고서 카드 · 내려받기를 붙이는 것은 navitech gateway의 변경이 필요합니다.
+
+PDF는 나눔고딕(`fonts-nanum`, `REPORT_FONT_DIR`)이 있어야 생성됩니다 — agent-backend 이미지에는 있고, 로컬 Mac에서는 글꼴 폴더를 `REPORT_FONT_DIR`로 지정합니다.
+
+```bash
+cd backend
+.venv/bin/python -m pytest tests -q -k "advisory"            # 계산 · 검증 · 저장 · 보고서 (DB 테스트는 MEETINGS_TEST_DATABASE_URL)
+```
+
+### 구현 범위와 제한사항
+
+- 기업 데이터는 합성 데이터이며 DCF는 단순 모델(명시 기간 FCF + 영구성장)입니다. 시나리오의 매출 변화 영향은 공헌이익률로 근사합니다(법인세 효과 미반영).
+- 판단 검증은 판단을 바꾸지 않습니다. 수치 검사는 조 · 억 · %만 보며, 인용한 근거끼리의 차이 · 합 · 비율까지 허용합니다.
+- 실제 LLM은 Tool 인자 형식을 틀리는 일이 있어(예: 관점 필드), 오류를 돌려받아 고쳐 다시 호출합니다.
+
 ## 범위 밖
 
 표준 A2A 프로토콜(이 레포의 A2A는 두 system 사이의 자체 약속: NDJSON lifecycle + 최종 응답), 실제 뉴스/공시 API, RAG, Vector DB,
 실제 valuation 모델, 다중 persona 토론, 인증, 배포는 포함하지 않습니다. 사용자 인증은 이 레포 앞단(gateway)의 몫이며,
-backend는 요청에 담겨 온 principal을 그대로 믿습니다 (내부망 전용). 회의 저장소의 transcript 저장 경로와 보존 기간 삭제 작업은 아직 없습니다.
-
+backend는 `PRINCIPAL_SIGNING_KEY`가 있으면 gateway가 서명한 principal만 믿습니다. 메일 회신으로 진행을 갱신하는 기능은 없습니다 (docs/architecture.md 12장 18번).

@@ -3,49 +3,69 @@
     {
       "id": "brightcell",
       "name": "브라이트셀",
-      "aliases": [
-        "브라이트셀",
-        "BrightCell"
-      ],
+      "aliases": ["브라이트셀", "BrightCell"],
       "business": "배터리 양극재 소재",
       "description": "가상의 2차전지 양극재 소재 기업. 그룹 차원의 인수 후보",
-      "financials": {
-        "fiscal_year": 2025,
-        "revenue_label": "9,800억 원",
-        "revenue_cagr_3y": 0.22,
-        "operating_margin": 0.061
+      "data_room": {
+        "as_of": "2026-10-31",
+        "source": "가상 데이터룸 (합성 데이터 — 감사 · 외부 실사로 확인되지 않은 투자 검토용 가정)",
+        "unit": "억 원"
       },
-      "valuation": {
+      "deal": {
+        "acquirer": "K그룹",
+        "stake": 1.0,
         "asking_trillion_krw": 1.6,
-        "fair_value_low_trillion_krw": 1.3,
-        "fair_value_high_trillion_krw": 1.5
+        "asking_note": "매도측 인수 요구가 (지분 100%)"
       },
-      "customers": {
-        "largest": {
+      "financials": {
+        "years": [
+          { "year": 2024, "kind": "actual", "revenue": 8030, "operating_profit": 410, "fcf": 120 },
+          { "year": 2025, "kind": "actual", "revenue": 9800, "operating_profit": 598, "fcf": 260 },
+          { "year": 2026, "kind": "budget", "revenue": 10900, "operating_profit": 690, "fcf": 330 },
+          { "year": 2027, "kind": "forecast", "revenue": 11800, "operating_profit": 1000, "fcf": 700 },
+          { "year": 2028, "kind": "forecast", "revenue": 12600, "operating_profit": 1150, "fcf": 850 },
+          { "year": 2029, "kind": "forecast", "revenue": 13300, "operating_profit": 1300, "fcf": 1000 },
+          { "year": 2030, "kind": "forecast", "revenue": 13900, "operating_profit": 1420, "fcf": 1150 },
+          { "year": 2031, "kind": "forecast", "revenue": 14400, "operating_profit": 1520, "fcf": 1280 }
+        ],
+        "forecast_premise": "전기차 배터리 수요 둔화를 반영해 2027년 이후 성장률을 한 자릿수로 두고, 하이니켈 제품 비중 확대로 이익률 개선을 가정한 사업계획"
+      },
+      "valuation_inputs": {
+        "method": "DCF (2027~2031년 자유현금흐름 + 영구성장 잔존가치)",
+        "valuation_date": "2026-12-31",
+        "wacc": 0.095,
+        "terminal_growth": 0.02,
+        "wacc_range": [0.085, 0.095, 0.105],
+        "terminal_growth_range": [0.01, 0.02, 0.03],
+        "contribution_margin": 0.18
+      },
+      "balance_sheet": {
+        "borrowings": 2600,
+        "lease_liabilities": 300,
+        "cash": 900
+      },
+      "customers": [
+        {
           "name": "오토원",
-          "revenue_share": 0.52
+          "revenue_current_year": 5668,
+          "share_forecast": { "2027": 0.50, "2028": 0.48, "2029": 0.46, "2030": 0.45, "2031": 0.44 },
+          "contract": { "expires": "2029-06", "terms": "연간 물량 협의, 가격은 메탈 가격 연동", "confirmed_po_next_year": 4200 }
+        },
+        {
+          "name": "기타 셀 제조사",
+          "revenue_current_year": 5232,
+          "contract": { "expires": null, "terms": "개별 발주 기반", "confirmed_po_next_year": 2100 }
         }
-      },
+      ],
       "technology": {
         "domain": "하이니켈 양극재 공정 기술",
-        "acquirer_internal_development_months": [
-          30,
-          42
-        ],
-        "post_acquisition_integration_months": [
-          9,
-          15
-        ],
-        "time_to_market_gain_months": [
-          18,
-          27
-        ],
-        "core_team": "공정 개발 총괄 중심의 핵심 공정팀",
-        "ip_dispute": {
-          "counterparty": "없음",
-          "subject": "없음",
-          "status": "진행 중인 분쟁 없음"
-        }
+        "acquirer_internal_development_months": [30, 42],
+        "post_acquisition_integration_months": [9, 15],
+        "time_to_market_gain_months": [18, 27],
+        "ip_disputes": []
+      },
+      "people": {
+        "core_team": "공정 개발 총괄 중심의 핵심 공정팀"
       },
       "strategic": {
         "acquirer": "K그룹",

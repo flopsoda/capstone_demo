@@ -69,17 +69,31 @@ def test_group_registry_content():
         "meeting_context_analysis": ("skill", {"meeting"}),
         "meeting_minutes_writing": ("skill", {"meeting"}),
         "meeting_follow_up": ("skill", {"meeting"}),
+        "decision_review": ("skill", {"meeting"}),
         "run_meeting_context_retrieval": ("tool", {"meeting"}),
+        "correct_transcript": ("tool", {"meeting"}),
+        "run_decision_review": ("tool", {"meeting"}),
         "save_meeting_minutes": ("tool", {"meeting"}),
         "run_action_item_tracking": ("tool", {"meeting"}),
         "update_action_item": ("tool", {"meeting"}),
         "run_meeting_schedule": ("tool", {"meeting"}),
+        "manage_mail_outbox": ("tool", {"meeting"}),
         "external_risk_analysis": ("skill", {"news"}),
+        "news_briefing": ("skill", {"news"}),
+        "run_news_briefing": ("tool", {"news"}),
         "run_company_risk_news_analysis": ("tool", {"news"}),
         "mna_feasibility_review": ("skill", {"advisory"}),
         "run_mna_review": ("tool", {"advisory"}),
+        "enterprise_knowledge": ("skill", {"advisory"}),
+        "query_enterprise_kg": ("tool", {"advisory"}),
+        "record_advisory_opinion": ("tool", {"advisory"}),
+        "add_advisory_details": ("tool", {"advisory"}),
+        "lookup_advisory_reviews": ("tool", {"advisory"}),
+        "ask_meeting_agent": ("tool", {"advisory"}),
+        "ask_news_agent": ("tool", {"advisory"}),
     }
     assert set(a2a_tool.request_k_electronics_review.args) == {"request"}
+    assert set(group_registry.get_capability("correct_transcript").impl.args) == {"transcript_id"}
     for name in ("delegate_to_meeting_agent", "delegate_to_news_agent", "delegate_to_advisory_agent"):
         assert set(group_registry.get_capability(name).impl.args) == {"task"}
 
@@ -108,7 +122,7 @@ def test_group_delegation_tools_point_at_group_agents():
     assert "계열사" in dm.DESCRIPTION and "A2A" in dm.DESCRIPTION  # the Group Super's view of who does what
 
 
-def test_group_tools_read_group_data_not_k_data(meeting_db):
+def test_group_tools_read_group_data_not_k_data(meeting_db, news_db):
     from app.systems.k_electronics import registry as k_registry
 
     g_meet = group_registry.get_capability("run_meeting_context_retrieval").impl
@@ -123,8 +137,8 @@ def test_group_tools_read_group_data_not_k_data(meeting_db):
     assert g_news.invoke({"query": "리스크", "company": "K바이오"})["matched"] == 1
     assert g_news.invoke({"query": "리스크", "company": "뉴로엣지"})["matched"] == 0  # K's domain, not in the Group store
     g_adv = group_registry.get_capability("run_mna_review").impl
-    assert g_adv.invoke({"query": "인수 검토", "company": "브라이트셀", "persona": "CFO"})["found"] is True
-    assert g_adv.invoke({"query": "인수 검토", "company": "뉴로엣지", "persona": "CFO"})["found"] is False
+    assert g_adv.invoke({"query": "인수 검토", "company": "브라이트셀"})["found"] is True
+    assert g_adv.invoke({"query": "인수 검토", "company": "뉴로엣지"})["found"] is False
 
 
 def test_a2a_tool_relays_peer_lifecycle_and_returns_only_the_final_answer(scripted, k_in_process):
@@ -157,6 +171,23 @@ def test_a2a_tool_reports_an_unreachable_peer(monkeypatch):
     with pytest.raises(AgentError) as info:
         collect_events(lambda: a2a_tool.request_k_electronics_review.invoke({"request": "뉴로엣지 검토"}))
     assert info.value.agent == "k_super" and "연결할 수 없습니다" in str(info.value)
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, "http://localhost:8000/api/a2a/run"),  # unset
+        ("", "http://localhost:8000/api/a2a/run"),  # empty, as .env.example ships it
+        ("  ", "http://localhost:8000/api/a2a/run"),
+        (" http://k-electronics:8000/api/a2a/run ", "http://k-electronics:8000/api/a2a/run"),
+    ],
+)
+def test_k_electronics_a2a_url_falls_back_to_the_default_when_unset_or_empty(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("K_ELECTRONICS_A2A_URL", raising=False)
+    else:
+        monkeypatch.setenv("K_ELECTRONICS_A2A_URL", value)
+    assert a2a_tool.k_electronics_a2a_url() == expected
 
 
 def _stream(client, path, request):
@@ -210,7 +241,22 @@ def test_group_super_may_delegate_to_its_own_specialists(scripted, meeting_db):
     assert all(e["system"] == "group" and not e.get("relayed") for e in events)
 
 
-def test_group_specialist_direct_chat_endpoints(scripted):
+def test_group_super_skips_a_specialist_the_user_may_not_use(scripted):
+    """principal.agents (the gateway's permission table) leaves advisory out: the delegation is skipped, not run, and the answer goes on."""
+    scripted([
+        _call("delegate_to_advisory_agent", 1, task="브라이트셀 CFO 관점 인수 검토"),
+        AIMessage("회의 기준만 정리했습니다. 인수 타당성 검토는 권한이 없어 빠졌습니다."),
+    ])
+    principal = {"email": "secretary@example.com", "groups": ["secretary"], "clearance": 3, "agents": ["meeting", "news"]}
+    body = {"request": "브라이트셀 인수 타당성까지 정리해 줘", "principal": principal}
+    with TestClient(group_app).stream("POST", "/api/agents/group-super/run", json=body) as res:
+        events = [json.loads(line) for line in res.iter_lines() if line.strip()]
+    assert [e["type"] for e in events] == ["agent_start", "delegation_skipped", "agent_end", "done"]
+    assert events[1] == {**events[1], "from": "group_super", "to": "advisory", "reason": "permission"}
+    assert "권한이 없어 빠졌습니다" in events[2]["response"]
+
+
+def test_group_specialist_direct_chat_endpoints(scripted, news_db):
     scripted([
         _call("run_company_risk_news_analysis", 1, query="K바이오 리스크", company="K바이오"),
         AIMessage("K바이오: 핵심 연구인력 이탈 리스크 HIGH"),

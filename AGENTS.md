@@ -35,6 +35,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
   - Specialist에게 Tool 호출을 모든 응답에 강제하지 않는다. Workflow Tool 근거 검사는 delegation 경로(`invocation="delegation"`)에만 있고, 직접 대화(`"direct"`)에서는 모델이 Skill 지침에 따라 결정한다.
   - Workflow Tool은 Agent가 아니다. 내부의 결정적 절차를 Agent-visible Tool 여러 개로 쪼개지 않는다.
   - K Super → Specialist는 **delegation**(`delegation_start/end`), Group Super ⇅ K Super는 **A2A**다. Specialist 호출을 A2A라고 부르지 않는다.
+  - Specialist가 다른 Specialist에게 위임하는 것은 경영자문 → 미팅 · 뉴스의 **조회 전용** 위임(`ask_*_agent`, `make_delegate_tool(read_only=True)`)뿐이다. 미팅 · 뉴스 Agent에는 위임 Tool을 주지 않는다 (순환 금지, `tests/test_capabilities.py`가 위임 그래프를 검사).
 - **Agent state는 message history 중심이다.** `MessagesState`를 쓰고, `meeting_result` 같은 Agent별 결과 field를 추가하지 않는다. 공유 구조가 꼭 필요하면 범용 구조를 제안하고 결정을 받는다.
 - **Agent 경계를 유지한다.** 하위 Agent의 내부 메시지 / tool call을 상위 Agent history에 병합하지 않는다. 최종 결과만 전달한다. A2A도 같다: 상대 system의 lifecycle은 관찰용으로 relay(`relayed: true`)만 하고 Agent에게는 최종 응답 텍스트만 준다.
 - **Workflow Tool이 데이터 경계다.** Agent가 fixture / DB를 직접 읽지 않는다. 사용자별 접근(등급 · 작성자)은 Tool이 run의 principal로 정하며, 모델 인자로 받지 않는다.
@@ -66,7 +67,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 ## 구현 후
 
 - 관련 테스트를 실행한다.
-  - backend: `cd backend && .venv/bin/python -m pytest` (회의 저장소 테스트는 `MEETINGS_TEST_DATABASE_URL` — 이름에 test가 든 버릴 Postgres DB — 가 있어야 실행되고 없으면 skip. `tests/test_agents.py`는 LLM key — `OLLAMA_API_KEY`, `LLM_PROVIDER=openai`면 `OPENAI_API_KEY` — 가 있어야 실행된다). import 경계는 `tests/test_boundaries.py`가 지킨다.
+  - backend: `cd backend && .venv/bin/python -m pytest` (회의 · 뉴스 저장소 테스트는 `MEETINGS_TEST_DATABASE_URL` — 이름에 test가 든 버릴 Postgres DB — 가 있어야 실행되고 없으면 skip. 테스트는 localhost 밖으로 나갈 수 없고 실제 언론사 피드도 읽지 않으며(`tests/conftest.py`; 뉴스 시나리오 테스트는 `news_db`가 지운 schema에 `data/news.json`이 다시 등록된 저장소를 쓴다), 실제 모델 · 웹을 부르는 테스트는 `network` 마커를 단다. 테스트 실행이 system의 `data/` 폴더에 파일을 남기면 세션이 실패한다. `tests/test_agents.py`는 LLM key — `OLLAMA_API_KEY`, `LLM_PROVIDER=openai`면 `OPENAI_API_KEY` — 가 있어야 실행된다). import 경계는 `tests/test_boundaries.py`가 지킨다.
   - frontend: `npm run build` (tsc 포함), `npm run lint`
 - 실제 실행 경로를 바꿨다면 backend 둘(`:8000`, `:8001`) + frontend를 띄워 `/group`에서 예시 요청을 한 번 돌리고 `/monitor`가 8/8까지 가는지 본다.
 - 문서는 **적힌 사실이 틀려졌을 때** 코드와 같은 커밋에서 갱신한다. "의미있는 변화"가 아니라 "문서가 거짓이 되었는가"가 기준이다.
