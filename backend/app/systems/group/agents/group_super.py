@@ -4,7 +4,7 @@ over A2A when their internal review is needed, then writes the group-level judgm
     request → model → delegate_to_*(task) | request_k_electronics_review(request) → model → … → model → END
 
 The graph and run loop are the shared super-agent core (app/runtime/agent_core.py);
-this module only says who the agent is. Which Skills and Tools it has is decided
+this module only says who the agent is (../souls/group_super.md). Which Skills and Tools it has is decided
 by this system's Registry (../registry.py), looked up by AGENT_ID.
 """
 

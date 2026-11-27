@@ -88,7 +88,7 @@ K Electronics Super
 - 위임은 LLM의 실제 tool calling으로 일어난다. 위임 문장(`task`)은 LLM이 작성하므로 실행마다 달라질 수 있다.
 - Super Agent는 직접 분석하거나 답을 지어내지 않는다 (K Super system prompt 규칙).
 
-**Current implementation** — `backend/app/runtime/agent_core.py`(Super core) + `backend/app/systems/k_electronics/agents/k_super.py`(정체성)
+**Current implementation** — `backend/app/runtime/agent_core.py`(Super core) + `backend/app/systems/k_electronics/agents/k_super.py` · `souls/k_super.md`(정체성)
 - Phase 1(2026-10-12)에서 Specialist와 같은 방식으로 **공통 super core**를 두었다: `agent_core.SuperAgent(agent_id, display_name, system_prompt, tools)`,
   `build_super_graph(spec)`(LangGraph `StateGraph(MessagesState)`, 노드 `model` / `tools`), `run_super(spec, graph, request, invocation=...)`.
   `k_super.py`에는 `AGENT_ID` · `IDENTITY` · Registry 조회 · `SPEC` · `build_k_super()` · `run_k_super()`만 있다.
@@ -157,7 +157,7 @@ User        → Specialist Agent   (직접 대화)
   - Advisory (2026-11-22 재설계): Skill `mna_feasibility_review`(스스로 조사 → Tool로 계산 → 직접 판단 → 기록 · 보고서), `enterprise_knowledge`(지식 그래프를 근거별로 읽는 지침),
     Tool `query_enterprise_kg` · `run_mna_review`(사실 · 수치만, 권고 없음) · `record_advisory_opinion` · `add_advisory_details`(판단 검증 · 저장 · 보고서 참조, 두 번에 나눠 기록) · `lookup_advisory_reviews`(저장된 이전 판단),
     `ask_meeting_agent` · `ask_news_agent`(미팅 · 뉴스 Agent에 대한 **조회 전용 위임** — Specialist가 다른 Specialist를 부르는 유일한 경로, 3.4).
-    최종 권고는 Advisory LLM이 정한다. K와 Group의 경영자문 Agent는 같은 Skill · Tool factory · workflow를 쓰고, Agent 파일에는 정체성과 재귀 한도(40)만 다르다.
+    최종 권고는 Advisory LLM이 정한다. K와 Group의 경영자문 Agent는 같은 Skill · Tool factory · workflow를 쓰고, SOUL 파일(정체성)과 Agent 파일의 재귀 한도(40)만 다르다.
 - **호출 맥락(invocation)** 은 `"delegation" | "direct"` 두 가지다. 같은 그래프가 쓰이고, 호출 맥락은 LangGraph `config["configurable"]`로 실행마다 전달된다 (state에 넣지 않는다).
   - 모델에게는 system context 끝에 한 문단(`agent_core.INVOCATION_CONTEXT`)으로 알려 준다: delegation이면 "슈퍼에이전트에게 돌아가는 보고이므로 Tool 결과에 근거하라", direct면 "인사·개념 질문에는 Tool 없이 답하고 데이터가 필요한 업무면 Tool을 쓰라".
   - delegation(`delegate_to_*` Tool 안, 기본값)에서 Workflow Tool 없이 답하면 `AgentError(agent_id, ...)`. 데이터에 근거하지 않은 보고서가 K Super에 올라가면 안 되기 때문이다.
@@ -781,7 +781,7 @@ LLM: `backend/app/runtime/llm.py` — 기본은 `ChatOllama`, Ollama Cloud(`http
 | `backend/tests/test_advisory_report.py` | 아니오 (나눔 글꼴 없으면 렌더 테스트 skip) | 투자심의 보고서 PDF (최초 · 재평가 + 이전 판단 · 데이터가 적은 기업 · 근거 없는 판단에서도 생성, 파일명, 주 분석 선택) |
 | `backend/tests/test_advisory.py` | 아니오 | K · Group 경영자문 Agent를 scripted model로: lifecycle 이벤트가 답변 생성 전에 스트림에 도착, Tool 후 실패 시 이미 보낸 이벤트 보존, Tool `error` → 모델의 자체 정정, 가격 · 시나리오가 같은 모델로 계산(권고 없음, 분석 id 구분), K Super → 경영자문 위임(A2A 수신 경로) |
 | `backend/tests/test_capabilities.py` | 아니오 | Registry 내용(kind, allowed_agents), Tool 정의가 source of truth, Agent가 Registry subset을 쓰는지, Skill이 system prompt에 들어가는지 |
-| `backend/tests/test_souls.py` | 아니오 | Agent 8개가 각자 SOUL 파일을 읽어 system prompt 맨 앞에 두는지, 코드에 정체성 문자열이 남지 않았는지, Agent 없는 SOUL 파일이 없는지, 없거나 빈 파일이면 시작 시 실패하는지 |
+| `backend/tests/test_souls.py` | 아니오 | 모든 Agent의 `IDENTITY`가 `load_soul(__file__)` 호출 하나로만 정해지고(AST 검사) `SYSTEM_PROMPT`가 SOUL 파일 + Registry Skill로 조립되는지, Agent 없는 SOUL 파일이 없는지, BOM · CRLF 파일도 같은 prompt가 되는지, 없거나 빈 · UTF-8이 아닌 파일이면 시작 시 실패하는지 |
 | `backend/tests/test_k_super.py` | 아니오 | `route_on_tool_calls`(tool call → tools, 일반 응답 → END), `tools → model` 고정 엣지, scripted model(`agent_core.get_chat_model` patch) + stub 위임 Tool로 만든 그래프(`k_super.build_k_super` patch)로 `run_k_super`: 일부 전문 Agent만 쓰고 답해도 정상 종료 · 위임 없는 응답과 빈 응답은 `AgentError` |
 | `backend/tests/test_events.py` | 아니오 | emit / collect / stream / error 귀속(root_agent) / run 식별자 stamp(relay된 stamp 유지) / HUB publish·subscribe·keep-alive / SSE 형식 / `.env` 경로 |
 | `backend/tests/test_k_app.py` | 아니오 | K app 표면을 scripted model로 end-to-end: `/api/a2a/run`이 K Super → Meeting → Tool 체인을 돌리고 trace_id · caller · origin을 stamp, 위임 없는 답은 `error`, `/api/agents/k-super/run`은 위임 없이 답해도 정상 |
@@ -931,7 +931,7 @@ Step 7·8을 real로 바꾸는 대신, 시스템을 **같은 플랫폼 기반 �
    `tests/test_agents.py`가 NeuroEdge 요청(세 Agent 모두)과 회의 결정사항만 묻는 요청(Meeting만)으로 확인한다. 모델이 필요한 Agent를 빠뜨리거나 불필요한 Agent를 부르는 것을 막는 코드는 없다 (의도적).
    병렬 위임과 frontend session stack(중첩 전제)의 형제 세션 처리는 여전히 열려 있다. Group Super도 같은 core · 같은 정책이며, 자기 Specialist 위임과 K전자 A2A 중 무엇을 쓸지는 Tool 설명에 따른 모델 판단이다 (NeuroEdge 요청에서 K A2A를 고르고, K 응답 뒤 그룹 미팅 기록을 추가로 참조한 실행도 있었다).
 3. **위임 Tool ↔ 대상 Agent의 순환 의존 (Step 5에서 내린 결정과 남은 부분).** `delegate_to_*` Tool은 대상 Agent의 `run_*`를 호출 시점에 import해서 순환을 끊는다 ([4장](#4-capability-registry)).
-   Step 5에서 **공통 specialist core**, Phase 1에서 **공통 super core**를 도입했다 (`agent_core.SuperAgent` / `build_super_graph` / `run_super`, [3.1](#31-super-agent)). Agent 파일은 정체성과 Registry 조회만 갖는다.
+   Step 5에서 **공통 specialist core**, Phase 1에서 **공통 super core**를 도입했다 (`agent_core.SuperAgent` / `build_super_graph` / `run_super`, [3.1](#31-super-agent)). Agent 파일은 정체성(SOUL 파일을 읽는 한 줄)과 Registry 조회만 갖는다.
    Phase 5b에서 위임 Tool이 6개(K 3 + Group 3)가 되면서 `library/tools/delegation.make_delegate_tool(name, description, from_agent, to_agent, run)` factory를 두었다. 각 system의 `delegate_to_*.py`는 Agent-visible 설명(`DESCRIPTION`)과 `FROM_AGENT` / `TO_AGENT`, runner 조회만 갖는다.
    `tests/test_agents.py`의 `_NoToolGraph`처럼 `build_*_agent`를 monkeypatch하는 테스트가 있으므로 `run_*_agent`는 그래프를 모듈 전역 이름으로 조회한다.
 4. **Workflow 결과의 frontend 렌더링.** Tool별 `switch`를 계속 늘릴지, backend가 표시 힌트를 함께 보낼지, 범용 렌더로 갈지.

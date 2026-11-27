@@ -1,7 +1,7 @@
 """Group 경영자문 에이전트 — same specialist core and Skill as K Electronics' advisory agent, bound to the Group's own data.
 
 The graph and run loop are the shared specialist core (app/runtime/agent_core.py);
-this module only says who the agent is. Its Skills and Tools come from this
+this module only says who the agent is (../souls/advisory.md). Its Skills and Tools come from this
 system's Registry (../registry.py), looked up by AGENT_ID.
 """
 

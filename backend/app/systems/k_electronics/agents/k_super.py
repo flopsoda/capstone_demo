@@ -5,7 +5,7 @@
                            └─ runs a specialist agent     └─ runs another one     └─ final answer (no tool call)
 
 The graph and run loop are the shared super-agent core in app/runtime/agent_core.py; this
-module only says who the agent is. Each specialist agent is exposed to the
+module only says who the agent is (../souls/k_super.md). Each specialist agent is exposed to the
 model as one delegation Tool (../tools/) whose argument is the
 natural-language task and whose result is only that agent's final answer.
 

@@ -18,7 +18,7 @@ from pathlib import Path
 
 
 class SoulMissing(RuntimeError):
-    """An agent module has no SOUL file, or the file is empty."""
+    """An agent module has no readable SOUL file: missing, empty, or not UTF-8."""
 
 
 def soul_path(agent_module: str | Path) -> Path:
@@ -30,13 +30,17 @@ def soul_path(agent_module: str | Path) -> Path:
 def load_soul(agent_module: str | Path) -> str:
     """The identity text of the agent defined in `agent_module` (pass __file__).
 
-    Read once when the agent module is imported, so a missing or empty file stops the app
-    at startup instead of leaving an agent without its identity mid-run."""
+    Read once when the agent module is imported, so a missing, empty or unreadable file stops
+    the app at startup instead of leaving an agent without its identity mid-run. UTF-8 with or
+    without a BOM is accepted (Windows editors add one), and line endings are normalised, so a
+    file edited on Windows gives the same prompt as on the Linux server."""
     path = soul_path(agent_module)
     try:
-        text = path.read_text(encoding="utf-8").strip()
+        text = path.read_text(encoding="utf-8-sig").strip()
     except FileNotFoundError as e:
         raise SoulMissing(f"SOUL file not found: {path}") from e
+    except UnicodeDecodeError as e:
+        raise SoulMissing(f"SOUL file is not UTF-8: {path} ({e.reason})") from e
     if not text:
         raise SoulMissing(f"SOUL file is empty: {path}")
     return text

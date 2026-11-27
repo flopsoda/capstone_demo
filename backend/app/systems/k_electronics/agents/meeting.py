@@ -3,7 +3,7 @@
     request → model → (tool call?) → meeting Tools (retrieval · minutes · tracking · schedule) → model → answer
 
 The graph and run loop are the shared specialist core in app/runtime/agent_core.py; this
-module only says who the agent is. Which Skills and Tools it has is decided
+module only says who the agent is (../souls/meeting.md). Which Skills and Tools it has is decided
 by the Capability Registry (../registry.py), looked up by AGENT_ID.
 """
 

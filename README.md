@@ -73,10 +73,10 @@ cd backend
 python3.13 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 cp .env.example .env            # OLLAMA_API_KEY 입력 (https://ollama.com/settings/keys), MEETINGS_DATABASE_URL 입력
 ollama pull embeddinggemma      # 뉴스 의미 검색 (로컬 Ollama; Ollama Cloud는 임베딩을 제공하지 않음)
-.venv/bin/uvicorn app.main:app --port 8000 --reload
+.venv/bin/uvicorn app.main:app --port 8000 --reload --reload-include '*.md'
 
 # 1b) Python backend — Group system (별도 터미널, 같은 venv/.env). Group Super가 K에 A2A로 요청한다
-.venv/bin/uvicorn app.systems.group.app:app --port 8001 --reload
+.venv/bin/uvicorn app.systems.group.app:app --port 8001 --reload --reload-include '*.md'
 
 # 2) React frontend
 npm install
@@ -227,7 +227,7 @@ backend/
       principal.py                   gateway가 서명한 principal_token(HS256) 검증 — PRINCIPAL_SIGNING_KEY가 있으면 서명된 사용자만 믿음
       api.py                         NDJSON 스트리밍 helper · run_identity(요청 → principal, 거부면 401) · SSE 관찰 채널 helper · lifespan(on_start: system의 배경 작업)
       memory.py                      Super Agent 대화 기억의 계약(ConversationMemory: applies · recall · remember, Recall) — 저장소는 라이브러리, run_super가 direct 호출 앞뒤로 부름
-      souls.py                       load_soul(): Agent 모듈 옆 souls/<이름>.md(SOUL 파일: 정체성 · 역할 · 출력 규칙)를 읽음. 없거나 비면 시작할 때 실패
+      souls.py                       load_soul(): systems/<system>/agents/<이름>.py의 SOUL 파일 systems/<system>/souls/<이름>.md(정체성 · 역할 · 출력 규칙)를 읽음. 없거나 비거나 UTF-8이 아니면 시작할 때 실패 (BOM · CRLF 허용)
       a2a.py                         A2A client 메커니즘: 상대 system의 A2A 표면에 요청(+ principal · 토큰)을 보내고 최종 응답을 받음 (lifecycle은 observe 콜백으로)
     library/                         공용 Capability 라이브러리 (system을 import하지 않음)
       skills/                        specialist_delegation, meeting_context_analysis, meeting_minutes_writing, meeting_follow_up, inbound_task_requests, external_risk_analysis, mna_feasibility_review, enterprise_knowledge (Skill 본문)
