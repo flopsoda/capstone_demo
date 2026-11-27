@@ -31,7 +31,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 - **Agent / Workflow Tool / Delegation / A2A를 섞지 않는다.**
   - Super Agent는 LLM tool calling으로 전문 Agent에게 자연어로 위임한다. 중앙 Router / Planner 노드를 추가하지 않는다.
   - Specialist Agent는 독립 LangGraph Agent다. 함수 호출로 대체하지 않는다. Super Agent 경로와 사용자 직접 대화 경로가 같은 core를 쓴다.
-    새 Specialist는 `runtime/agent_core.py`의 `Specialist` / `build_specialist_graph` / `run_specialist`를, 새 Super Agent는 `SuperAgent` / `build_super_graph` / `run_super`를 쓰고, Agent 파일에는 `AGENT_ID` · `IDENTITY` · Registry 조회만 둔다.
+    새 Specialist는 `runtime/agent_core.py`의 `Specialist` / `build_specialist_graph` / `run_specialist`를, 새 Super Agent는 `SuperAgent` / `build_super_graph` / `run_super`를 쓰고, Agent 파일에는 `AGENT_ID` · `IDENTITY = load_soul(__file__)` · Registry 조회만 두고, 정체성 문장은 `systems/<system>/souls/<모듈 이름>.md`에 쓴다.
   - Specialist에게 Tool 호출을 모든 응답에 강제하지 않는다. Workflow Tool 근거 검사는 delegation 경로(`invocation="delegation"`)에만 있고, 직접 대화(`"direct"`)에서는 모델이 Skill 지침에 따라 결정한다.
   - Workflow Tool은 Agent가 아니다. 내부의 결정적 절차를 Agent-visible Tool 여러 개로 쪼개지 않는다.
   - K Super → Specialist는 **delegation**(`delegation_start/end`), Group Super ⇅ K Super는 **A2A**다. Specialist 호출을 A2A라고 부르지 않는다.
@@ -56,7 +56,7 @@ architecture 자체는 여기서 다시 설명하지 않는다. 먼저 아래 �
 - Agent 파일은 `skills_for(AGENT_ID)` / `tools_for(AGENT_ID)`로 자기 subset만 받는다. Agent 파일에서 Skill / Tool 모듈을 직접 import하거나 `TOOLS`를 하드코딩하지 않는다.
 - Tool의 이름 · description · argument schema는 `@tool` 정의가 source of truth다. Registry나 다른 곳에 중복 정의하지 않는다.
 - Tool 내부의 workflow 단계와 helper는 `backend/app/library/workflows/`에 두고 Registry에 등록하지 않는다. workflow는 데이터 store 경로를 `path`로 받는 순수 함수다. Agent가 직접 쓰는 것만 Capability다.
-- Skill은 실제 업무 지침이 있을 때만 만든다. Registry를 채우기 위한 빈 Skill이나 wrapper는 만들지 않는다. Agent의 정체성 · 출력 형식 규칙은 Agent 파일의 `IDENTITY`에 둔다.
+- Skill은 실제 업무 지침이 있을 때만 만든다. Registry를 채우기 위한 빈 Skill이나 wrapper는 만들지 않는다. Agent의 정체성 · 출력 형식 규칙은 Agent의 SOUL 파일(`souls/<모듈 이름>.md`)에 둔다.
 - 위임 Tool(`delegate_to_*`)은 대상 Agent의 `run_*`를 호출 시점에 import한다 (순환 import 방지). 위임 이벤트(`delegation_start/end`)는 Tool 안에서 emit한다.
 
 ## 보안

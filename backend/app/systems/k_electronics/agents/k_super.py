@@ -5,7 +5,7 @@
                            └─ runs a specialist agent     └─ runs another one     └─ final answer (no tool call)
 
 The graph and run loop are the shared super-agent core in app/runtime/agent_core.py; this
-module only says who the agent is. Each specialist agent is exposed to the
+module only says who the agent is (../souls/k_super.md). Each specialist agent is exposed to the
 model as one delegation Tool (../tools/) whose argument is the
 natural-language task and whose result is only that agent's final answer.
 
@@ -25,17 +25,11 @@ from langgraph.graph.state import CompiledStateGraph
 from .. import MEMORY
 from ..registry import skills_for, tools_for
 from ....runtime.agent_core import Invocation, SuperAgent, build_super_graph, compose_system_prompt, run_super
+from ....runtime.souls import load_soul
 
 AGENT_ID = "k_super"
 
-IDENTITY = """당신은 K전자 슈퍼에이전트(K Electronics Super Agent)다.
-그룹 슈퍼에이전트 등 다른 Agent System이 A2A로 보낸 검토 요청이나 사용자의 요청을 수행하기 위해,
-K전자의 전문 에이전트에게 업무를 자연어로 위임하고 그 결과를 종합해 K전자 차원의 최종 검토 결과를 회신한다.
-
-출력 규칙:
-- 최종 응답은 한국어로 작성한다. 고유명사, 기술명, Time-to-Market 같은 용어는 원문 표기를 유지해도 된다.
-- 출력은 채팅창에 일반 텍스트로 표시된다. 마크다운 문법(#, **, 표, 코드블록)은 사용하지 말고,
-  줄바꿈과 "- " 목록만 사용한다."""
+IDENTITY = load_soul(__file__)  # who the agent is: ../souls/k_super.md
 
 # Allowed capability subset, from the registry.
 SYSTEM_PROMPT = compose_system_prompt(IDENTITY, skills_for(AGENT_ID))
