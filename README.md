@@ -227,6 +227,7 @@ backend/
       principal.py                   gateway가 서명한 principal_token(HS256) 검증 — PRINCIPAL_SIGNING_KEY가 있으면 서명된 사용자만 믿음
       api.py                         NDJSON 스트리밍 helper · run_identity(요청 → principal, 거부면 401) · SSE 관찰 채널 helper · lifespan(on_start: system의 배경 작업)
       memory.py                      Super Agent 대화 기억의 계약(ConversationMemory: applies · recall · remember, Recall) — 저장소는 라이브러리, run_super가 direct 호출 앞뒤로 부름
+      souls.py                       load_soul(): Agent 모듈 옆 souls/<이름>.md(SOUL 파일: 정체성 · 역할 · 출력 규칙)를 읽음. 없거나 비면 시작할 때 실패
       a2a.py                         A2A client 메커니즘: 상대 system의 A2A 표면에 요청(+ principal · 토큰)을 보내고 최종 응답을 받음 (lifecycle은 observe 콜백으로)
     library/                         공용 Capability 라이브러리 (system을 import하지 않음)
       skills/                        specialist_delegation, meeting_context_analysis, meeting_minutes_writing, meeting_follow_up, inbound_task_requests, external_risk_analysis, mna_feasibility_review, enterprise_knowledge (Skill 본문)
@@ -278,7 +279,8 @@ backend/
         app.py                       FastAPI: /api/health, /api/agents/{group-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE)
         registry.py                  Group의 CAPABILITIES (24개): group_super ← subsidiary_review · specialist_delegation · request_k_electronics_review · delegate_to_*;
                                      meeting / news / advisory ← 라이브러리 Skill + Group 데이터 · 회의 저장소(schema grp)에 바인딩한 Tool
-        agents/group_super.py        그룹 슈퍼에이전트: AGENT_ID · IDENTITY + Registry (Super core). 자기 Specialist 위임과 K전자 A2A 중 선택은 모델 판단
+        souls/*.md                   그룹 Agent 4개의 SOUL 파일 (누구인지 · 역할 · 출력 규칙). system prompt 맨 앞에 그대로 들어감
+        agents/group_super.py        그룹 슈퍼에이전트: AGENT_ID · IDENTITY(souls/group_super.md) + Registry (Super core). 자기 Specialist 위임과 K전자 A2A 중 선택은 모델 판단
         agents/{meeting,news,advisory}.py  그룹 전문 Agent: 같은 Specialist core · 같은 Skill, Group 데이터
         skills/subsidiary_review.py  계열사 검토 요청(A2A)과 그룹 판단 지침
         tools/delegate_to_*.py       Group Super → 그룹 전문 Agent 위임 Tool (라이브러리 factory + Group 전용 설명)
@@ -289,6 +291,7 @@ backend/
       k_electronics/                 K Electronics agent system (SYSTEM = "k_electronics", DATA_DIR)
         app.py                       FastAPI: /api/health, /api/a2a/run (A2A 수신), /api/agents/{k-super,meeting,news,advisory}/run (직접 채팅; NDJSON 스트림), /api/events (SSE 관찰 채널)
         registry.py                  이 system의 CAPABILITIES와 allowed_agents (권한의 source of truth), skills_for / tools_for
+        souls/*.md                   K전자 Agent 4개의 SOUL 파일 (agents/의 모듈 이름과 같음)
         agents/
           k_super.py                 K전자 슈퍼에이전트: AGENT_ID · IDENTITY + Registry 위임 Tool (Super core)
           meeting.py                 미팅 에이전트: AGENT_ID · IDENTITY + Registry Skill 4개 / Tool 7개(회의 조회 · 회의록 저장 · 진행 조회 · 진행 갱신 · 일정 · 메일 발송함 · 업무 요청)
@@ -302,7 +305,7 @@ backend/
         data/companies.json          인수 대상 기업 합성 데이터룸 (NeuroEdge 사업계획 · DCF 가정 · 재무상태 · 고객 · 계약 · 특허 · 인력 · 통합비용, 기준일 2026-11-10)
   tests/                             test_workflow.py · test_meeting_records.py · test_meeting_delivery.py (회의 저장소 필요: conftest.py의 meeting_db) · test_news_workflow.py
                                      · test_news_briefing.py · test_news_pipeline.py · test_news_live.py (뉴스 저장소: conftest.py의 news_db, 가짜 웹)
-                                     · test_capabilities.py · test_k_super.py · test_k_app.py · test_events.py · test_group.py · test_group_workflows.py
+                                     · test_capabilities.py · test_souls.py · test_k_super.py · test_k_app.py · test_events.py · test_group.py · test_group_workflows.py
                                      · test_boundaries.py(runtime/library/system import 경계)
                                      · test_advisory_judgement.py (계산 · 판단 검증 · 근거 장부 · 조회 전용 위임) · test_advisory_reviews.py (판단 저장 · 재평가 · 보고서 참조 A2A 전달 · 권한)
                                      · test_advisory_report.py (보고서 PDF) · test_advisory.py (K · Group 경영자문 Agent: lifecycle, Tool 오류 자체 정정, A2A 위임)
@@ -374,6 +377,8 @@ K전자 슈퍼에이전트 (LangGraph, MessagesState)
 
 - 각 Agent의 Skill(system prompt에 들어가는 업무 지침)과 Tool(`bind_tools`)은 자기 system의 `registry.py`에서
   `AGENT_ID` 기준으로 받습니다. Agent 파일은 Tool을 직접 import하지 않습니다.
+- Agent가 누구인지(정체성 · 역할 · 출력 규칙)는 `systems/<system>/souls/<모듈 이름>.md`(SOUL 파일)에 있습니다. system prompt는 SOUL 파일 → Skill 순으로 조립되고,
+  파일 전체가 모델에 들어가므로 사람용 메모는 적지 않습니다. 일을 하는 방법은 Skill, 데이터는 Tool, 권한은 코드(gateway · principal · Tool)가 맡습니다.
 - Group Super(:8001)는 요청을 보고 자기 전문 Agent 위임과 K전자 A2A 요청(`request_k_electronics_review` → K `/api/a2a/run`) 중에서 스스로 고릅니다. K의 lifecycle은 관찰용으로 Group 스트림에 relay되고, Group Super Agent 자체는 K의 최종 응답 텍스트만 받습니다.
 
 ### 이벤트 처리와 렌더링 분리

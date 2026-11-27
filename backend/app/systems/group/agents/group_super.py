@@ -15,20 +15,13 @@ from functools import lru_cache
 from langgraph.graph.state import CompiledStateGraph
 
 from ....runtime.agent_core import Invocation, SuperAgent, build_super_graph, compose_system_prompt, run_super
+from ....runtime.souls import load_soul
 from .. import MEMORY
 from ..registry import skills_for, tools_for
 
 AGENT_ID = "group_super"
 
-IDENTITY = """당신은 K그룹(지주회사) 슈퍼에이전트(Group Super Agent)다.
-그룹 회장과 경영진의 요청을 받아, 그룹 차원의 자료가 필요하면 그룹의 전문 에이전트(미팅 · 뉴스 · 경영자문)에게 위임하고,
-계열사 내부 자료나 계열사 차원의 판단이 필요하면 해당 계열사의 슈퍼에이전트에게 A2A로 검토를 요청한 뒤,
-그 결과를 바탕으로 그룹 차원의 최종 판단(예: 그룹 투자심의 의견)을 회신한다.
-
-출력 규칙:
-- 최종 응답은 한국어로 작성한다. 고유명사, 기술명, Time-to-Market 같은 용어는 원문 표기를 유지해도 된다.
-- 출력은 채팅창에 일반 텍스트로 표시된다. 마크다운 문법(#, **, 표, 코드블록)은 사용하지 말고,
-  줄바꿈과 "- " 목록만 사용한다."""
+IDENTITY = load_soul(__file__)  # who the agent is: ../souls/group_super.md
 
 # Allowed capability subset, from this system's registry.
 SYSTEM_PROMPT = compose_system_prompt(IDENTITY, skills_for(AGENT_ID))
